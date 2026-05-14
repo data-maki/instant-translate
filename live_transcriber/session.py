@@ -86,6 +86,7 @@ class Session:
         self.segment_count = 0
         self.audio_frames: list[bytes] = []
         self._was_resumed = False
+        self._dirty = False
 
         # Create session directory
         os.makedirs(self.session_dir, exist_ok=True)
@@ -134,7 +135,11 @@ class Session:
         }
     
     def save_state(self) -> None:
-        """Save current session state."""
+        """Save current session state atomically.
+
+        Writes to a sibling .tmp file and renames into place so a Ctrl+C
+        (or crash) mid-write can never leave a half-written state file.
+        """
         state = {
             "name": self.name,
             "updated": datetime.now().isoformat(),
@@ -148,8 +153,16 @@ class Session:
             }
         }
 
-        with open(self.state_file, "w", encoding="utf-8") as f:
+        tmp_path = self.state_file + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, self.state_file)
+        self._dirty = False
+
+    @property
+    def is_dirty(self) -> bool:
+        """True if there are unsaved changes since the last save_state()."""
+        return self._dirty
     
     def get_speaker_profile(self, speaker_id: int) -> SpeakerProfile:
         """Get or create speaker profile."""
@@ -160,10 +173,11 @@ class Session:
     def add_audio_frame(self, frame: bytes) -> None:
         """Add audio frame to buffer."""
         self.audio_frames.append(frame)
-    
+
     def add_token(self, token: dict) -> None:
         """Add a finalized token to the session."""
         self.final_tokens.append(token)
+        self._dirty = True
     
     def get_source_language_tokens(self) -> list[dict]:
         """Get all tokens in source languages (non-target languages)."""
@@ -179,12 +193,21 @@ class Session:
         return [t for t in self.final_tokens if t.get("speaker") == speaker_id]
     
     def save_segment(self) -> str:
-        """Save current segment (transcript + audio)."""
+        """Save current segment (transcript + audio).
+
+        Ordered by interrupt-cost: the resumable state file is written first
+        (cheapest, most important), then snapshot files, then WAV, then the
+        slow ffmpeg MP3 conversion last. A Ctrl+C partway through at worst
+        skips the MP3 step; the transcript is already on disk.
+        """
         self.segment_count += 1
         timestamp = datetime.now().strftime(SEGMENT_TIMESTAMP_FORMAT)
         base_name = f"segment_{self.segment_count:03d}_{timestamp}"
-        
-        # Save transcript JSON
+
+        # 1. Resumable state first (atomic, fastest path to durability).
+        self.save_state()
+
+        # 2. Snapshot transcript JSON.
         json_path = os.path.join(self.session_dir, f"{base_name}.json")
         with open(json_path, "w", encoding="utf-8") as f:
             json.dump({
@@ -200,20 +223,18 @@ class Session:
                     for sid, profile in self.speaker_profiles.items()
                 }
             }, f, ensure_ascii=False, indent=2)
-        
-        # Save transcript TXT
+
+        # 3. Snapshot plain text.
         txt_path = os.path.join(self.session_dir, f"{base_name}.txt")
         with open(txt_path, "w", encoding="utf-8") as f:
             f.write(self.render_plain_text())
-        
-        # Save audio
-        audio_path = None
+
+        # 4. Audio: WAV is quick; MP3 conversion (inside _save_audio) is the
+        # slowest step and may be interrupted by a second Ctrl+C. That's OK -
+        # the WAV will still be on disk.
         if self.audio_frames:
-            audio_path = self._save_audio(base_name)
-        
-        # Save session state
-        self.save_state()
-        
+            self._save_audio(base_name)
+
         return json_path
     
     def _save_audio(self, base_name: str) -> str:
