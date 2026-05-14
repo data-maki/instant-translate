@@ -28,6 +28,7 @@ SCROLL_PAGE_SIZE = 20
 UI_REFRESH_RATE = 4  # Hz
 KEY_POLL_INTERVAL = 0.05  # seconds
 MAIN_LOOP_INTERVAL = 0.1  # seconds
+AUTOSAVE_INTERVAL = 2.0  # seconds between background flushes of session_state.json
 
 # Christmas colors (matching language_selector.py)
 CHRISTMAS_GREEN = "#165b33"
@@ -734,7 +735,9 @@ class LiveTranscriptUI:
         self.console.print()
         
         self._start_keyboard_listener()
-        
+
+        last_autosave = time.monotonic()
+
         try:
             with Live(self._build_display(), console=self.console, refresh_per_second=UI_REFRESH_RATE, vertical_overflow="crop") as live:
                 while self._running.is_set() and self.transcriber.is_running:
@@ -751,17 +754,38 @@ class LiveTranscriptUI:
                         self._prepare_scroll_content()
 
                     live.update(self._build_display())
+
+                    # Autosave: flush session_state.json if there are unsaved
+                    # tokens and the throttle interval has elapsed. Atomic write
+                    # in save_state() means a concurrent Ctrl+C is safe.
+                    now = time.monotonic()
+                    if self.session.is_dirty and (now - last_autosave) >= AUTOSAVE_INTERVAL:
+                        try:
+                            self.session.save_state()
+                        except OSError:
+                            # Don't crash the UI on a transient disk error;
+                            # we'll try again on the next tick.
+                            pass
+                        last_autosave = now
+
                     time.sleep(MAIN_LOOP_INTERVAL)
-                    
+
         except KeyboardInterrupt:
             pass
         finally:
             self._stop_keyboard_listener()
             self._running.clear()
             self.transcriber.stop()
-            
+
             self.console.print()
             if self.session.final_tokens:
-                self.console.print(f"[{CHRISTMAS_GOLD}]Saving...[/]")
+                # Transcript state is already (or almost already) on disk
+                # thanks to autosave; this final save_segment() writes the
+                # snapshot files and audio. A second Ctrl+C here at worst
+                # skips MP3 conversion.
+                self.console.print(
+                    f"[{CHRISTMAS_GOLD}]Saving...[/] "
+                    f"[dim]transcript is safe; press Ctrl+C again to skip MP3 conversion[/]"
+                )
                 path = self.session.save_segment()
                 self.console.print(f"[{CHRISTMAS_GREEN}]✓[/] {path}")
