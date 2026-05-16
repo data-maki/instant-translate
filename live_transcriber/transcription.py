@@ -3,6 +3,7 @@ WebSocket transcription and audio capture module.
 """
 
 import json
+import sys
 import threading
 from typing import Optional, Callable
 from queue import Queue
@@ -12,6 +13,24 @@ from websockets.sync.client import connect
 import pyaudio  # type: ignore
 
 from .session import Session, resolve_language
+
+
+def print_macos_mic_mode_advisory() -> None:
+    """Warn macOS users to disable Voice Isolation before transcribing.
+
+    Voice Isolation and Wide Spectrum apply heavy spectral processing that
+    flattens voice timbre, which causes Soniox diarization to merge similar
+    speakers into one cluster. macOS exposes this only via Control Center
+    while the capturing app is running, so we can't toggle it programmatically.
+    """
+    if sys.platform != "darwin":
+        return
+    print(
+        "\n  macOS mic mode check (multi-speaker accuracy):\n"
+        "    While this app is running, open Control Center (menu bar)\n"
+        "      -> click the Mic tile -> select \"Standard\".\n"
+        "    Avoid \"Voice Isolation\" and \"Wide Spectrum\"; both merge similar voices.\n"
+    )
 
 SONIOX_WEBSOCKET_URL = "wss://stt-rt.soniox.com/transcribe-websocket"
 SONIOX_MODEL = "stt-rt-v3"
@@ -26,36 +45,39 @@ CHUNK_SIZE = 3200  # ~200ms at 16kHz
 def get_soniox_config(
     api_key: str,
     source_languages: list[str],
-    target_language: str,
     context: Optional[str] = None,
 ) -> dict:
-    """Get Soniox STT config for multilingual transcription.
-
-    Args:
-        api_key: Soniox API key
-        source_languages: Source language hints for speech recognition
-        target_language: Target language for translation
-        context: Optional context hint for better accuracy
+    """Get Soniox STT config for two-way translation between two source
+    languages (e.g. en↔ja). If more than two are passed (legacy session
+    state from before the two-way switch), only the first two are used.
     """
+    if len(source_languages) < 2:
+        raise ValueError(
+            f"need at least 2 source languages for two-way translation, "
+            f"got {source_languages}"
+        )
+    lang_a, lang_b = source_languages[0], source_languages[1]
+
     config = {
         "api_key": api_key,
         "model": SONIOX_MODEL,
         "audio_format": AUDIO_FORMAT,
         "sample_rate": SAMPLE_RATE,
         "num_channels": NUM_CHANNELS,
-        "language_hints": source_languages,
+        "language_hints": [lang_a, lang_b],
         "enable_language_identification": True,
         "enable_speaker_diarization": True,
         "enable_endpoint_detection": True,
         "translation": {
-            "type": "one_way",
-            "target_language": target_language,
+            "type": "two_way",
+            "language_a": lang_a,
+            "language_b": lang_b,
         },
     }
-    
+
     if context:
         config["context"] = {"text": context}
-    
+
     return config
 
 
@@ -79,7 +101,6 @@ class Transcriber:
         api_key: str,
         session: Session,
         source_languages: list[str],
-        target_language: str,
         on_tokens: Optional[Callable[[list[dict], list[dict]], None]] = None,
         on_error: Optional[Callable[[str], None]] = None,
         on_connected: Optional[Callable[[], None]] = None,
@@ -89,7 +110,6 @@ class Transcriber:
         self.api_key = api_key
         self.session = session
         self.source_languages = source_languages
-        self.target_language = target_language
         self.on_tokens = on_tokens
         self.on_error = on_error
         self.on_connected = on_connected
@@ -250,8 +270,7 @@ class Transcriber:
             config = get_soniox_config(
                 self.api_key,
                 self.source_languages,
-                self.target_language,
-                self.context
+                self.context,
             )
             self._websocket = connect(SONIOX_WEBSOCKET_URL)
             self._websocket.send(json.dumps(config))

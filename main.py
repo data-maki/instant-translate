@@ -22,7 +22,7 @@ from live_transcriber import (
     LiveTranscriptUI,
     list_audio_devices,
 )
-from live_transcriber.branding import build_brand_intro
+from live_transcriber.transcription import print_macos_mic_mode_advisory
 
 # Default context for transcription
 DEFAULT_CONTEXT = """This is a casual conversation between people speaking different languages. Pay attention to conversational nuances, cultural references, and emotional tone."""
@@ -121,11 +121,6 @@ Scroll mode navigation:
 
     # Set context
     context: str = args.context if args.context else DEFAULT_CONTEXT
-    brand_intro = build_brand_intro(
-        source_domain=os.environ.get("SOURCE_BRAND_DOMAIN", "salesforce.com"),
-        target_domain=os.environ.get("TARGET_BRAND_DOMAIN", "apple.com"),
-        api_key=os.environ.get("BRANDFETCH_API_KEY"),
-    )
 
     # Language selection
     source_languages: list[str] = []
@@ -180,19 +175,105 @@ Scroll mode navigation:
         api_key=soniox_key,
         session=session,
         source_languages=session.source_languages,
-        target_language=session.target_language,
         context=context,
         device_index=args.device,
     )
+
+    print_macos_mic_mode_advisory()
 
     # Run UI
     ui = LiveTranscriptUI(
         session=session,
         transcriber=transcriber,
-        brand_intro=brand_intro,
     )
 
     ui.run()
+
+    _maybe_redo_diarization(session, soniox_key, context)
+
+
+def _maybe_redo_diarization(session, api_key: str, context: str) -> None:
+    """Prompt the user to re-run diarization on the saved audio.
+
+    The realtime API often collapses multi-speaker audio into 1-2 clusters.
+    Running stt-async-v4 over the whole file frequently separates them
+    better because it can cluster globally. Opt-in (an extra Soniox bill).
+    """
+    audio_path = _find_session_audio(session.session_dir)
+    if not audio_path:
+        return
+    try:
+        answer = input(
+            "\nRe-run diarization on the saved audio for better speaker "
+            "separation? [y/N]: "
+        ).strip().lower()
+    except (KeyboardInterrupt, EOFError):
+        print()
+        return
+    if answer not in ("y", "yes"):
+        return
+
+    from live_transcriber.async_diarize import redo_diarization, AsyncDiarizeError
+    import json
+
+    print(f"Using audio: {os.path.relpath(audio_path)}")
+    try:
+        tokens = redo_diarization(
+            api_key=api_key,
+            audio_path=audio_path,
+            source_languages=session.source_languages,
+            target_language=session.target_language,
+            context=context,
+            progress=lambda msg: print(f"  {msg}"),
+        )
+    except AsyncDiarizeError as exc:
+        print(f"Re-diarization failed: {exc}")
+        return
+    except (OSError, ValueError) as exc:
+        print(f"Re-diarization failed: {exc}")
+        return
+
+    out_json = os.path.join(session.session_dir, "rediarized.json")
+    out_txt = os.path.join(session.session_dir, "rediarized.txt")
+    speakers = sorted({t.get("speaker") for t in tokens if t.get("speaker")})
+    with open(out_json, "w", encoding="utf-8") as f:
+        json.dump({"tokens": tokens, "speakers": speakers}, f, ensure_ascii=False, indent=2)
+    with open(out_txt, "w", encoding="utf-8") as f:
+        f.write(_render_rediarized_text(tokens))
+    print(f"Re-diarized transcript written: {out_json}")
+    print(f"  Plain text: {out_txt}")
+    print(f"  Detected speakers: {len(speakers)} ({', '.join(speakers) or 'none'})")
+
+
+def _find_session_audio(session_dir: str):
+    """Return path to the most recent audio file produced for this session."""
+    if not os.path.isdir(session_dir):
+        return None
+    candidates = []
+    for name in os.listdir(session_dir):
+        if name.lower().endswith((".mp3", ".wav")):
+            candidates.append(os.path.join(session_dir, name))
+    if not candidates:
+        return None
+    candidates.sort(key=os.path.getmtime, reverse=True)
+    return candidates[0]
+
+
+def _render_rediarized_text(tokens: list) -> str:
+    """Render async tokens as plain text grouped by speaker."""
+    parts: list[str] = []
+    current_speaker = None
+    for token in tokens:
+        text = token.get("text", "")
+        speaker = token.get("speaker")
+        if speaker is not None and speaker != current_speaker:
+            if current_speaker is not None:
+                parts.append("\n\n")
+            current_speaker = speaker
+            parts.append(f"Speaker {speaker}: ")
+            text = text.lstrip()
+        parts.append(text)
+    return "".join(parts).strip() + "\n"
 
 
 if __name__ == "__main__":

@@ -14,17 +14,23 @@ from queue import Queue, Empty
 
 from rich.console import Console, Group
 from rich.panel import Panel
+from rich.table import Table
 from rich.text import Text
 from rich.live import Live
 
 from .session import Session
 from .transcription import Transcriber
 from .languages import get_language_flag
-from .branding import BrandIntro, can_render_images, fetch_logo_bytes, render_logo_text
+from .japanese import to_romaji
 
-# Display settings
-LIVE_VIEW_LINES = 24
-SCROLL_PAGE_SIZE = 20
+# Display settings (phrase-based: each phrase is one row in the transcript table)
+# Minimum live-view phrase count; the real count scales with terminal height so
+# the transcript panel fills the available space.
+MIN_LIVE_VIEW_PHRASES = 6
+# Rough lines-per-phrase used to translate terminal height into a phrase count
+# (one row of text per language + a blank padding row).
+LIVE_PHRASE_LINES = 3
+SCROLL_PAGE_SIZE = 16
 UI_REFRESH_RATE = 4  # Hz
 KEY_POLL_INTERVAL = 0.05  # seconds
 MAIN_LOOP_INTERVAL = 0.1  # seconds
@@ -143,11 +149,9 @@ class LiveTranscriptUI:
         self,
         session: Session,
         transcriber: Transcriber,
-        brand_intro: Optional[BrandIntro] = None,
     ):
         self.session = session
         self.transcriber = transcriber
-        self.brand_intro = brand_intro
         self.console = Console()
         
         self._running = threading.Event()
@@ -156,6 +160,10 @@ class LiveTranscriptUI:
         # Per-speaker language tracking (for detecting language changes)
         self._speaker_last_language: dict[int, str] = {}
 
+        # Stable A/B/C labels assigned in first-seen order, independent of
+        # Soniox's internal speaker IDs (which often start at 2 or 3).
+        self._speaker_letters: dict[int, str] = {}
+
         # Status
         self._status_message = ""
         self._error_message = ""
@@ -163,13 +171,17 @@ class LiveTranscriptUI:
         # Scroll mode
         self._scroll_mode = False
         self._scroll_offset = 0
-        self._scroll_lines: list[Text] = []
-        self._scroll_total_lines = 0
+        self._scroll_phrases: list[dict] = []
+        self._scroll_total = 0
         
         # Keyboard (terminal-native, only captures when terminal focused)
         self._key_queue: Queue[str] = Queue()
         self._input_thread: Optional[threading.Thread] = None
         self._old_term_settings = None
+
+        # Pending UI action triggered from a key handler but executed in the
+        # main loop (which holds the Live reference needed to suspend output).
+        self._rename_requested = False
     
     def _read_key(self) -> Optional[str]:
         """Read a single key from terminal (non-blocking)."""
@@ -238,6 +250,10 @@ class LiveTranscriptUI:
         """Handle key in live mode."""
         if key == 'v':
             self._enter_scroll_mode()
+        elif key == 'r':
+            # The actual prompt has to run from the main loop so it can stop
+            # the Rich Live display and restore cooked terminal mode.
+            self._rename_requested = True
         elif key == 'q':
             self._running.clear()
     
@@ -265,31 +281,29 @@ class LiveTranscriptUI:
             return
         self._scroll_mode = True
         self._prepare_scroll_content()
-        self._scroll_offset = max(0, self._scroll_total_lines - SCROLL_PAGE_SIZE)
-    
+        self._scroll_offset = max(0, self._scroll_total - SCROLL_PAGE_SIZE)
+
     def _exit_scroll_mode(self) -> None:
         """Exit scroll mode."""
         self._scroll_mode = False
-    
+
     def _prepare_scroll_content(self) -> None:
-        """Prepare scroll content with preserved styling."""
-        full_text = self._render_transcript()
-        # Rich Text.split() returns list[Text], preserving all styling
-        self._scroll_lines = full_text.split("\n")
-        self._scroll_total_lines = len(self._scroll_lines)
-    
+        """Refresh the phrase list used by scroll mode."""
+        self._scroll_phrases = self._collect_phrases(include_non_final=False)
+        self._scroll_total = len(self._scroll_phrases)
+
     def _scroll_up(self, n: int = 1) -> None:
         self._scroll_offset = max(0, self._scroll_offset - n)
-    
+
     def _scroll_down(self, n: int = 1) -> None:
-        max_off = max(0, self._scroll_total_lines - SCROLL_PAGE_SIZE)
+        max_off = max(0, self._scroll_total - SCROLL_PAGE_SIZE)
         self._scroll_offset = min(max_off, self._scroll_offset + n)
-    
+
     def _scroll_to_top(self) -> None:
         self._scroll_offset = 0
-    
+
     def _scroll_to_bottom(self) -> None:
-        self._scroll_offset = max(0, self._scroll_total_lines - SCROLL_PAGE_SIZE)
+        self._scroll_offset = max(0, self._scroll_total - SCROLL_PAGE_SIZE)
     
     def _on_tokens(self, final_tokens: list[dict], non_final_tokens: list[dict]) -> None:
         """Callback when tokens received."""
@@ -303,80 +317,10 @@ class LiveTranscriptUI:
         """Callback when connected."""
         self._status_message = "Listening..."
     
-    def _render_transcript_plain(self) -> str:
-        """Render transcript as plain text with parenthetical translations."""
-        parts: list[str] = []
-        current_speaker: Optional[int] = None
-
-        # Buffers for accumulating original + translation pairs
-        original_buffer = ""
-        translation_buffer = ""
-
-        for token in self.session.final_tokens:
-            text = token.get("text", "")
-            speaker = token.get("speaker")
-            is_translation = token.get("translation_status") == "translation"
-            source_lang = token.get("source_language")
-
-            # Skip translations when source language equals target language
-            if is_translation and source_lang == self.session.target_language:
-                continue
-
-            # Speaker changed - flush buffers, start new paragraph
-            if speaker is not None and speaker != current_speaker:
-                # Flush pending content
-                clean_orig = self._clean_display_text(original_buffer)
-                clean_trans = self._clean_display_text(translation_buffer)
-                if clean_orig:
-                    parts.append(clean_orig)
-                    if clean_trans:
-                        parts.append(f" ({clean_trans.strip()})")
-                original_buffer = ""
-                translation_buffer = ""
-
-                if current_speaker is not None:
-                    parts.append("\n\n")
-                current_speaker = speaker
-
-                # Speaker header inline for compact readability.
-                profile = self.session.get_speaker_profile(speaker)
-                parts.append(f"{profile.get_label()}: ")
-                text = text.lstrip()
-
-            # Accumulate text
-            if is_translation:
-                translation_buffer += text
-            else:
-                # If we have pending translation, flush first
-                if translation_buffer:
-                    clean_orig = self._clean_display_text(original_buffer)
-                    clean_trans = self._clean_display_text(translation_buffer)
-                    parts.append(clean_orig)
-                    parts.append(f" ({clean_trans.strip()})")
-                    original_buffer = ""
-                    translation_buffer = ""
-                original_buffer += text
-
-        # Final flush
-        clean_orig = self._clean_display_text(original_buffer)
-        clean_trans = self._clean_display_text(translation_buffer)
-        if clean_orig:
-            parts.append(clean_orig)
-            if clean_trans:
-                parts.append(f" ({clean_trans.strip()})")
-
-        return "".join(parts)
-    
     def _get_speaker_style(self, speaker_id: Union[int, str]) -> tuple[str, str]:
         """Get a unique emoji + color pair for a speaker."""
         sid = int(speaker_id) if isinstance(speaker_id, str) else speaker_id
         return SPEAKER_STYLES[sid % len(SPEAKER_STYLES)]
-
-    def _get_language_color(self, language: str) -> str:
-        """Get color for a language. Target language is always white."""
-        if language == self.session.target_language:
-            return "white"
-        return LANGUAGE_COLORS.get(language, DEFAULT_LANGUAGE_COLOR)
 
     def _get_language_flag(self, language: str) -> str:
         """Get flag emoji or text code for a language."""
@@ -394,29 +338,49 @@ class LiveTranscriptUI:
         """Remove internal tokens like <end> that shouldn't be displayed."""
         return text.replace("<end>", "").replace("<END>", "")
 
-    def _render_speaker_header(self, text: Text, speaker: Union[int, str]) -> None:
-        """Render speaker header inline without emoji for stable alignment."""
-        _, speaker_color = self._get_speaker_style(speaker)
-        profile = self.session.get_speaker_profile(speaker)
-        label = profile.get_label()
-        text.append(f"{label}: ", style=f"bold {speaker_color}")
+    def _collect_phrases(self, include_non_final: bool = True) -> list[dict]:
+        """Walk tokens, group them into phrase records.
 
-    def _render_transcript(self) -> Text:
-        """Render transcript with inline parenthetical translations and language colors.
+        In two-way translation each utterance produces tokens in both
+        languages, distinguished by translation_status. A phrase tracks the
+        text in each language separately so the UI can render them in
+        fixed-position columns. The phrase also remembers source_lang —
+        the language the speaker actually spoke — for styling.
 
-        Language flags are shown when:
-        - A speaker starts speaking (to identify their language)
-        - A speaker switches language mid-speech
+        Phrase boundaries: speaker change, or a new original-language
+        utterance after the prior one has been mirrored.
         """
-        text = Text()
+        phrases: list[dict] = []
         current_speaker: Optional[Union[int, str]] = None
-        original_buffer = ""
-        translation_buffer = ""
-        current_lang: Optional[str] = None
+        current_source_lang: Optional[str] = None
+        texts: dict[str, str] = {}
+        seen_translation = False
         buffer_is_final = True
-        should_show_flag = False
+        show_flag_for_buffer = False
 
-        all_tokens = self.session.final_tokens + self._non_final_tokens
+        all_tokens = list(self.session.final_tokens)
+        if include_non_final:
+            all_tokens = all_tokens + self._non_final_tokens
+
+        def flush():
+            nonlocal texts, buffer_is_final, show_flag_for_buffer, seen_translation
+            cleaned = {
+                lang: self._clean_display_text(t).strip()
+                for lang, t in texts.items()
+            }
+            cleaned = {lang: t for lang, t in cleaned.items() if t}
+            if cleaned:
+                phrases.append({
+                    "speaker": current_speaker,
+                    "source_lang": current_source_lang,
+                    "texts": cleaned,
+                    "is_final": buffer_is_final,
+                    "show_flag": show_flag_for_buffer,
+                })
+            texts = {}
+            seen_translation = False
+            buffer_is_final = True
+            show_flag_for_buffer = False
 
         for token in all_tokens:
             token_text = token.get("text", "")
@@ -426,133 +390,176 @@ class LiveTranscriptUI:
             is_final = token.get("is_final", True)
             source_lang = token.get("source_language")
 
-            # Skip translations when source language equals target language
-            if is_translation and source_lang == self.session.target_language:
-                continue
+            # In two-way mode each utterance has two source_languages — the
+            # one the speaker spoke. For non-translation tokens it's the
+            # token's own language; for translation tokens it's source_language.
+            utterance_source = source_lang if is_translation else language
 
-            # Handle speaker change
             if speaker is not None and speaker != current_speaker:
-                # Flush pending content
-                if original_buffer or translation_buffer:
-                    self._flush_buffers_with_flag(
-                        text, original_buffer, translation_buffer,
-                        current_lang, buffer_is_final, show_flag=should_show_flag
-                    )
-                original_buffer = ""
-                translation_buffer = ""
-                buffer_is_final = True
-
-                # Add paragraph break and speaker header
-                if current_speaker is not None:
-                    text.append("\n\n")
+                flush()
                 current_speaker = speaker
-                self._render_speaker_header(text, speaker)
-
-                should_show_flag = True
-                current_lang = language
+                current_source_lang = utterance_source
+                show_flag_for_buffer = True
                 token_text = token_text.lstrip()
 
-            # Track finality
+            # A new original-language utterance after we've already collected
+            # a translation for the previous phrase = phrase boundary.
+            if (
+                not is_translation
+                and seen_translation
+                and utterance_source
+                and current_source_lang
+                and utterance_source == current_source_lang
+            ):
+                flush()
+                current_source_lang = utterance_source
+                show_flag_for_buffer = True
+
+            # Original-language switched (different speaker line interpreted
+            # as the same speaker by diarization, or genuine code switch).
+            if (
+                not is_translation
+                and utterance_source
+                and current_source_lang
+                and utterance_source != current_source_lang
+            ):
+                flush()
+                current_source_lang = utterance_source
+                show_flag_for_buffer = True
+
+            if current_source_lang is None:
+                current_source_lang = utterance_source
+
             if not is_final:
                 buffer_is_final = False
 
-            # Accumulate text
+            if language:
+                texts[language] = texts.get(language, "") + token_text
             if is_translation:
-                translation_buffer += token_text
+                seen_translation = True
+
+        flush()
+        return phrases
+
+    def _phrase_speaker_color(self, speaker: Optional[Union[int, str]]) -> str:
+        if speaker is None:
+            return DEFAULT_LANGUAGE_COLOR
+        _, color = self._get_speaker_style(speaker)
+        return color
+
+    def _speaker_letter(self, speaker: Optional[Union[int, str]]) -> Optional[str]:
+        """Stable letter label (A, B, C, ...) by first-seen order. Falls
+        back to a numeric tag once we exhaust the alphabet."""
+        if speaker is None:
+            return None
+        sid = int(speaker) if isinstance(speaker, str) else speaker
+        if sid not in self._speaker_letters:
+            idx = len(self._speaker_letters)
+            if idx < 26:
+                self._speaker_letters[sid] = chr(ord("A") + idx)
             else:
-                # Handle language change
-                if language and current_lang and language != current_lang:
-                    self._flush_buffers_with_flag(
-                        text, original_buffer, translation_buffer,
-                        current_lang, buffer_is_final, show_flag=True
-                    )
-                    original_buffer = ""
-                    translation_buffer = ""
-                    buffer_is_final = is_final
-                    should_show_flag = True
-                # Flush completed phrase (has translation)
-                elif translation_buffer:
-                    self._flush_buffers_with_flag(
-                        text, original_buffer, translation_buffer,
-                        current_lang, buffer_is_final, show_flag=should_show_flag
-                    )
-                    original_buffer = ""
-                    translation_buffer = ""
-                    buffer_is_final = is_final
-                    should_show_flag = False
+                self._speaker_letters[sid] = f"#{idx + 1}"
+        return self._speaker_letters[sid]
 
-                original_buffer += token_text
-                current_lang = language
+    def _render_phrases_text(self, phrases: list[dict]) -> Table:
+        """Render phrases as a 2-column table, fixed-position by language.
 
-        # Final flush
-        self._flush_buffers_with_flag(
-            text, original_buffer, translation_buffer,
-            current_lang, buffer_is_final, show_flag=should_show_flag
-        )
-        return text
-
-    def _flush_buffers_with_flag(
-        self,
-        text: Text,
-        original: str,
-        translation: str,
-        lang: str,
-        is_final: bool = True,
-        show_flag: bool = False
-    ) -> None:
-        """Flush buffers and optionally append language flag after original text."""
-        # Clean internal tokens from display
-        original = self._clean_display_text(original)
-        translation = self._clean_display_text(translation)
-
-        if not original and not translation:
-            return
-
-        lang_color = self._get_language_color(lang) if lang else DEFAULT_LANGUAGE_COLOR
-
-        # Apply styling based on finality
-        if is_final:
-            if original:
-                text.append(original, style=lang_color)
-            # Add flag after original text, before translation (only if requested)
-            if show_flag and lang:
-                flag = self._get_language_flag(lang)
-                text.append(f" {flag}", style="dim")
-            if translation:
-                text.append(" (", style="dim")
-                text.append(translation.strip(), style="white")
-                text.append(")", style="dim")
+        Column order follows session.source_languages: the first language
+        is always the left column, the second is always the right. The
+        cell for the language the speaker actually spoke is styled in the
+        speaker's color; the mirrored translation stays white. Romaji is
+        added inline whenever a column is Japanese.
+        """
+        # Convention: target language (the reader's language) on the right,
+        # the other source language on the left. Falls back to declared
+        # order if the session is misconfigured.
+        langs = list(self.session.source_languages)
+        while len(langs) < 2:
+            langs.append("ja" if "ja" not in langs else "en")
+        target = self.session.target_language
+        if target in langs:
+            right_lang = target
+            left_lang = next(l for l in langs if l != target)
         else:
-            # Non-final (in-progress) text is dim and italic - no flag yet
-            if original:
-                text.append(original, style=f"dim italic {lang_color}")
-            if translation:
-                text.append(" (", style="dim")
-                text.append(translation.strip(), style="dim italic white")
-                text.append(")", style="dim")
-    
-    def _render_live_transcript(self) -> Text:
-        """Render last N lines of transcript."""
-        full = self._render_transcript()
-        if not full:
+            left_lang, right_lang = langs[0], langs[1]
+
+        table = Table(
+            show_header=False,
+            show_edge=False,
+            show_lines=False,
+            box=None,
+            padding=(0, 2, 1, 0),  # 1 blank row of padding below each phrase
+            expand=True,
+        )
+        table.add_column(left_lang, ratio=1, overflow="fold")
+        table.add_column(right_lang, ratio=1, overflow="fold")
+
+        for ph in phrases:
+            speaker = ph["speaker"]
+            source_lang = ph["source_lang"]
+            texts = ph["texts"]
+            is_final = ph["is_final"]
+            show_flag = ph["show_flag"]
+
+            left_text = texts.get(left_lang, "")
+            right_text = texts.get(right_lang, "")
+            if not left_text and not right_text:
+                continue
+
+            speaker_color = self._phrase_speaker_color(speaker)
+
+            def style_for(lang: str) -> str:
+                base = speaker_color if lang == source_lang else "white"
+                return base if is_final else f"dim italic {base}"
+
+            def render_cell(lang: str, body: str) -> Text:
+                cell = Text()
+                if not body:
+                    return cell
+                if lang == source_lang:
+                    letter = self._speaker_letter(speaker)
+                    if letter:
+                        cell.append(f"{letter} ", style=f"bold {speaker_color}")
+                cell.append(body, style=style_for(lang))
+                if lang == "ja":
+                    romaji = to_romaji(body)
+                    if romaji:
+                        tint = speaker_color if lang == source_lang else "white"
+                        cell.append(f"  ({romaji})", style=f"dim italic {tint}")
+                if show_flag and lang == source_lang:
+                    cell.append(f" {self._get_language_flag(lang)}", style="dim")
+                return cell
+
+            table.add_row(render_cell(left_lang, left_text), render_cell(right_lang, right_text))
+
+        return table
+
+    def _render_transcript(self) -> Text:
+        """Render the full transcript as stacked phrase blocks."""
+        return self._render_phrases_text(self._collect_phrases())
+
+    def _live_view_phrase_count(self) -> int:
+        """How many phrases to show in live view, sized to terminal height."""
+        # Reserve: 2 panel borders + 1 footer + 1 overflow header = 4 lines.
+        usable = max(LIVE_PHRASE_LINES, self.console.size.height - 4)
+        return max(MIN_LIVE_VIEW_PHRASES, usable // LIVE_PHRASE_LINES)
+
+    def _render_live_transcript(self):
+        """Render the most recent phrases for the live view."""
+        phrases = self._collect_phrases()
+        if not phrases:
             return Text("Waiting for speech...", style="dim italic")
 
-        styled_lines = full.split("\n")
-        if len(styled_lines) <= LIVE_VIEW_LINES:
-            return full
+        capacity = self._live_view_phrase_count()
+        if len(phrases) <= capacity:
+            return self._render_phrases_text(phrases)
 
-        visible = styled_lines[-LIVE_VIEW_LINES:]
-        result = Text()
-        result.append(
-            f"↑ {len(styled_lines) - LIVE_VIEW_LINES} more (v=scroll) ",
-            style=f"dim {CHRISTMAS_GREEN}",
+        overflow = len(phrases) - capacity
+        visible = phrases[-capacity:]
+        return Group(
+            Text(f"↑ {overflow} more (v=scroll)", style=f"dim {CHRISTMAS_GREEN}"),
+            self._render_phrases_text(visible),
         )
-        result.append("\n")
-        for i, line in enumerate(visible):
-            if i > 0:
-                result.append("\n")
-            result.append(line)
-        return result
     
     def _render_status_bar(self) -> Text:
         """Render status bar with Christmas theme."""
@@ -561,17 +568,20 @@ class LiveTranscriptUI:
         if self._scroll_mode:
             text.append(" SCROLL ", style=f"black on {CHRISTMAS_RED}")
             start = self._scroll_offset + 1
-            end = min(self._scroll_offset + SCROLL_PAGE_SIZE, self._scroll_total_lines)
-            text.append(f" {start}-{end}/{self._scroll_total_lines}", style=CHRISTMAS_RED)
+            end = min(self._scroll_offset + SCROLL_PAGE_SIZE, self._scroll_total)
+            text.append(f" {start}-{end}/{self._scroll_total}", style=CHRISTMAS_RED)
         else:
             text.append(" LIVE ", style=f"black on {CHRISTMAS_GREEN}")
 
         text.append(f" │ {self.session.name}", style="bold")
         text.append(f" │ {len(self.session.final_tokens)} tokens", style="dim")
 
-        # Show language configuration
-        source_langs = ",".join(self.session.source_languages)
-        text.append(f" │ Langs: {source_langs} → {self.session.target_language}", style="dim")
+        # Show language configuration (two-way translation pair)
+        if len(self.session.source_languages) >= 2:
+            pair = f"{self.session.source_languages[0]} ↔ {self.session.source_languages[1]}"
+        else:
+            pair = ",".join(self.session.source_languages)
+        text.append(f" │ Langs: {pair}", style="dim")
 
         if self._error_message:
             text.append(f" │ {self._error_message}", style=CHRISTMAS_RED)
@@ -587,7 +597,7 @@ class LiveTranscriptUI:
         if self._scroll_mode:
             pairs = [("j↓k↑", "scroll"), ("du", "page"), ("gG", "ends"), ("q", "exit")]
         else:
-            pairs = [("v", "scroll"), ("q", "quit")]
+            pairs = [("v", "scroll"), ("r", "rename"), ("q", "quit")]
 
         for i, (k, d) in enumerate(pairs):
             if i > 0:
@@ -608,16 +618,10 @@ class LiveTranscriptUI:
         header = Text("🎙 SCROLL MODE ", style=f"bold {CHRISTMAS_RED}")
         header.append("(j/k=scroll, q=exit)", style="dim")
 
-        visible = self._scroll_lines[self._scroll_offset:self._scroll_offset + SCROLL_PAGE_SIZE]
-        if visible:
-            # Join Text objects with newlines, preserving all styling
-            content = Text()
-            for i, line in enumerate(visible):
-                if i > 0:
-                    content.append("\n")
-                content.append(line)
-        else:
-            content = Text("No content")
+        visible = self._scroll_phrases[
+            self._scroll_offset:self._scroll_offset + SCROLL_PAGE_SIZE
+        ]
+        content = self._render_phrases_text(visible) if visible else Text("No content")
 
         return Group(
             Panel(header, style=CHRISTMAS_RED),
@@ -625,22 +629,73 @@ class LiveTranscriptUI:
             self._render_footer_bar(),
         )
     
+    def _prompt_rename_speaker(self, live: Live) -> None:
+        """Suspend the Live display and prompt for speaker rename via stdin.
+
+        Has to suspend Rich Live + restore cooked terminal mode, because the
+        ambient setup is raw cbreak with a 4Hz repaint loop on top.
+        """
+        # Pause the live region so input() doesn't fight the repaint.
+        live.stop()
+        self._stop_keyboard_listener()
+        try:
+            print()
+            if not self.session.speaker_profiles:
+                print("  No speakers detected yet.")
+                time.sleep(1.0)
+                return
+
+            print(f"  [{CHRISTMAS_GOLD}] Rename speaker [/]")
+            for sid in sorted(self.session.speaker_profiles.keys()):
+                profile = self.session.speaker_profiles[sid]
+                tag = f" (already named)" if profile.display_name else ""
+                print(f"    {sid}: {profile.get_label()}{tag}")
+            raw = input("  Speaker # (blank to cancel): ").strip()
+            if not raw:
+                return
+            try:
+                sid = int(raw)
+            except ValueError:
+                print("  Not a number, cancelled.")
+                time.sleep(0.8)
+                return
+            if sid not in self.session.speaker_profiles:
+                print("  No such speaker, cancelled.")
+                time.sleep(0.8)
+                return
+            new_name = input(f"  New name for speaker {sid} (blank to clear): ").strip()
+            profile = self.session.get_speaker_profile(sid)
+            profile.display_name = new_name or None
+            try:
+                self.session.save_state()
+            except OSError as exc:
+                print(f"  Saved to memory but failed to persist: {exc}")
+                time.sleep(0.8)
+        except (KeyboardInterrupt, EOFError):
+            print("\n  Cancelled.")
+            time.sleep(0.4)
+        finally:
+            self._start_keyboard_listener()
+            # Clear the scrollback noise we just printed before Live takes over.
+            self.console.clear()
+            live.start()
+
     def _build_display(self) -> Group:
         """Build main display with Christmas theme."""
         if self._scroll_mode:
             return self._build_scroll_display()
 
-        parts = []
+        # Fill the terminal: panel takes all rows except the 1-line footer.
+        panel_h = max(6, self.console.size.height - 1)
 
-        # Header
-        header = Text("🎄 Live Translator", style=f"bold {CHRISTMAS_GREEN}")
-        parts.append(Panel(header, style=CHRISTMAS_GREEN))
+        parts = []
 
         # Main transcript panel
         parts.append(Panel(
             self._render_live_transcript(),
             title=f"[bold {CHRISTMAS_GREEN}]Live Transcript[/]",
             border_style=CHRISTMAS_GREEN,
+            height=panel_h,
         ))
 
         # Status and hotkeys
@@ -659,65 +714,6 @@ class LiveTranscriptUI:
         
         # Initial display
         self.console.clear()
-        if self.brand_intro:
-            source_logo = fetch_logo_bytes(self.brand_intro.source.logo_url, timeout_sec=5.0)
-            target_logo = fetch_logo_bytes(self.brand_intro.target.logo_url, timeout_sec=5.0)
-            source_rendered = (
-                render_logo_text(
-                    source_logo,
-                    max_width_chars=24,
-                    max_height_chars=10,
-                    style="pixelated",
-                )
-                if source_logo
-                else None
-            )
-            target_rendered = (
-                render_logo_text(
-                    target_logo,
-                    max_width_chars=44,
-                    max_height_chars=16,
-                    style="clear",
-                )
-                if target_logo
-                else None
-            )
-
-            if source_rendered:
-                self.console.print(
-                    Panel(
-                        source_rendered,
-                        title="[bold]what your mother it law says[/]",
-                        border_style=CHRISTMAS_GOLD,
-                        expand=False,
-                    )
-                )
-            else:
-                self.console.print(
-                    f"[dim]{self.brand_intro.source.name} logo:[/] "
-                    f"[link={self.brand_intro.source.logo_url}]{self.brand_intro.source.logo_url}[/link]"
-                )
-
-            self.console.print(f"[bold {CHRISTMAS_GOLD}]{self.brand_intro.sentence}[/]")
-            self.console.print(f"[italic dim]{self.brand_intro.pun_line}[/]")
-
-            if target_rendered:
-                self.console.print(
-                    Panel(
-                        target_rendered,
-                        title="[bold]translated in a language you understand[/]",
-                        border_style=CHRISTMAS_GOLD,
-                        expand=False,
-                    )
-                )
-            else:
-                self.console.print(
-                    f"[dim]{self.brand_intro.target.name} logo:[/] "
-                    f"[link={self.brand_intro.target.logo_url}]{self.brand_intro.target.logo_url}[/link]"
-                )
-            if not source_rendered and not target_rendered and not can_render_images():
-                self.console.print("[dim]Install Pillow for inline logos: pip install Pillow[/]")
-            self.console.print()
         self.console.print(f"[bold {CHRISTMAS_GREEN}]🎄 Live Translator[/]")
 
         if self.session.was_resumed:
@@ -731,7 +727,10 @@ class LiveTranscriptUI:
             return
 
         self.console.print(f"[{CHRISTMAS_GREEN}]✓[/] {self.transcriber.device_name}")
-        self.console.print(f"[dim]Keys: [{CHRISTMAS_GOLD}]v[/]=scroll [{CHRISTMAS_GOLD}]q[/]=quit[/]")
+        self.console.print(
+            f"[dim]Keys: [{CHRISTMAS_GOLD}]v[/]=scroll "
+            f"[{CHRISTMAS_GOLD}]r[/]=rename [{CHRISTMAS_GOLD}]q[/]=quit[/]"
+        )
         self.console.print()
         
         self._start_keyboard_listener()
@@ -752,6 +751,12 @@ class LiveTranscriptUI:
                     # Update scroll content
                     if self._scroll_mode:
                         self._prepare_scroll_content()
+
+                    # Rename flow: pulled out of the key handler so it can
+                    # safely stop/restart the Live display.
+                    if self._rename_requested:
+                        self._rename_requested = False
+                        self._prompt_rename_speaker(live)
 
                     live.update(self._build_display())
 

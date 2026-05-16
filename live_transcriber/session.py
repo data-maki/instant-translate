@@ -30,21 +30,24 @@ class SpeakerProfile:
         self.language_counts: dict[str, int] = defaultdict(int)
         self.last_language: Optional[str] = None
         self.total_samples = 0
-    
+        self.display_name: Optional[str] = None
+
     def add_sample(self, language: str) -> None:
         """Record a language sample for this speaker."""
         self.language_counts[language] += 1
         self.last_language = language
         self.total_samples += 1
-    
+
     def get_dominant_language(self) -> Optional[str]:
         """Get the most used language, or None if no samples."""
         if not self.language_counts:
             return None
         return max(self.language_counts, key=self.language_counts.get)
-    
+
     def get_label(self) -> str:
         """Get display label for speaker."""
+        if self.display_name:
+            return self.display_name
         return f"Speaker {self.speaker_id}"
 
     def to_dict(self) -> dict:
@@ -53,8 +56,9 @@ class SpeakerProfile:
             "language_counts": dict(self.language_counts),
             "last_language": self.last_language,
             "total_samples": self.total_samples,
+            "display_name": self.display_name,
         }
-    
+
     @classmethod
     def from_dict(cls, speaker_id: int, data: dict) -> "SpeakerProfile":
         """Deserialize from dictionary."""
@@ -62,6 +66,7 @@ class SpeakerProfile:
         profile.language_counts = defaultdict(int, data.get("language_counts", {}))
         profile.last_language = data.get("last_language")
         profile.total_samples = data.get("total_samples", 0)
+        profile.display_name = data.get("display_name")
         return profile
 
 
@@ -179,15 +184,6 @@ class Session:
         self.final_tokens.append(token)
         self._dirty = True
     
-    def get_source_language_tokens(self) -> list[dict]:
-        """Get all tokens in source languages (non-target languages)."""
-        source_tokens = []
-        for token in self.final_tokens:
-            language = token.get("language")
-            if language and language != self.target_language:
-                source_tokens.append(token)
-        return source_tokens
-    
     def get_tokens_by_speaker(self, speaker_id: int) -> list[dict]:
         """Get all tokens from a specific speaker."""
         return [t for t in self.final_tokens if t.get("speaker") == speaker_id]
@@ -265,49 +261,47 @@ class Session:
         return wav_path
     
     def render_plain_text(self) -> str:
-        """Render tokens as plain text."""
-        text_parts: list[str] = []
+        """Render tokens as plain text, one block per speaker turn.
+
+        Each block lists every language present (original + mirrored
+        translation, in lexicographic order). Two-way translation means we
+        don't try to distinguish original from translation here — both are
+        the same content, the reader picks the one they understand.
+        """
+        blocks: list[tuple[Optional[int], dict[str, str]]] = []
         current_speaker: Optional[int] = None
-        current_language: Optional[str] = None
-        current_is_translation: bool = False
-        
+        current_texts: dict[str, str] = {}
+
+        def flush() -> None:
+            nonlocal current_texts
+            if any(t.strip() for t in current_texts.values()):
+                blocks.append((current_speaker, dict(current_texts)))
+            current_texts = {}
+
         for token in self.final_tokens:
             text = token.get("text", "")
             speaker = token.get("speaker")
             language = token.get("language")
-            is_translation = token.get("translation_status") == "translation"
-            
-            # Skip translations when source language equals target language
-            source_lang = token.get("source_language")
-            if is_translation and source_lang == self.target_language:
-                continue
-            
-            if speaker is not None and speaker != current_speaker:
-                if current_speaker is not None:
-                    text_parts.append("\n\n")
+            if speaker != current_speaker:
+                flush()
                 current_speaker = speaker
-                current_language = None
-                current_is_translation = False
-                profile = self.get_speaker_profile(speaker)
-                text_parts.append(f"{profile.get_label()}:")
-            
-            # Language or translation status changed
-            lang_changed = language is not None and language != current_language
-            translation_changed = is_translation != current_is_translation
-            
-            if lang_changed or translation_changed:
-                current_language = language
-                current_is_translation = is_translation
-                
-                if is_translation:
-                    text_parts.append(f"\n  ↳ [{language}] ")
-                else:
-                    text_parts.append(f"\n[{language}] ")
-                text = text.lstrip()
-            
-            text_parts.append(text)
-        
-        return "".join(text_parts).strip()
+            if language:
+                current_texts[language] = current_texts.get(language, "") + text
+        flush()
+
+        lines: list[str] = []
+        for speaker, texts in blocks:
+            if speaker is not None:
+                label = self.get_speaker_profile(speaker).get_label()
+            else:
+                label = "Unknown"
+            lines.append(f"{label}:")
+            for lang in sorted(texts):
+                snippet = texts[lang].strip()
+                if snippet:
+                    lines.append(f"  [{lang}] {snippet}")
+            lines.append("")
+        return "\n".join(lines).strip()
 
 
 def resolve_language(token: dict, session: Session) -> str:
