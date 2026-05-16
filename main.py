@@ -22,7 +22,6 @@ from live_transcriber import (
     LiveTranscriptUI,
     list_audio_devices,
 )
-from live_transcriber.branding import build_brand_intro
 
 # Default context for transcription
 DEFAULT_CONTEXT = """This is a casual conversation between people speaking different languages. Pay attention to conversational nuances, cultural references, and emotional tone."""
@@ -121,11 +120,6 @@ Scroll mode navigation:
 
     # Set context
     context: str = args.context if args.context else DEFAULT_CONTEXT
-    brand_intro = build_brand_intro(
-        source_domain=os.environ.get("SOURCE_BRAND_DOMAIN", "salesforce.com"),
-        target_domain=os.environ.get("TARGET_BRAND_DOMAIN", "apple.com"),
-        api_key=os.environ.get("BRANDFETCH_API_KEY"),
-    )
 
     # Language selection
     source_languages: list[str] = []
@@ -189,7 +183,6 @@ Scroll mode navigation:
     ui = LiveTranscriptUI(
         session=session,
         transcriber=transcriber,
-        brand_intro=brand_intro,
     )
 
     ui.run()
