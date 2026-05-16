@@ -24,13 +24,12 @@ from .languages import get_language_flag
 from .japanese import to_romaji
 
 # Display settings (phrase-based: each phrase is one row in the transcript table)
-# Minimum live-view phrase count; the real count scales with terminal height so
-# the transcript panel fills the available space.
-MIN_LIVE_VIEW_PHRASES = 6
+# Minimum visible phrase count; the real count scales with terminal height so
+# both the live view and scroll mode fill the available space.
+MIN_VISIBLE_PHRASES = 6
 # Rough lines-per-phrase used to translate terminal height into a phrase count
 # (one row of text per language + a blank padding row).
 LIVE_PHRASE_LINES = 3
-SCROLL_PAGE_SIZE = 16
 UI_REFRESH_RATE = 4  # Hz
 KEY_POLL_INTERVAL = 0.05  # seconds
 MAIN_LOOP_INTERVAL = 0.1  # seconds
@@ -160,9 +159,10 @@ class LiveTranscriptUI:
         # Per-speaker language tracking (for detecting language changes)
         self._speaker_last_language: dict[int, str] = {}
 
-        # Stable A/B/C labels assigned in first-seen order, independent of
-        # Soniox's internal speaker IDs (which often start at 2 or 3).
-        self._speaker_letters: dict[int, str] = {}
+        # Phrase-collection cache. Invalidated by token-list changes (length
+        # bumps on final, identity changes on non-final replacement). Avoids
+        # re-walking thousands of tokens 10×/sec.
+        self._phrases_cache: dict[tuple, list[dict]] = {}
 
         # Status
         self._status_message = ""
@@ -266,9 +266,9 @@ class LiveTranscriptUI:
         elif key in ('k', 'UP'):
             self._scroll_up()
         elif key in ('d', 'PAGEDOWN'):
-            self._scroll_down(SCROLL_PAGE_SIZE - 2)
+            self._scroll_down(max(1, self._scroll_page_size() - 2))
         elif key in ('u', 'PAGEUP'):
-            self._scroll_up(SCROLL_PAGE_SIZE - 2)
+            self._scroll_up(max(1, self._scroll_page_size() - 2))
         elif key == 'g':
             self._scroll_to_top()
         elif key == 'G':
@@ -281,7 +281,7 @@ class LiveTranscriptUI:
             return
         self._scroll_mode = True
         self._prepare_scroll_content()
-        self._scroll_offset = max(0, self._scroll_total - SCROLL_PAGE_SIZE)
+        self._scroll_offset = max(0, self._scroll_total - self._scroll_page_size())
 
     def _exit_scroll_mode(self) -> None:
         """Exit scroll mode."""
@@ -296,14 +296,14 @@ class LiveTranscriptUI:
         self._scroll_offset = max(0, self._scroll_offset - n)
 
     def _scroll_down(self, n: int = 1) -> None:
-        max_off = max(0, self._scroll_total - SCROLL_PAGE_SIZE)
+        max_off = max(0, self._scroll_total - self._scroll_page_size())
         self._scroll_offset = min(max_off, self._scroll_offset + n)
 
     def _scroll_to_top(self) -> None:
         self._scroll_offset = 0
 
     def _scroll_to_bottom(self) -> None:
-        self._scroll_offset = max(0, self._scroll_total - SCROLL_PAGE_SIZE)
+        self._scroll_offset = max(0, self._scroll_total - self._scroll_page_size())
     
     def _on_tokens(self, final_tokens: list[dict], non_final_tokens: list[dict]) -> None:
         """Callback when tokens received."""
@@ -339,6 +339,22 @@ class LiveTranscriptUI:
         return text.replace("<end>", "").replace("<END>", "")
 
     def _collect_phrases(self, include_non_final: bool = True) -> list[dict]:
+        """Cached walk over tokens → phrase records. See _collect_phrases_uncached."""
+        key = (
+            len(self.session.final_tokens),
+            len(self._non_final_tokens),
+            id(self._non_final_tokens),
+            include_non_final,
+        )
+        cached = self._phrases_cache.get(key)
+        if cached is not None:
+            return cached
+        phrases = self._collect_phrases_uncached(include_non_final)
+        # Single-entry cache: invalidate old keys to keep memory bounded.
+        self._phrases_cache = {key: phrases}
+        return phrases
+
+    def _collect_phrases_uncached(self, include_non_final: bool = True) -> list[dict]:
         """Walk tokens, group them into phrase records.
 
         In two-way translation each utterance produces tokens in both
@@ -370,10 +386,13 @@ class LiveTranscriptUI:
             }
             cleaned = {lang: t for lang, t in cleaned.items() if t}
             if cleaned:
+                # Compute romaji once at phrase time so render is just lookups.
+                romaji = to_romaji(cleaned["ja"]) if "ja" in cleaned else None
                 phrases.append({
                     "speaker": current_speaker,
                     "source_lang": current_source_lang,
                     "texts": cleaned,
+                    "romaji_ja": romaji,
                     "is_final": buffer_is_final,
                     "show_flag": show_flag_for_buffer,
                 })
@@ -448,18 +467,12 @@ class LiveTranscriptUI:
         return color
 
     def _speaker_letter(self, speaker: Optional[Union[int, str]]) -> Optional[str]:
-        """Stable letter label (A, B, C, ...) by first-seen order. Falls
-        back to a numeric tag once we exhaust the alphabet."""
+        """A/B/C label assigned by Session.get_speaker_profile in
+        first-seen order. UI just reads what the session already tracked."""
         if speaker is None:
             return None
         sid = int(speaker) if isinstance(speaker, str) else speaker
-        if sid not in self._speaker_letters:
-            idx = len(self._speaker_letters)
-            if idx < 26:
-                self._speaker_letters[sid] = chr(ord("A") + idx)
-            else:
-                self._speaker_letters[sid] = f"#{idx + 1}"
-        return self._speaker_letters[sid]
+        return self.session.get_speaker_profile(sid).letter
 
     def _render_phrases_text(self, phrases: list[dict]) -> Table:
         """Render phrases as a 2-column table, fixed-position by language.
@@ -512,6 +525,8 @@ class LiveTranscriptUI:
                 base = speaker_color if lang == source_lang else "white"
                 return base if is_final else f"dim italic {base}"
 
+            romaji_ja = ph.get("romaji_ja")
+
             def render_cell(lang: str, body: str) -> Text:
                 cell = Text()
                 if not body:
@@ -521,11 +536,9 @@ class LiveTranscriptUI:
                     if letter:
                         cell.append(f"{letter} ", style=f"bold {speaker_color}")
                 cell.append(body, style=style_for(lang))
-                if lang == "ja":
-                    romaji = to_romaji(body)
-                    if romaji:
-                        tint = speaker_color if lang == source_lang else "white"
-                        cell.append(f"  ({romaji})", style=f"dim italic {tint}")
+                if lang == "ja" and romaji_ja:
+                    tint = speaker_color if lang == source_lang else "white"
+                    cell.append(f"  ({romaji_ja})", style=f"dim italic {tint}")
                 if show_flag and lang == source_lang:
                     cell.append(f" {self._get_language_flag(lang)}", style="dim")
                 return cell
@@ -542,7 +555,13 @@ class LiveTranscriptUI:
         """How many phrases to show in live view, sized to terminal height."""
         # Reserve: 2 panel borders + 1 footer + 1 overflow header = 4 lines.
         usable = max(LIVE_PHRASE_LINES, self.console.size.height - 4)
-        return max(MIN_LIVE_VIEW_PHRASES, usable // LIVE_PHRASE_LINES)
+        return max(MIN_VISIBLE_PHRASES, usable // LIVE_PHRASE_LINES)
+
+    def _scroll_page_size(self) -> int:
+        """How many phrases fit in scroll mode, sized to terminal height."""
+        # Reserve: scroll header panel (3) + footer (1) + content panel borders (2).
+        usable = max(LIVE_PHRASE_LINES, self.console.size.height - 6)
+        return max(MIN_VISIBLE_PHRASES, usable // LIVE_PHRASE_LINES)
 
     def _render_live_transcript(self):
         """Render the most recent phrases for the live view."""
@@ -567,8 +586,9 @@ class LiveTranscriptUI:
 
         if self._scroll_mode:
             text.append(" SCROLL ", style=f"black on {CHRISTMAS_RED}")
+            page = self._scroll_page_size()
             start = self._scroll_offset + 1
-            end = min(self._scroll_offset + SCROLL_PAGE_SIZE, self._scroll_total)
+            end = min(self._scroll_offset + page, self._scroll_total)
             text.append(f" {start}-{end}/{self._scroll_total}", style=CHRISTMAS_RED)
         else:
             text.append(" LIVE ", style=f"black on {CHRISTMAS_GREEN}")
@@ -618,9 +638,8 @@ class LiveTranscriptUI:
         header = Text("🎙 SCROLL MODE ", style=f"bold {CHRISTMAS_RED}")
         header.append("(j/k=scroll, q=exit)", style="dim")
 
-        visible = self._scroll_phrases[
-            self._scroll_offset:self._scroll_offset + SCROLL_PAGE_SIZE
-        ]
+        page = self._scroll_page_size()
+        visible = self._scroll_phrases[self._scroll_offset:self._scroll_offset + page]
         content = self._render_phrases_text(visible) if visible else Text("No content")
 
         return Group(

@@ -22,11 +22,19 @@ LANGUAGE_CONFIDENCE_THRESHOLD = 0.5
 SEGMENT_TIMESTAMP_FORMAT = '%Y%m%d_%H%M%S'
 
 
+def _index_to_letter(idx: int) -> str:
+    """Map a zero-based index to A, B, C, ... Z, then #27, #28, ..."""
+    if idx < 26:
+        return chr(ord("A") + idx)
+    return f"#{idx + 1}"
+
+
 class SpeakerProfile:
     """Track language usage for a speaker."""
-    
-    def __init__(self, speaker_id: int):
+
+    def __init__(self, speaker_id: int, letter: Optional[str] = None):
         self.speaker_id = speaker_id
+        self.letter = letter  # Stable A/B/C label by first-seen order
         self.language_counts: dict[str, int] = defaultdict(int)
         self.last_language: Optional[str] = None
         self.total_samples = 0
@@ -45,9 +53,12 @@ class SpeakerProfile:
         return max(self.language_counts, key=self.language_counts.get)
 
     def get_label(self) -> str:
-        """Get display label for speaker."""
+        """Get display label for speaker. Prefers the user-set display name,
+        then the A/B/C letter, then the raw Soniox speaker id as last resort."""
         if self.display_name:
             return self.display_name
+        if self.letter:
+            return f"Speaker {self.letter}"
         return f"Speaker {self.speaker_id}"
 
     def to_dict(self) -> dict:
@@ -57,12 +68,13 @@ class SpeakerProfile:
             "last_language": self.last_language,
             "total_samples": self.total_samples,
             "display_name": self.display_name,
+            "letter": self.letter,
         }
 
     @classmethod
     def from_dict(cls, speaker_id: int, data: dict) -> "SpeakerProfile":
         """Deserialize from dictionary."""
-        profile = cls(speaker_id)
+        profile = cls(speaker_id, letter=data.get("letter"))
         profile.language_counts = defaultdict(int, data.get("language_counts", {}))
         profile.last_language = data.get("last_language")
         profile.total_samples = data.get("total_samples", 0)
@@ -98,6 +110,11 @@ class Session:
 
         # Load existing state if resuming
         self._load_state()
+
+        # Normalize the language pair: Soniox two-way takes exactly 2.
+        # Truncate legacy 3+-language sessions to (other, target) and
+        # ensure the target is always one of the two.
+        self._normalize_languages()
     
     @property
     def was_resumed(self) -> bool:
@@ -119,11 +136,14 @@ class Session:
                     self.source_languages = state["source_languages"]
                     self.target_language = state["target_language"]
 
-                # Restore speaker profiles
-                for sid, profile_data in state.get("speaker_profiles", {}).items():
-                    self.speaker_profiles[int(sid)] = SpeakerProfile.from_dict(
-                        int(sid), profile_data
-                    )
+                # Restore speaker profiles. Backfill A/B/C letters for
+                # legacy sessions that were saved before profiles carried one.
+                saved_profiles = state.get("speaker_profiles", {})
+                for sid in sorted(saved_profiles, key=lambda s: int(s)):
+                    profile = SpeakerProfile.from_dict(int(sid), saved_profiles[sid])
+                    if profile.letter is None:
+                        profile.letter = _index_to_letter(len(self.speaker_profiles))
+                    self.speaker_profiles[int(sid)] = profile
 
                 self._was_resumed = True
             except (json.JSONDecodeError, KeyError, TypeError, ValueError):
@@ -169,11 +189,38 @@ class Session:
         """True if there are unsaved changes since the last save_state()."""
         return self._dirty
     
-    def get_speaker_profile(self, speaker_id: int) -> SpeakerProfile:
-        """Get or create speaker profile."""
-        if speaker_id not in self.speaker_profiles:
-            self.speaker_profiles[speaker_id] = SpeakerProfile(speaker_id)
-        return self.speaker_profiles[speaker_id]
+    def _normalize_languages(self) -> None:
+        """Force source_languages into a 2-entry list with target_language
+        present. Drift here causes Soniox config errors and UI column
+        misorder; cheaper to fix once here than guard at every read site."""
+        srcs = [l for l in (self.source_languages or []) if l]
+        if self.target_language and self.target_language not in srcs:
+            # Pick a non-target language to pair with target. Prefer the
+            # first declared source; fall back to target itself (degenerate
+            # but better than crashing — Soniox will reject same-pair).
+            other = srcs[0] if srcs else self.target_language
+            srcs = [other, self.target_language]
+        else:
+            # target is in srcs (or no target); keep one non-target + target.
+            if self.target_language and len(srcs) > 2:
+                other = next((l for l in srcs if l != self.target_language), srcs[0])
+                srcs = [other, self.target_language]
+            else:
+                srcs = srcs[:2]
+        if srcs != list(self.source_languages):
+            self.source_languages = srcs
+            self._dirty = True
+
+    def get_speaker_profile(self, speaker_id) -> SpeakerProfile:
+        """Get or create speaker profile. Soniox emits speaker IDs as
+        strings on tokens but our profile dict keys are ints, so coerce on
+        the way in to avoid duplicate-profile bugs. New profiles get the
+        next free letter (A, B, C, ...) in first-seen order."""
+        sid = int(speaker_id) if isinstance(speaker_id, str) else speaker_id
+        if sid not in self.speaker_profiles:
+            letter = _index_to_letter(len(self.speaker_profiles))
+            self.speaker_profiles[sid] = SpeakerProfile(sid, letter=letter)
+        return self.speaker_profiles[sid]
     
     def add_audio_frame(self, frame: bytes) -> None:
         """Add audio frame to buffer."""
@@ -263,43 +310,57 @@ class Session:
     def render_plain_text(self) -> str:
         """Render tokens as plain text, one block per speaker turn.
 
-        Each block lists every language present (original + mirrored
-        translation, in lexicographic order). Two-way translation means we
-        don't try to distinguish original from translation here — both are
-        the same content, the reader picks the one they understand.
+        Each block records which language the speaker actually spoke
+        (source_lang) so the original line is emitted first plain and the
+        mirrored translation is prefixed with "→". A reader can tell who
+        said what at a glance.
         """
-        blocks: list[tuple[Optional[int], dict[str, str]]] = []
+        blocks: list[tuple[Optional[int], Optional[str], dict[str, str]]] = []
         current_speaker: Optional[int] = None
+        current_source: Optional[str] = None
         current_texts: dict[str, str] = {}
 
         def flush() -> None:
-            nonlocal current_texts
+            nonlocal current_texts, current_source
             if any(t.strip() for t in current_texts.values()):
-                blocks.append((current_speaker, dict(current_texts)))
+                blocks.append((current_speaker, current_source, dict(current_texts)))
             current_texts = {}
+            current_source = None
 
         for token in self.final_tokens:
             text = token.get("text", "")
             speaker = token.get("speaker")
             language = token.get("language")
+            is_translation = token.get("translation_status") == "translation"
+            source_lang = token.get("source_language")
+            utterance_source = source_lang if is_translation else language
+
             if speaker != current_speaker:
                 flush()
                 current_speaker = speaker
+                current_source = utterance_source
+            elif current_source is None:
+                current_source = utterance_source
+
             if language:
                 current_texts[language] = current_texts.get(language, "") + text
         flush()
 
         lines: list[str] = []
-        for speaker, texts in blocks:
+        for speaker, source, texts in blocks:
             if speaker is not None:
                 label = self.get_speaker_profile(speaker).get_label()
             else:
                 label = "Unknown"
             lines.append(f"{label}:")
-            for lang in sorted(texts):
+            # Original first, translation second.
+            ordered = sorted(texts, key=lambda l: (l != source, l))
+            for lang in ordered:
                 snippet = texts[lang].strip()
-                if snippet:
-                    lines.append(f"  [{lang}] {snippet}")
+                if not snippet:
+                    continue
+                prefix = "  " if lang == source else "  → "
+                lines.append(f"{prefix}[{lang}] {snippet}")
             lines.append("")
         return "\n".join(lines).strip()
 

@@ -1,0 +1,1 @@
+2026-05-14 LEARNING: mother_in_law_decoder repo is at /Users/jcarbs/Code/mother_in_law_decoder and currently has a minimal README plus live_transcriber implementation; research notes can live at repo root RESEARCH_NOTES.md.

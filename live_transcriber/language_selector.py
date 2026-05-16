@@ -133,15 +133,21 @@ class LanguageSelector:
 
 
 def select_languages() -> tuple[list[str], str]:
-    """
-    Interactive language selection flow.
-    Returns (source_languages, target_language).
+    """Interactive language selection flow.
+
+    Source step is multi-select (press space to toggle, enter to confirm)
+    so you can shortlist a few languages you might hear; the Session
+    normalizes to a 2-language pair for Soniox two-way translation, with
+    the target always included. Target defaults to English.
     """
     console = Console()
 
-    # Step 1: Source languages (multi-select)
+    # Step 1: Source languages (multi-select — space to toggle, enter to confirm)
     console.print("\n")
-    selector = LanguageSelector("Select SOURCE languages (spoken in conversation)", multi_select=True)
+    selector = LanguageSelector(
+        "Select SOURCE languages (space=toggle, enter=confirm)",
+        multi_select=True,
+    )
     selector.create_app().run()
 
     if selector.cancelled or not selector.result:
@@ -149,7 +155,7 @@ def select_languages() -> tuple[list[str], str]:
         return ([], "")
     source = selector.result
 
-    # Step 2: Target language (default to English)
+    # Step 2: Target language (default English)
     target = "en"
     console.print(f"\n[cyan]Target language:[/cyan] English (default)")
     change_target = input("Change target language? [y/N] ").strip().lower()
@@ -163,6 +169,14 @@ def select_languages() -> tuple[list[str], str]:
             console.print("\n[yellow]Selection cancelled[/yellow]\n")
             return ([], "")
         target = selector.result[0]
+
+    # If the user only picked the target language as the source, there's
+    # nothing to translate — bail with a clear message.
+    if all(s == target for s in source):
+        console.print(
+            f"[red]Source and target are both {target}; nothing to translate.[/red]\n"
+        )
+        return ([], "")
 
     # Step 3: Confirmation
     console.print(f"\n[cyan]Source:[/cyan] {', '.join(source)}")

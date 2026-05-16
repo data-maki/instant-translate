@@ -158,18 +158,6 @@ Scroll mode navigation:
         target_language,
     )
 
-    # Handle old sessions without language config
-    if session.was_resumed and not hasattr(session, 'source_languages'):
-        print("\n⚠️  This session needs language configuration\n")
-        from live_transcriber.language_selector import select_languages
-        source_languages, target_language = select_languages()
-        if not source_languages or not target_language:
-            print("Language selection cancelled")
-            sys.exit(0)
-        session.source_languages = source_languages
-        session.target_language = target_language
-        session.save_state()
-
     # Initialize transcriber and UI
     transcriber = Transcriber(
         api_key=soniox_key,
