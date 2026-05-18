@@ -1,31 +1,58 @@
-# Mother-in-Law Decoder
+# cottonoha
 
-Real-time transcription and translation for multilingual family conversations. 
+Real-time transcription and translation for bilingual conversations in Japan.
 
-Does your wife speak another language that you don't understand? Have you ever wondered what they're saying in the family dinner without wanting to stop the flow of conversation?
+Cottonoha is a small "leaves of speech" translator. The main experience is a responsive web app: a Next.js frontend captures browser microphone audio, a FastAPI backend streams 16 kHz mono PCM to Soniox, and the transcript appears as a live English/Japanese translation feed. The original terminal app is preserved under `cli/`.
 
-Note: _This does not currently decode subtle hints and other common in-laws language tactics._
-
-## Quick Start
+## Quick Start: Web App
 
 ```bash
-# Setup
-python3.12 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
 cp .env.example .env  # then set SONIOX_API_KEY in .env
 
-# Run
-python main.py --session "xmas dinner"
+# Backend
+python3.12 -m venv venv
+source venv/bin/activate
+pip install -r backend/requirements.txt
+uvicorn app.main:app --app-dir backend --reload
+
+# Frontend, in another terminal
+cd frontend
+npm install
+npm run dev
 ```
 
-## Usage
+Open `http://localhost:3000`.
+
+## Web Usage
+
+1. Confirm the language pair. The default is Japanese <-> English with English as the translation focus.
+2. Add a session name and context hint if useful.
+3. Press **Start listening** and allow microphone access.
+4. Press **Stop** to save the transcript under `output/<session>/`.
+
+The browser converts microphone audio to 16 kHz mono PCM before streaming it to the backend. For best multi-speaker accuracy on macOS, use Standard mic mode instead of Voice Isolation.
+
+## CLI Usage
 
 ```bash
-# Add context for better accuracy
-python main.py --session "xmas dinner" --context "Family discussing vacation plans"
+source venv/bin/activate
+pip install -r cli/requirements.txt
+python cli/main.py --session "xmas dinner"
 ```
 
-**Controls:** `v` to scroll history, `q` to quit and save.
+To use the terminal as a client for the FastAPI backend:
+
+```bash
+python cli/main.py --session "xmas dinner" --source-languages ja,en --target-language en --backend-url http://127.0.0.1:8000
+```
+
+Add context for better accuracy:
+
+```bash
+python cli/main.py --session "xmas dinner" --context "Family discussing vacation plans"
+```
+
+**Controls:** `v` to scroll history, `r` to rename a speaker, `q` to quit and save.
 
 ## Selecting a Microphone
 
@@ -33,7 +60,7 @@ By default, the app auto-selects your MacBook's built-in microphone. To use a di
 
 1. **List available devices:**
    ```bash
-   python main.py --list-devices
+   python cli/main.py --list-devices
    ```
    Output:
    ```
@@ -45,7 +72,7 @@ By default, the app auto-selects your MacBook's built-in microphone. To use a di
 
 2. **Run with your chosen device:**
    ```bash
-   python main.py --session "xmas dinner" --device 1
+   python cli/main.py --session "xmas dinner" --device 1
    ```
 
 ### How debug audio issues:
@@ -53,7 +80,7 @@ By default, the app auto-selects your MacBook's built-in microphone. To use a di
 If transcription shows "Waiting for speech..." but you're talking:
 
 ```bash
-python debug_mic.py
+python cli/debug_mic.py
 ```
 
 This tests your microphone directly and shows a live audio level meter. Common fixes:
@@ -63,11 +90,12 @@ This tests your microphone directly and shows a live audio level meter. Common f
 
 ## Output
 
-Transcripts save to `output/<session>/` as JSON, TXT, and MP3. Resume anytime with the same session name or change it for a new session.
+Transcripts save to `output/<session>/` as JSON, TXT, and MP3/WAV when audio is available. Resume anytime with the same session name or change it for a new session.
 
 ## Requirements
 
 - Python 3.11+ (3.12 recommended)
+- Node.js 20+ for the web frontend
 - [Soniox API key](https://soniox.com)
 
 ## Supported Languages

@@ -16,13 +16,10 @@ try:
 except ImportError:
     pass
 
-from live_transcriber import (
-    Session,
-    Transcriber,
-    LiveTranscriptUI,
-    list_audio_devices,
-)
+from live_transcriber.session import Session
+from live_transcriber.transcription import Transcriber, list_audio_devices
 from live_transcriber.transcription import print_macos_mic_mode_advisory
+from live_transcriber.ui import LiveTranscriptUI
 
 # Default context for transcription
 DEFAULT_CONTEXT = """This is a casual conversation between people speaking different languages. Pay attention to conversational nuances, cultural references, and emotional tone."""
@@ -85,6 +82,12 @@ Scroll mode navigation:
         default=None,
         help="Target translation language code (e.g., 'en')"
     )
+    parser.add_argument(
+        "--backend-url",
+        type=str,
+        default=None,
+        help="Stream microphone audio through the FastAPI backend instead of connecting directly to Soniox"
+    )
     args = parser.parse_args()
     
     # List devices mode
@@ -110,15 +113,6 @@ Scroll mode navigation:
     if not args.session:
         parser.error("--session/-s is required")
     
-    # Check for API keys
-    soniox_key = os.environ.get("SONIOX_API_KEY")
-    if not soniox_key:
-        print("Error: Missing SONIOX_API_KEY. Set it in .env or environment.")
-        sys.exit(1)
-    
-    # Type narrowing for linter
-    assert soniox_key is not None
-
     # Set context
     context: str = args.context if args.context else DEFAULT_CONTEXT
 
@@ -149,8 +143,35 @@ Scroll mode navigation:
             print("Language selection cancelled")
             sys.exit(0)
 
+    if args.backend_url:
+        from backend_client import BackendTerminalClient
+
+        print_macos_mic_mode_advisory()
+        try:
+            BackendTerminalClient(
+                backend_url=args.backend_url,
+                session_name=args.session,
+                source_languages=source_languages,
+                target_language=target_language,
+                context=context,
+                device_index=args.device,
+            ).run()
+        except (OSError, RuntimeError, ConnectionError) as exc:
+            print(f"Backend CLI failed: {exc}")
+            sys.exit(1)
+        return
+
+    # Check for API keys
+    soniox_key = os.environ.get("SONIOX_API_KEY")
+    if not soniox_key:
+        print("Error: Missing SONIOX_API_KEY. Set it in .env or environment.")
+        sys.exit(1)
+
+    # Type narrowing for linter
+    assert soniox_key is not None
+
     # Initialize base components
-    base_dir = os.path.dirname(os.path.abspath(__file__))
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     session = Session(
         args.session,
         base_dir,

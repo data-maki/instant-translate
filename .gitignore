@@ -22,6 +22,16 @@ __pycache__/
 .env
 family_chat/__pycache__/
 
+# Frontend
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env*.local
+
+# Backend
+.pytest_cache/
+backend/.pytest_cache/
+
 # OS
 .DS_Store
 
