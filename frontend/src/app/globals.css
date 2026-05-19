@@ -709,6 +709,11 @@ textarea:focus {
   justify-self: start;
 }
 
+.compactSelect {
+  align-self: end;
+  min-width: 190px;
+}
+
 .contextFields {
   grid-template-columns: 1fr;
   min-height: 0;
@@ -735,6 +740,83 @@ textarea:focus {
   min-height: 0;
   max-height: none;
   resize: none;
+}
+
+.profileFields {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.contextPreview {
+  display: grid;
+  gap: 9px;
+  padding: 10px;
+  border: 1px solid rgba(44, 48, 39, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.62);
+}
+
+.contextPreviewHeader {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.contextPreviewHeader h4 {
+  margin: 0;
+  font-size: 0.9rem;
+}
+
+.contextPreviewHeader span {
+  color: var(--muted);
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.contextPreviewGrid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.previewList {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  min-width: 0;
+}
+
+.previewList strong {
+  font-size: 0.74rem;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.previewList ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.previewList li,
+.previewList span {
+  min-width: 0;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: rgba(242, 239, 232, 0.8);
+  color: var(--ink);
+  font-size: 0.77rem;
+  overflow-wrap: anywhere;
+}
+
+.contextPreviewText {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.35;
 }
 
 .startPanelFooter {
@@ -938,6 +1020,28 @@ textarea:focus {
   font-size: 1.02rem;
 }
 
+.lineText.improvedLine {
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: rgba(223, 233, 220, 0.72);
+}
+
+.adaptedLine {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  padding: 6px 8px;
+  border-radius: 7px;
+  background: rgba(223, 233, 220, 0.72);
+  color: var(--ink);
+  font-size: 0.9rem;
+  line-height: 1.35;
+}
+
+.adaptedLine.japanese {
+  font-family: var(--font-geist-sans), "Hiragino Sans", "Yu Gothic", "Noto Sans JP", sans-serif;
+  font-size: 0.98rem;
+}
+
 .romaji {
   color: var(--muted);
   font-size: 0.72rem;
@@ -1084,6 +1188,8 @@ textarea:focus {
   .startFields,
   .audienceOptions,
   .contextFields,
+  .profileFields,
+  .contextPreviewGrid,
   .phraseLines,
   .languageRail,
   .speakerRow {

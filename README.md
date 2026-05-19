@@ -12,7 +12,7 @@ Create local env first:
 cp .env.example .env
 ```
 
-Set `SONIOX_API_KEY` in `.env`. Set `OPENAI_API_KEY` too if you want the post-recording **Improve transcript** translation cleanup.
+Set `SONIOX_API_KEY` in `.env`. Set a DeepL Pro `DEEPL_API_KEY` plus `GROQ_API_KEY` for live phrase upgrades: Qwen adapts the English, then DeepL translates the adapted English to Japanese with the selected plain/polite tone. Set `DEEPL_GLOSSARY_ID` if you have a DeepL glossary. Set `DEEPGRAM_API_KEY` and `OPENAI_API_KEY` for the optional parallel transcription/translation lane. Set `GOOGLE_MAPS_API_KEY` to enrich GPS context with nearby Places terms. `GROQ_REWRITE_MODEL` defaults to `qwen/qwen3-32b`.
 
 Run the backend API in one terminal:
 

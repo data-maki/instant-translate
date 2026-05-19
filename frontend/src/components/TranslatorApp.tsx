@@ -3,6 +3,8 @@
 import type { CSSProperties } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  adaptPhrase,
+  fetchPlacesContext,
   fetchLanguages,
   fetchSessionDetail,
   fetchSessions,
@@ -13,6 +15,7 @@ import {
   saveSpeakerReview,
   SessionSummary,
   SpeakerReviewRow,
+  translatePhrase,
   TranscriptEvent,
   websocketUrl
 } from "@/lib/api";
@@ -28,8 +31,6 @@ type AppStatus =
   | "stopped"
   | "error";
 
-const BASE_CONTEXT =
-  "Add useful context for this conversation: names, places, itinerary, topic, vocabulary, food, family context, or culturally specific references.";
 const DEFAULT_AUDIENCE_PRESET = "older-stranger";
 const REGISTER_BLOCK_START = "[Japanese register preset]";
 const REGISTER_BLOCK_END = "[/Japanese register preset]";
@@ -170,6 +171,83 @@ const AUDIENCE_PRESETS: {
 
 const PRIMARY_AUDIENCE_PRESET_COUNT = 5;
 const SPEAKER_COUNT_OPTIONS = ["2", "3", "4", "5", "6"];
+type SessionIntent = "restaurant" | "train" | "family" | "shopping" | "doctor" | "custom";
+
+type TravelerProfile = {
+  allergies: string;
+  spice_level: string;
+  names: string;
+  places: string;
+  terms: string;
+  translation_preferences: string;
+  location_hint: string;
+  location_context: string;
+  poi_type: string;
+};
+
+type ContextGeneralEntry = {
+  key: string;
+  value: string;
+};
+
+type ContextTranslationTerm = {
+  source: string;
+  target: string;
+};
+
+type SonioxStructuredContext = {
+  general?: ContextGeneralEntry[];
+  terms?: string[];
+  text?: string;
+  translation_terms?: ContextTranslationTerm[];
+};
+
+type ContextBundle = {
+  soniox: SonioxStructuredContext;
+  rewriteTone: Record<string, unknown>;
+  preview: {
+    general: string[];
+    terms: string[];
+    translationTerms: string[];
+    text: string;
+  };
+};
+
+type PhraseAdaptation = {
+  source_rewrite: string;
+  target_translation?: string;
+  status: "loading" | "ready" | "error";
+};
+
+type ProviderSignals = {
+  transcripts: string[];
+  translations: string[];
+};
+
+type DeepLFormality = "auto" | "more" | "less" | "default";
+
+const PROFILE_STORAGE_KEY = "mil-decoder-profile-v1";
+const DEEPL_FORMALITY_STORAGE_KEY = "mil-decoder-deepl-formality-v1";
+const DEFAULT_PROFILE: TravelerProfile = {
+  allergies: "",
+  spice_level: "",
+  names: "",
+  places: "",
+  terms: "",
+  translation_preferences: "",
+  location_hint: "",
+  location_context: "",
+  poi_type: ""
+};
+const SESSION_INTENTS: { id: SessionIntent; label: string }[] = [
+  { id: "restaurant", label: "Restaurant" },
+  { id: "train", label: "Train" },
+  { id: "family", label: "Family" },
+  { id: "shopping", label: "Shopping" },
+  { id: "doctor", label: "Doctor" },
+  { id: "custom", label: "Custom" }
+];
+const GENERIC_TERMS = new Set(["restaurant", "train", "food", "today", "tomorrow", "hotel", "shop", "station"]);
 
 type SpeakerDraft = {
   mergeInto: string;
@@ -206,10 +284,33 @@ export function TranslatorApp() {
   const [expectedSpeakerCount, setExpectedSpeakerCount] = useState("6");
   const [audiencePreset, setAudiencePreset] = useState(DEFAULT_AUDIENCE_PRESET);
   const [audienceExpanded, setAudienceExpanded] = useState(false);
-  const [context, setContext] = useState(BASE_CONTEXT);
+  const [deeplFormality, setDeepLFormality] = useState<DeepLFormality>(() => {
+    if (typeof window === "undefined") return "auto";
+    const saved = window.localStorage.getItem(DEEPL_FORMALITY_STORAGE_KEY);
+    return isDeepLFormality(saved) ? saved : "auto";
+  });
+  const [context, setContext] = useState("");
+  const [sessionIntent, setSessionIntent] = useState<SessionIntent>("restaurant");
+  const [travelerProfile, setTravelerProfile] = useState<TravelerProfile>(() => {
+    if (typeof window === "undefined") return DEFAULT_PROFILE;
+    const raw = window.localStorage.getItem(PROFILE_STORAGE_KEY);
+    if (!raw) return DEFAULT_PROFILE;
+    try {
+      return { ...DEFAULT_PROFILE, ...(JSON.parse(raw) as Partial<TravelerProfile>) };
+    } catch {
+      return DEFAULT_PROFILE;
+    }
+  });
+  const [geoStatus, setGeoStatus] = useState("");
+  const contextBundle = useMemo(
+    () => buildContextBundle(context, audiencePreset, deeplFormality, sessionIntent, travelerProfile),
+    [context, audiencePreset, deeplFormality, sessionIntent, travelerProfile]
+  );
   const [status, setStatus] = useState<AppStatus>("checking");
   const [error, setError] = useState("");
   const [phrases, setPhrases] = useState<Phrase[]>([]);
+  const [adaptations, setAdaptations] = useState<Record<string, PhraseAdaptation>>({});
+  const [providerSignals, setProviderSignals] = useState<ProviderSignals>({ transcripts: [], translations: [] });
   const [tokenCount, setTokenCount] = useState(0);
   const [savedPath, setSavedPath] = useState("");
   const [activeSession, setActiveSession] = useState("");
@@ -234,6 +335,8 @@ export function TranslatorApp() {
   const recorderRef = useRef<RecorderHandle | null>(null);
   const feedRef = useRef<HTMLDivElement | null>(null);
   const shouldFollowFeedRef = useRef(true);
+  const adaptationRequestsRef = useRef<Set<string>>(new Set());
+  const providerSignalsRef = useRef<ProviderSignals>({ transcripts: [], translations: [] });
 
   const sourceA = sourceALanguages[0] || (sourceB === "en" ? "ja" : "en");
   const canStart = status === "idle" || status === "stopped" || status === "error";
@@ -258,6 +361,20 @@ export function TranslatorApp() {
   useEffect(() => {
     refreshSessions();
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(travelerProfile));
+  }, [travelerProfile]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(DEEPL_FORMALITY_STORAGE_KEY, deeplFormality);
+  }, [deeplFormality]);
+
+  useEffect(() => {
+    providerSignalsRef.current = providerSignals;
+  }, [providerSignals]);
 
   useEffect(() => {
     const feed = feedRef.current;
@@ -314,6 +431,86 @@ export function TranslatorApp() {
       : compacted;
   }, [phrases, selectedSpeaker]);
 
+  useEffect(() => {
+    for (const phrase of displayedPhrases) {
+      const key = adaptationKey(phrase);
+      if (!key || adaptations[key] || adaptationRequestsRef.current.has(key) || phrase.source_lang !== "en" || !phrase.is_final) {
+        continue;
+      }
+      const sourceText = phrase.texts.en?.trim();
+      const draftTranslation = phrase.texts.ja?.trim();
+      if (!sourceText) {
+        continue;
+      }
+      adaptationRequestsRef.current.add(key);
+      const baseRewriteContext = {
+        tone: contextBundle.rewriteTone,
+        recent_dialogue: recentDialogueForRewrite(displayedPhrases, adaptations, key)
+      };
+      translatePhrase({
+        source_language: "en",
+        target_language: "ja",
+        source_text: sourceText,
+        draft_translation: draftTranslation,
+        rewrite_context: baseRewriteContext
+      })
+        .then((result) => {
+          setAdaptations((current) => ({
+            ...current,
+            [key]: {
+              source_rewrite: current[key]?.source_rewrite || "",
+              target_translation: result.target_translation,
+              status: current[key]?.status || "loading"
+            }
+          }));
+        })
+        .catch(() => {
+          // Keep Soniox's provisional Japanese if the fast DeepL pass misses.
+        });
+      window.setTimeout(() => {
+        const signals = providerSignalsRef.current;
+        setAdaptations((current) => ({
+          ...current,
+          [key]: {
+            source_rewrite: current[key]?.source_rewrite || "",
+            target_translation: current[key]?.target_translation || "",
+            status: "loading"
+          }
+        }));
+        adaptPhrase({
+          source_language: "en",
+          target_language: "ja",
+          source_text: sourceText,
+          draft_translation: draftTranslation,
+          rewrite_context: {
+            ...baseRewriteContext,
+            transcription_candidates: [sourceText, ...signals.transcripts.slice(-4)],
+            translation_candidates: [
+              ...(draftTranslation ? [draftTranslation] : []),
+              ...signals.translations.slice(-4)
+            ]
+          }
+        })
+          .then((result) => {
+            setAdaptations((current) => ({
+              ...current,
+              [key]: { ...result, status: "ready" }
+            }));
+          })
+          .catch(() => {
+            setAdaptations((current) => ({
+              ...current,
+              [key]: {
+                source_rewrite: current[key]?.source_rewrite || "",
+                target_translation: current[key]?.target_translation || "",
+                status: "error"
+              }
+            }));
+          });
+      }, 350);
+    }
+  }, [adaptations, contextBundle.rewriteTone, displayedPhrases]);
+
   async function start() {
     setError("");
     setSavedPath("");
@@ -325,6 +522,10 @@ export function TranslatorApp() {
     setSpeakerDrafts({});
     setSelectedSpeaker(null);
     setPhrases([]);
+    setAdaptations({});
+    setProviderSignals({ transcripts: [], translations: [] });
+    providerSignalsRef.current = { transcripts: [], translations: [] };
+    adaptationRequestsRef.current.clear();
     setTokenCount(0);
     setActiveDurationSeconds(0);
     setSessionStartedAt(Date.now());
@@ -354,7 +555,7 @@ export function TranslatorApp() {
             target_language: sourceB,
             expected_speaker_count: expectedSpeakerCount ? Number(expectedSpeakerCount) : null,
             expected_speaker_names: [],
-            context: contextWithRegister(context, audiencePreset)
+            context: contextBundle.soniox
           })
         );
       };
@@ -410,11 +611,15 @@ export function TranslatorApp() {
       setActiveSessionTitle(detail.session.title || "New chat");
       setSourceALanguages(loadedSources.length > 0 ? loadedSources : [sourceA]);
       setSourceB(loadedTarget);
-      setContext(stripRegisterBlock(detail.session.context || BASE_CONTEXT) || BASE_CONTEXT);
+      setContext(stripProfileBlock(stripRegisterBlock(detail.session.context || "")));
       setExpectedSpeakerCount(
         detail.session.expected_speaker_count ? String(detail.session.expected_speaker_count) : "6"
       );
       setPhrases(detail.phrases || []);
+      setAdaptations({});
+      setProviderSignals({ transcripts: [], translations: [] });
+      providerSignalsRef.current = { transcripts: [], translations: [] };
+      adaptationRequestsRef.current.clear();
       setTokenCount(detail.session.tokens?.length || detail.phrases?.length || 0);
       setActiveDurationSeconds(detail.session.duration_seconds ?? durationFromPhrases(detail.phrases || []));
       setSessionStartedAt(null);
@@ -447,13 +652,57 @@ export function TranslatorApp() {
     setSpeakerDrafts({});
     setSelectedSpeaker(null);
     setPhrases([]);
+    setAdaptations({});
+    setProviderSignals({ transcripts: [], translations: [] });
+    providerSignalsRef.current = { transcripts: [], translations: [] };
+    adaptationRequestsRef.current.clear();
     setTokenCount(0);
     setActiveDurationSeconds(null);
     setSessionStartedAt(null);
     setExpectedSpeakerCount("6");
+    setContext("");
+    setGeoStatus("");
     shouldFollowFeedRef.current = true;
     setStatus("idle");
     setSessionsOpen(false);
+  }
+
+  function injectCurrentLocation() {
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      setGeoStatus("Location unavailable in this browser.");
+      return;
+    }
+    setGeoStatus("Fetching location...");
+    navigator.geolocation.getCurrentPosition(
+      async (position) => {
+        const lat = position.coords.latitude.toFixed(5);
+        const lng = position.coords.longitude.toFixed(5);
+        setTravelerProfile((current) => ({ ...current, location_hint: `${lat}, ${lng}` }));
+        setGeoStatus("Location added. Loading nearby places...");
+        try {
+          const placesContext = await fetchPlacesContext({
+            lat: position.coords.latitude,
+            lng: position.coords.longitude,
+            intent: sessionIntent,
+            poi_type: travelerProfile.poi_type
+          });
+          setTravelerProfile((current) => ({
+            ...current,
+            location_hint: `${lat}, ${lng}`,
+            location_context: mergeLineText(current.location_context, placesContext.general),
+            places: mergeListText(current.places, placesContext.places),
+            terms: mergeListText(current.terms, placesContext.terms),
+            translation_preferences: mergeListText(current.translation_preferences, placesContext.translation_terms)
+          }));
+          setGeoStatus(placesContext.places.length ? "Nearby places added." : "Location added; no nearby places found.");
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "Could not load nearby places.";
+          setGeoStatus(message);
+        }
+      },
+      () => setGeoStatus("Could not fetch location."),
+      { enableHighAccuracy: false, timeout: 8000 }
+    );
   }
 
   function toggleSourceLanguage(code: string) {
@@ -501,11 +750,28 @@ export function TranslatorApp() {
       setTokenCount(message.final_token_count);
       return;
     }
+    if (message.type === "provider_update") {
+      if (message.kind === "transcript" && message.text) {
+        setProviderSignals((current) => ({
+          ...current,
+          transcripts: dedupeTail([...current.transcripts, message.text], 12)
+        }));
+      }
+      if (message.kind === "translation" && message.text) {
+        setProviderSignals((current) => ({
+          ...current,
+          translations: dedupeTail([...current.translations, message.text], 12)
+        }));
+      }
+      return;
+    }
     if (message.type === "saved") {
       setActiveSession(message.session);
       setActiveSessionTitle(message.title || "New chat");
       setSavedPath(message.path);
       setPhrases(message.phrases);
+      setProviderSignals({ transcripts: [], translations: [] });
+      providerSignalsRef.current = { transcripts: [], translations: [] };
       setTokenCount(message.token_count);
       setActiveDurationSeconds(durationFromPhrases(message.phrases));
       setSessionStartedAt(null);
@@ -552,6 +818,8 @@ export function TranslatorApp() {
     try {
       const speakerResult = await rediarizeSession(activeSession);
       setPhrases(speakerResult.phrases);
+      setAdaptations({});
+      adaptationRequestsRef.current.clear();
       setTokenCount(speakerResult.token_count);
       setSavedPath(speakerResult.path);
       setRediarizeStatus(`Improved: ${speakerResult.speaker_count} speakers`);
@@ -561,6 +829,8 @@ export function TranslatorApp() {
       setTranslationStatus("Improving translations...");
       const translationResult = await retranslateSession(activeSession);
       setPhrases(translationResult.phrases);
+      setAdaptations({});
+      adaptationRequestsRef.current.clear();
       setTokenCount(translationResult.token_count);
       setSavedPath(translationResult.path);
       setTranslationStatus(`Improved: ${translationResult.translation_count} translations`);
@@ -589,6 +859,8 @@ export function TranslatorApp() {
       }));
       const result = await saveSpeakerReview(activeSession, rows);
       setPhrases(result.phrases);
+      setAdaptations({});
+      adaptationRequestsRef.current.clear();
       setTokenCount(result.token_count);
       setSavedPath(result.path);
       setReviewStatus(`Saved ${result.speaker_count} speaker${result.speaker_count === 1 ? "" : "s"}`);
@@ -719,6 +991,7 @@ export function TranslatorApp() {
                 onToggleExpanded={() => setAudienceExpanded((current) => !current)}
                 value={audiencePreset}
               />
+              <DeepLFormalityPicker disabled={isLive} onChange={setDeepLFormality} value={deeplFormality} />
             </div>
 
             <div className="startFields contextFields">
@@ -727,6 +1000,60 @@ export function TranslatorApp() {
                 <textarea value={context} onChange={(event) => setContext(event.target.value)} disabled={isLive} />
               </label>
             </div>
+            <div className="startFields profileFields">
+              <label className="contextField">
+                Session type
+                <select
+                  value={sessionIntent}
+                  onChange={(event) => setSessionIntent(event.target.value as SessionIntent)}
+                  disabled={isLive}
+                >
+                  {SESSION_INTENTS.map((intent) => (
+                    <option key={intent.id} value={intent.id}>{intent.label}</option>
+                  ))}
+                </select>
+              </label>
+              <label className="contextField">
+                Allergies & restrictions
+                <input value={travelerProfile.allergies} onChange={(event) => setTravelerProfile((cur) => ({ ...cur, allergies: event.target.value }))} disabled={isLive} />
+              </label>
+              <label className="contextField">
+                Spice level
+                <input value={travelerProfile.spice_level} onChange={(event) => setTravelerProfile((cur) => ({ ...cur, spice_level: event.target.value }))} disabled={isLive} />
+              </label>
+              <label className="contextField">
+                Important names
+                <input value={travelerProfile.names} onChange={(event) => setTravelerProfile((cur) => ({ ...cur, names: event.target.value }))} disabled={isLive} />
+              </label>
+              <label className="contextField">
+                Places & itinerary
+                <input value={travelerProfile.places} onChange={(event) => setTravelerProfile((cur) => ({ ...cur, places: event.target.value }))} disabled={isLive} />
+              </label>
+              <label className="contextField">
+                Key terms
+                <input value={travelerProfile.terms} onChange={(event) => setTravelerProfile((cur) => ({ ...cur, terms: event.target.value }))} disabled={isLive} />
+              </label>
+              <label className="contextField">
+                Translation preferences
+                <input value={travelerProfile.translation_preferences} onChange={(event) => setTravelerProfile((cur) => ({ ...cur, translation_preferences: event.target.value }))} disabled={isLive} />
+              </label>
+              <label className="contextField">
+                Location hint
+                <input value={travelerProfile.location_hint} onChange={(event) => setTravelerProfile((cur) => ({ ...cur, location_hint: event.target.value }))} disabled={isLive} placeholder="Shinjuku Station, Tokyo or lat,lng" />
+              </label>
+              <label className="contextField">
+                POI type
+                <input value={travelerProfile.poi_type} onChange={(event) => setTravelerProfile((cur) => ({ ...cur, poi_type: event.target.value }))} disabled={isLive} placeholder="train station / restaurant / hotel / shrine" />
+              </label>
+            </div>
+            <div className="startPanelFooter">
+              <button className="secondaryButton" onClick={injectCurrentLocation} disabled={isLive} type="button">
+                Use current GPS
+              </button>
+              {geoStatus ? <span className="hint">{geoStatus}</span> : null}
+            </div>
+
+            <ContextPreview bundle={contextBundle} />
 
             {hasSessionStatus ? (
               <div className="statusBox inlineStatus">
@@ -777,6 +1104,7 @@ export function TranslatorApp() {
               displayedPhrases.map((phrase) => (
                 <PhraseCard
                   key={phrase.id}
+                  adaptation={adaptations[adaptationKey(phrase)]}
                   phrase={phrase}
                   columns={phraseColumns(phrase, sourceALanguages, sourceB)}
                 />
@@ -942,6 +1270,42 @@ function LanguagePicker({
   );
 }
 
+function ContextPreview({ bundle }: { bundle: ContextBundle }) {
+  const { general, terms, translationTerms, text } = bundle.preview;
+  return (
+    <section className="contextPreview" aria-label="Context for this conversation">
+      <div className="contextPreviewHeader">
+        <div>
+          <p className="panelKicker">context</p>
+          <h4>For this conversation</h4>
+        </div>
+        <span>{general.length + terms.length + translationTerms.length} signals</span>
+      </div>
+      <div className="contextPreviewGrid">
+        <PreviewList label="Using" items={general} empty="Travel conversation" />
+        <PreviewList label="Terms" items={terms.slice(0, 12)} empty="Add names, foods, places, or product words" />
+        <PreviewList label="Translations" items={translationTerms.slice(0, 6)} empty="Add preferences like check -> お会計" />
+      </div>
+      {text ? <p className="contextPreviewText">{text}</p> : null}
+    </section>
+  );
+}
+
+function PreviewList({ label, items, empty }: { label: string; items: string[]; empty: string }) {
+  return (
+    <div className="previewList">
+      <strong>{label}</strong>
+      {items.length ? (
+        <ul>
+          {items.map((item) => <li key={item}>{item}</li>)}
+        </ul>
+      ) : (
+        <span>{empty}</span>
+      )}
+    </div>
+  );
+}
+
 function SpeakerCountPicker({
   disabled,
   onChange,
@@ -1031,6 +1395,28 @@ function AudiencePicker({
         {expanded ? "Show common only" : "More situations"}
       </button>
     </fieldset>
+  );
+}
+
+function DeepLFormalityPicker({
+  disabled,
+  onChange,
+  value
+}: {
+  disabled: boolean;
+  onChange: (value: DeepLFormality) => void;
+  value: DeepLFormality;
+}) {
+  return (
+    <label className="contextField compactSelect">
+      DeepL Japanese tone
+      <select disabled={disabled} onChange={(event) => onChange(event.target.value as DeepLFormality)} value={value}>
+        <option value="auto">Auto from speaker</option>
+        <option value="more">Polite</option>
+        <option value="less">Plain</option>
+        <option value="default">DeepL default</option>
+      </select>
+    </label>
   );
 }
 
@@ -1159,7 +1545,7 @@ function SpeakerReviewPanel({
   );
 }
 
-function PhraseCard({ phrase, columns }: { phrase: Phrase; columns: string[] }) {
+function PhraseCard({ adaptation, phrase, columns }: { adaptation?: PhraseAdaptation; phrase: Phrase; columns: string[] }) {
   const color = speakerColor(speakerKey(phrase.speaker));
   const style = { "--speaker-color": color } as CSSProperties;
 
@@ -1168,11 +1554,18 @@ function PhraseCard({ phrase, columns }: { phrase: Phrase; columns: string[] }) 
       <div className="phraseLines">
         {columns.map((code) => {
           const text = phrase.texts[code] || "";
+          const displayText = code === "ja" && adaptation?.target_translation ? adaptation.target_translation : text;
           const isSource = code === phrase.source_lang;
           return (
             <div className={`lineBox ${isSource ? "sourceLine" : ""}`} key={code}>
-              <span className={`lineText ${code === "ja" ? "japanese" : ""}`}>{text || "..."}</span>
-              {code === "ja" && phrase.romaji_ja ? <span className="romaji">{phrase.romaji_ja}</span> : null}
+              <span className={`lineText ${code === "ja" ? "japanese" : ""} ${code === "ja" && adaptation?.target_translation ? "improvedLine" : ""}`}>
+                {displayText || "..."}
+              </span>
+              {code === "en" && adaptation?.source_rewrite && adaptation.source_rewrite !== text ? (
+                <span className="adaptedLine">{adaptation.source_rewrite}</span>
+              ) : null}
+              {code === "en" && adaptation?.status === "loading" ? <span className="romaji">Adapting...</span> : null}
+              {code === "ja" && phrase.romaji_ja && !adaptation?.target_translation ? <span className="romaji">{phrase.romaji_ja}</span> : null}
             </div>
           );
         })}
@@ -1278,6 +1671,39 @@ function phraseColumns(phrase: Phrase, sourceLanguages: string[], targetLanguage
   return Array.from(new Set(columns));
 }
 
+function adaptationKey(phrase: Phrase): string {
+  const source = phrase.source_lang ? phrase.texts[phrase.source_lang]?.trim() : "";
+  return source ? `${phrase.id}:${source}` : "";
+}
+
+function recentDialogueForRewrite(
+  phrases: Phrase[],
+  adaptations: Record<string, PhraseAdaptation>,
+  currentKey: string
+): Array<{ speaker: string; english?: string; japanese?: string }> {
+  const turns: Array<{ speaker: string; english?: string; japanese?: string }> = [];
+  for (const phrase of phrases) {
+    const key = adaptationKey(phrase);
+    if (key === currentKey) {
+      break;
+    }
+    const adaptation = adaptations[key];
+    const english = phrase.texts.en?.trim();
+    const japanese = phrase.texts.ja?.trim();
+    const adaptedEnglish = adaptation?.status === "ready" && adaptation.source_rewrite
+      ? adaptation.source_rewrite
+      : english;
+    if (adaptedEnglish || japanese) {
+      turns.push({
+        speaker: phrase.speaker_label || "Unknown",
+        english: adaptedEnglish,
+        japanese
+      });
+    }
+  }
+  return turns.slice(-10);
+}
+
 function formatTranscriptStats(stats: { durationSeconds: number | null; words: number; tokens: number }): string {
   return `${formatDuration(stats.durationSeconds)}, ${stats.words} words, ${stats.tokens} tokens`;
 }
@@ -1323,10 +1749,206 @@ function countWords(text: string): number {
   return latinWords + kanaKanjiRuns;
 }
 
-function contextWithRegister(baseContext: string, presetId: string): string {
+function buildContextBundle(
+  baseContext: string,
+  presetId: string,
+  deeplFormality: DeepLFormality,
+  intent: SessionIntent,
+  profile: TravelerProfile
+): ContextBundle {
+  const now = new Date();
+  const hour = now.getHours();
+  const timeContext = hour < 5 ? "late night" : hour < 11 ? "morning" : hour < 17 ? "afternoon" : "evening";
+  const inferredPoi = profile.poi_type.trim() || inferPoiType(intent);
   const preset = AUDIENCE_PRESETS.find((item) => item.id === presetId) || AUDIENCE_PRESETS[0];
-  const cleanBase = stripRegisterBlock(baseContext).trim() || BASE_CONTEXT;
-  return `${cleanBase}\n\n${REGISTER_BLOCK_START}\nMedium: voice\nSpeaking to: ${preset.label}\nHidden register: ${preset.register}\nJapanese behavior: ${preset.behavior}\nVoice rules: Prefer short complete spoken sentences. Use names/titles instead of anata. Raise politeness for requests, apologies, refusals, and invitations. Avoid email-only formulas unless this is explicitly a business call opening.\n${REGISTER_BLOCK_END}`;
+  const locationEntries = locationGeneralEntries(profile.location_context);
+  const general = compactGeneral([
+    { key: "domain", value: "Travel conversation in Japan" },
+    { key: "session_intent", value: intent },
+    { key: "setting", value: inferredPoi },
+    { key: "local_time", value: timeContext },
+    { key: "date", value: now.toISOString().slice(0, 10) },
+    profile.location_hint ? { key: "location", value: profile.location_hint } : null,
+    profile.allergies ? { key: "dietary_restrictions", value: profile.allergies } : null,
+    profile.spice_level ? { key: "spice_preference", value: profile.spice_level } : null,
+    ...locationEntries
+  ]);
+  const terms = rankedTerms([
+    ...splitListText(profile.names),
+    ...splitListText(profile.places),
+    ...splitListText(profile.terms),
+    ...splitListText(profile.allergies),
+    ...baseTermsForIntent(intent, inferredPoi)
+  ]);
+  const translationTerms = dedupeTranslationTerms([
+    ...parseTranslationTerms(profile.translation_preferences),
+    ...baseTranslationTermsForIntent(intent, inferredPoi)
+  ]).slice(0, 20);
+  const text = [
+    stripProfileBlock(stripRegisterBlock(baseContext)).trim(),
+  ].filter(Boolean).join("\n");
+  const soniox: SonioxStructuredContext = {
+    general,
+    terms,
+    translation_terms: translationTerms,
+    text
+  };
+  return {
+    soniox,
+    rewriteTone: {
+      purpose: "Adapt what the English speaker said into socially natural Japanese for this live conversation.",
+      audience: preset.label,
+      register: preset.register,
+      behavior: preset.behavior,
+      deepl_formality: deeplFormality,
+      session_intent: intent,
+      setting: inferredPoi,
+      user_notes: stripProfileBlock(stripRegisterBlock(baseContext)).trim(),
+      rule: "Rewrite for spoken Japanese tone and relationship. Keep it concise. Preserve meaning, but do not translate literally."
+    },
+    preview: {
+      general: general.map((item) => `${humanizeKey(item.key)}: ${item.value}`),
+      terms,
+      translationTerms: translationTerms.map((item) => `${item.source} -> ${item.target}`),
+      text: stripProfileBlock(stripRegisterBlock(baseContext)).trim()
+    }
+  };
+}
+
+function mergeListText(current: string, additions: string[]): string {
+  const values = [
+    ...current.split(/[,;\n]/).map((value) => value.trim()),
+    ...additions
+  ].filter(Boolean);
+  return Array.from(new Set(values)).join(", ");
+}
+
+function mergeLineText(current: string, additions: string[]): string {
+  const values = [
+    ...current.split(/\n/).map((value) => value.trim()),
+    ...additions
+  ].filter(Boolean);
+  return Array.from(new Set(values)).join("\n");
+}
+
+function splitListText(value: string): string[] {
+  return value.split(/[,;\n]/).map((item) => item.trim()).filter(Boolean);
+}
+
+function compactGeneral(entries: Array<ContextGeneralEntry | null>): ContextGeneralEntry[] {
+  const seen = new Set<string>();
+  const result: ContextGeneralEntry[] = [];
+  for (const entry of entries) {
+    if (!entry) continue;
+    const key = entry.key.trim();
+    const value = entry.value.trim();
+    const id = `${key}:${value}`;
+    if (!key || !value || seen.has(id)) continue;
+    seen.add(id);
+    result.push({ key, value });
+  }
+  return result.slice(0, 15);
+}
+
+function locationGeneralEntries(value: string): ContextGeneralEntry[] {
+  return value.split(/\n/).map((line) => line.trim()).filter(Boolean).slice(0, 8).map((line) => {
+    if (line.startsWith("Nearby POI:")) {
+      return { key: "nearby_place", value: line.replace("Nearby POI:", "").trim() };
+    }
+    if (line.startsWith("Nearby address:")) {
+      return { key: "nearby_address", value: line.replace("Nearby address:", "").trim() };
+    }
+    return { key: "location_note", value: line };
+  });
+}
+
+function rankedTerms(values: string[]): string[] {
+  const seen = new Set<string>();
+  const terms: string[] = [];
+  for (const value of values) {
+    const term = value.trim();
+    if (!term || term.length < 2 || GENERIC_TERMS.has(term.toLowerCase()) || seen.has(term.toLowerCase())) {
+      continue;
+    }
+    seen.add(term.toLowerCase());
+    terms.push(term);
+  }
+  return terms.slice(0, 40);
+}
+
+function parseTranslationTerms(value: string): ContextTranslationTerm[] {
+  return value.split(/[;\n]/).map((raw) => {
+    const [source, target] = raw.split(/\s*(?:->|=>|→)\s*/);
+    return source && target ? { source: source.trim(), target: target.trim() } : null;
+  }).filter((item): item is ContextTranslationTerm => Boolean(item));
+}
+
+function dedupeTranslationTerms(values: ContextTranslationTerm[]): ContextTranslationTerm[] {
+  const seen = new Set<string>();
+  const result: ContextTranslationTerm[] = [];
+  for (const value of values) {
+    const source = value.source.trim();
+    const target = value.target.trim();
+    const id = `${source.toLowerCase()}->${target.toLowerCase()}`;
+    if (!source || !target || seen.has(id)) continue;
+    seen.add(id);
+    result.push({ source, target });
+  }
+  return result;
+}
+
+function baseTermsForIntent(intent: SessionIntent, poi: string): string[] {
+  const signal = `${intent} ${poi}`;
+  if (signal.includes("train") || signal.includes("station")) return ["改札", "乗り換え", "終電", "ホーム", "乗り場", "出口"];
+  if (signal.includes("restaurant")) return ["予約", "お会計", "アレルギー", "卵", "小麦", "ナッツ"];
+  if (signal.includes("hotel")) return ["予約名", "荷物預かり", "チェックイン", "チェックアウト"];
+  if (signal.includes("shrine") || signal.includes("temple")) return ["御朱印", "お守り", "おみくじ", "鳥居"];
+  return [];
+}
+
+function baseTranslationTermsForIntent(intent: SessionIntent, poi: string): ContextTranslationTerm[] {
+  const signal = `${intent} ${poi}`;
+  if (signal.includes("train") || signal.includes("station")) {
+    return [
+      { source: "platform", target: "ホーム / 乗り場" },
+      { source: "ticket gate", target: "改札" },
+      { source: "last train", target: "終電" }
+    ];
+  }
+  if (signal.includes("restaurant")) {
+    return [
+      { source: "check/bill", target: "お会計" },
+      { source: "no meat/fish broth", target: "肉や魚の出汁もなし" }
+    ];
+  }
+  if (signal.includes("hotel")) return [{ source: "leave luggage", target: "荷物を預ける" }];
+  if (signal.includes("shrine") || signal.includes("temple")) {
+    return [
+      { source: "goshuin", target: "御朱印" },
+      { source: "amulet", target: "お守り" }
+    ];
+  }
+  return [];
+}
+
+function humanizeKey(key: string): string {
+  return key.replaceAll("_", " ");
+}
+
+function inferPoiType(intent: SessionIntent): string {
+  if (intent === "restaurant") return "restaurant";
+  if (intent === "train") return "train station";
+  if (intent === "family") return "family or in-law home";
+  if (intent === "shopping") return "shop";
+  if (intent === "doctor") return "clinic or hospital";
+  return "travel conversation";
+}
+
+function stripProfileBlock(value: string): string {
+  const start = value.indexOf("[Traveler profile]");
+  const end = value.indexOf("[/Traveler profile]");
+  if (start === -1 || end === -1 || end < start) return value;
+  return `${value.slice(0, start)}${value.slice(end + "[/Traveler profile]".length)}`.trim();
 }
 
 function stripRegisterBlock(value: string): string {
@@ -1336,6 +1958,23 @@ function stripRegisterBlock(value: string): string {
     return value;
   }
   return `${value.slice(0, start)}${value.slice(end + REGISTER_BLOCK_END.length)}`.trim();
+}
+
+function isDeepLFormality(value: string | null): value is DeepLFormality {
+  return value === "auto" || value === "more" || value === "less" || value === "default";
+}
+
+function dedupeTail(values: string[], limit: number): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values.slice().reverse()) {
+    const clean = value.trim();
+    if (!clean || seen.has(clean)) continue;
+    seen.add(clean);
+    result.unshift(clean);
+    if (result.length >= limit) break;
+  }
+  return result;
 }
 
 function groupSessions(sessions: SessionSummary[]): SessionGroup[] {

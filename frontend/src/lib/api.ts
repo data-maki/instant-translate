@@ -33,6 +33,13 @@ export type TranscriptEvent =
     }
   | { type: "transcript"; phrases: Phrase[]; final_token_count: number }
   | {
+      type: "provider_update";
+      provider: "deepgram" | "openai_realtime" | string;
+      kind: "transcript" | "translation" | "error" | string;
+      text: string;
+      is_final: boolean;
+    }
+  | {
       type: "saved";
       session: string;
       path: string;
@@ -74,6 +81,22 @@ export type SpeakerReviewResult = {
   speaker_labels: Record<string, string>;
   token_count: number;
   phrases: Phrase[];
+};
+
+export type PlacesContextResult = {
+  places: string[];
+  general: string[];
+  terms: string[];
+  translation_terms: string[];
+};
+
+export type AdaptPhraseResult = {
+  source_rewrite: string;
+  target_translation?: string;
+};
+
+export type TranslatePhraseResult = {
+  target_translation: string;
 };
 
 export type SessionSummary = {
@@ -182,6 +205,62 @@ export async function saveSpeakerReview(
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
     throw new Error(body.detail || `Could not save speaker labels (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function fetchPlacesContext(payload: {
+  lat: number;
+  lng: number;
+  intent: string;
+  poi_type?: string;
+}): Promise<PlacesContextResult> {
+  const response = await fetch(`${apiBaseUrl()}/context/places`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `Could not load nearby places (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function adaptPhrase(payload: {
+  source_language: string;
+  target_language: string;
+  source_text: string;
+  draft_translation?: string;
+  rewrite_context: Record<string, unknown>;
+}): Promise<AdaptPhraseResult> {
+  const response = await fetch(`${apiBaseUrl()}/context/rewrite`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `Could not adapt phrase (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function translatePhrase(payload: {
+  source_language: string;
+  target_language: string;
+  source_text: string;
+  draft_translation?: string;
+  rewrite_context: Record<string, unknown>;
+}): Promise<TranslatePhraseResult> {
+  const response = await fetch(`${apiBaseUrl()}/context/translate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `Could not translate phrase (${response.status})`);
   }
   return response.json();
 }
