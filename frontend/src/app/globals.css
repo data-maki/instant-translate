@@ -57,7 +57,8 @@ button {
 .appShell {
   display: grid;
   grid-template-rows: auto 1fr;
-  min-height: 100dvh;
+  height: 100dvh;
+  min-height: 0;
   max-width: 1440px;
   margin: 0 auto;
 }
@@ -185,6 +186,7 @@ h1 {
   display: grid;
   grid-template-columns: minmax(286px, 350px) minmax(0, 1fr);
   gap: 18px;
+  align-items: stretch;
   min-height: 0;
   padding: 16px clamp(14px, 3vw, 34px) 24px;
 }
@@ -198,10 +200,8 @@ h1 {
 }
 
 .sessionPanel {
-  align-self: start;
   display: grid;
   gap: 12px;
-  max-height: calc(100dvh - 128px);
   min-height: 0;
   padding: 14px;
   overflow: hidden;
@@ -320,17 +320,6 @@ textarea:focus {
   line-height: 1.4;
 }
 
-.actions {
-  display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
-  gap: 8px;
-}
-
-.compactActions {
-  grid-template-columns: 1fr;
-  width: min(260px, 100%);
-}
-
 .primaryButton,
 .secondaryButton {
   min-height: 46px;
@@ -397,6 +386,17 @@ textarea:focus {
   overflow: hidden;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(252, 251, 247, 0.94));
+}
+
+.transcriptPanel.setupMode .startPanel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.transcriptPanel.setupMode .feed {
+  display: none;
 }
 
 .transcriptHeader {
@@ -565,7 +565,7 @@ textarea:focus {
 
 .audienceOption {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 7px;
   min-height: 38px;
   min-width: 0;
@@ -576,6 +576,7 @@ textarea:focus {
   color: var(--foreground);
   font-size: 0.8rem;
   font-weight: 800;
+  line-height: 1.18;
 }
 
 .audienceOption:has(input:checked) {
@@ -588,10 +589,14 @@ textarea:focus {
   width: auto;
 }
 
-.audienceOption span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.audienceEmoji {
+  flex: 0 0 auto;
+}
+
+.audienceName {
+  min-width: 0;
+  overflow-wrap: normal;
+  white-space: normal;
 }
 
 .audienceMore {
@@ -600,11 +605,41 @@ textarea:focus {
 
 .contextFields {
   grid-template-columns: 1fr;
+  min-height: 0;
+}
+
+.transcriptPanel.setupMode .contextFields {
+  flex: 1 1 auto;
+  height: 100%;
 }
 
 .contextField textarea {
   min-height: 44px;
   max-height: 90px;
+}
+
+.transcriptPanel.setupMode .contextField {
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+.transcriptPanel.setupMode .contextField textarea {
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  resize: none;
+}
+
+.startPanelFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.startPanelFooter .primaryButton,
+.startPanelFooter .secondaryButton {
+  min-width: min(270px, 100%);
 }
 
 .inlineStatus {
@@ -854,7 +889,6 @@ textarea:focus {
     padding-top: 12px;
   }
 
-  .actions,
   .startFields,
   .audienceOptions,
   .contextFields,

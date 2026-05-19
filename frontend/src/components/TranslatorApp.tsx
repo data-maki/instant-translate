@@ -49,26 +49,30 @@ type HiddenRegister =
 
 const AUDIENCE_PRESETS: {
   id: string;
+  emoji: string;
   label: string;
   register: HiddenRegister;
   behavior: string;
 }[] = [
   {
     id: "tourism-staff",
-    label: "Shops, restaurants, hotels",
+    emoji: "🛍️",
+    label: "Shops & hotels",
     register: "polite_neutral",
     behavior:
       "Speak as a customer: polite, simple requests with desu/masu. No need to mirror service keigo; keep it practical for shops, restaurants, hotels, and travel."
   },
   {
     id: "stranger",
-    label: "Stranger or new person",
+    emoji: "👋",
+    label: "New person",
     register: "polite_neutral",
     behavior:
       "Use safe spoken desu/masu. Avoid plain-form directness, imperatives, and anata. Use simple polite requests like shite moraemasu ka or dekimasu ka."
   },
   {
     id: "older-stranger",
+    emoji: "👵",
     label: "Older stranger",
     register: "polite_neutral_soft",
     behavior:
@@ -76,6 +80,7 @@ const AUDIENCE_PRESETS: {
   },
   {
     id: "host-guest",
+    emoji: "🏠",
     label: "Host or guest",
     register: "host_guest_respect",
     behavior:
@@ -83,27 +88,31 @@ const AUDIENCE_PRESETS: {
   },
   {
     id: "public-institution",
-    label: "Government, bank, hospital",
+    emoji: "🏛️",
+    label: "Police & gov",
     register: "public_institution_polite",
     behavior:
       "Use polite, precise, complete phrases. Avoid casual vagueness. Good for immigration, banks, hospitals, police, and public counters."
   },
   {
     id: "friend-partner",
-    label: "Close friend or partner",
+    emoji: "😊",
+    label: "Friend or partner",
     register: "casual_intimate",
     behavior:
       "Use plain form, warmth, and direct natural phrasing. Avoid desu/masu overuse, sama, or heavy keigo unless the source is intentionally joking or formal."
   },
   {
     id: "family",
-    label: "Family/in-laws",
+    emoji: "👪",
+    label: "Family / in-laws",
     register: "casual_intimate",
     behavior:
       "Use warm family speech. Plain form is natural for close family; add polite softness for in-laws, elders, or family members who are not very close."
   },
   {
     id: "coworker",
+    emoji: "💼",
     label: "Coworker",
     register: "polite_professional",
     behavior:
@@ -111,34 +120,39 @@ const AUDIENCE_PRESETS: {
   },
   {
     id: "boss-professor",
-    label: "Boss, senior, or teacher",
+    emoji: "🎓",
+    label: "Boss / teacher",
     register: "upward_polite_professional",
     behavior:
       "Use desu/masu plus respectful request forms such as go-kakunin itadakemasu ka. Avoid overlong keigo chains; voice should be respectful but still speakable."
   },
   {
     id: "employee-student",
-    label: "Employee or student",
+    emoji: "🧭",
+    label: "Employee / student",
     register: "downward_polite_clear",
     behavior:
       "Use clear, respectful instructions without being deferential. Prefer shite kudasai, onegai shimasu, or shite moraemasu ka. Avoid barking or overly humble forms."
   },
   {
     id: "client-customer",
-    label: "Client or customer",
+    emoji: "🤝",
+    label: "Client / customer",
     register: "external_formal_business",
     behavior:
       "Use respectful language for the listener and humble framing for self/company. Prefer osoreirimasu ga and itadakemasu ka. Voice should be formal but less ornate than email."
   },
   {
     id: "investor-partner",
-    label: "Investor or senior partner",
+    emoji: "📈",
+    label: "Investor / partner",
     register: "polished_professional",
     behavior:
       "Use polished, concise professional Japanese. Be respectful and competent, not servile. Prefer go-iken o itadakemasu ka and clear business phrasing."
   },
   {
     id: "uchi-soto",
+    emoji: "🏢",
     label: "Inside vs outside company",
     register: "uchi_soto_business",
     behavior:
@@ -635,7 +649,7 @@ export function TranslatorApp() {
           total={sessions.length}
         />
 
-        <section className="transcriptPanel" aria-label="Live transcript">
+        <section className={`transcriptPanel ${phrases.length === 0 ? "setupMode" : ""}`} aria-label="Live transcript">
           <div className="transcriptHeader">
             <div>
               <p className="panelKicker">conversation</p>
@@ -659,17 +673,6 @@ export function TranslatorApp() {
               <div>
                 <p className="panelKicker">new conversation</p>
                 <h3>{activeSessionTitle || "Start a session"}</h3>
-              </div>
-              <div className="actions compactActions">
-                {isLive ? (
-                  <button className="secondaryButton" onClick={stop}>
-                    Stop
-                  </button>
-                ) : (
-                  <button className="primaryButton" onClick={start} disabled={!canStart || !hasLanguagePair}>
-                    Start session
-                  </button>
-                )}
               </div>
             </div>
 
@@ -710,16 +713,24 @@ export function TranslatorApp() {
               </div>
             ) : null}
 
-            {hasFinishedSession ? (
-              <button
-                className="secondaryButton fullWidthButton"
-                onClick={improveSpeakersAndTranslations}
-                disabled={postProcessing}
-              >
-                {improvingAll ? "Improving transcript..." : "Improve transcript"}
-              </button>
-            ) : null}
             {error ? <div className="errorBox">{error}</div> : null}
+
+            <div className="startPanelFooter">
+              {hasFinishedSession ? (
+                <button className="secondaryButton" onClick={improveSpeakersAndTranslations} disabled={postProcessing}>
+                  {improvingAll ? "Improving transcript..." : "Improve transcript"}
+                </button>
+              ) : null}
+              {isLive ? (
+                <button className="secondaryButton" onClick={stop}>
+                  Stop
+                </button>
+              ) : (
+                <button className="primaryButton" onClick={start} disabled={!canStart || !hasLanguagePair}>
+                  Start session
+                </button>
+              )}
+            </div>
           </section>
           {speakerSummaries.length > 0 ? (
             <SpeakerReviewPanel
@@ -926,7 +937,10 @@ function AudiencePicker({
               onChange={() => onChange(preset.id)}
               type="radio"
             />
-            <span>{preset.label}</span>
+            <span className="audienceEmoji" aria-hidden="true">
+              {preset.emoji}
+            </span>
+            <span className="audienceName">{preset.label}</span>
           </label>
         ))}
       </div>
@@ -941,7 +955,10 @@ function AudiencePicker({
                 onChange={() => onChange(preset.id)}
                 type="radio"
               />
-              <span>{preset.label}</span>
+              <span className="audienceEmoji" aria-hidden="true">
+                {preset.emoji}
+              </span>
+              <span className="audienceName">{preset.label}</span>
             </label>
           ))}
         </div>
