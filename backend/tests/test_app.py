@@ -209,8 +209,7 @@ def test_rewrite_context_uses_groq_qwen_with_reasoning_none(monkeypatch):
 
 def test_deepl_uses_pro_endpoint_by_default(monkeypatch):
     monkeypatch.delenv("DEEPL_API_URL", raising=False)
-    assert app_main._deepl_translate_url("abc:fx") == app_main.DEEPL_PRO_TRANSLATE_URL
-    assert app_main._deepl_translate_url("abc") == app_main.DEEPL_PRO_TRANSLATE_URL
+    assert app_main._deepl_translate_url() == app_main.DEEPL_PRO_TRANSLATE_URL
 
 
 def test_deepl_formality_maps_registers(monkeypatch):

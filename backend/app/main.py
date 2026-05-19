@@ -14,15 +14,22 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .languages import DEFAULT_SOURCE_LANGUAGES, DEFAULT_TARGET_LANGUAGE, list_languages
 from . import shared
+from .phrase_upgrade import (
+    DEEPL_PRO_TRANSLATE_URL,
+    DEEPL_TRANSLATE_TIMEOUT_SECONDS,
+    GROQ_REWRITE_TIMEOUT_SECONDS,
+    adapt_phrase_with_groq as _adapt_phrase_with_groq,
+    deepl_context as _deepl_context,
+    deepl_formality as _deepl_formality,
+    deepl_translate_url as _deepl_translate_url,
+    translate_with_deepl as _translate_with_deepl,
+)
 from .sessions import DEFAULT_CONTEXT, build_phrases, make_session, read_session_state, list_sessions, sanitize_session_name, session_display_title, session_duration_seconds
 from .soniox import NUM_CHANNELS, SAMPLE_RATE, run_transcription_bridge
 from cli.live_transcriber.async_diarize import AsyncDiarizeError, redo_diarization
 
 
 GOOGLE_PLACES_NEARBY_URL = "https://places.googleapis.com/v1/places:searchNearby"
-GROQ_REWRITE_TIMEOUT_SECONDS = 2.5
-DEEPL_PRO_TRANSLATE_URL = "https://api.deepl.com/v2/translate"
-DEEPL_TRANSLATE_TIMEOUT_SECONDS = 2.0
 
 load_dotenv()
 
@@ -287,260 +294,6 @@ def _dedupe(values: list[str]) -> list[str]:
             seen.add(clean)
             result.append(clean)
     return result
-
-
-def _adapt_phrase_with_groq(
-    api_key: str,
-    source_language: str,
-    target_language: str,
-    source_text: str,
-    rewrite_context: dict[str, Any],
-) -> dict[str, str]:
-    import requests
-
-    prompt = {
-        "task": (
-            "Rewrite a live English utterance into better English for downstream Japanese translation. "
-            "Do not translate to Japanese or any other language. "
-            "Preserve the user's intent, but adapt the English phrasing to the relationship, setting, politeness, and spoken context. "
-            "Do not add new facts, explanations, emotions, apologies, gratitude, or inferred objects that were not said. "
-            "Preserve explicit referents like 'this', 'that', 'here', and named items unless the recent dialogue makes the referent explicit. "
-            "If the source English is already natural and clear, keep source_rewrite very close to the original; do not make it stiff or clinical. "
-            "Write English that will lift cleanly into natural spoken Japanese: explicit action, clear object, simple sentence shape, and the right politeness cue. "
-            "Preserve time relations exactly: 'until 3' means through 3, while 'by 3' means no later than 3. "
-            "For 'soon' in the sense of 'before long / about time to', prefer English like 'soon' or 'before long'; do not rewrite it as 'right away' unless the source means immediately starting something. "
-            "For everyday travel, prefer common English terms that map cleanly to Japanese, such as 'train platform' and 'ticket gate'. "
-            "Only add minimal English politeness markers when they are required by the tone or setting, such as 'could', 'would', 'please', or 'I'd like'. "
-            "For in-laws, elders, staff, strangers, doctors, and public counters, make requests and statements softly polite in English. "
-            "For coworkers, use professional but ordinary English; do not make it sound like a legal notice or formal email. "
-            "For employee/student/downward-clear speech, use clear polite English commands such as 'Please send...' rather than deferential phrasing. "
-            "For restaurant payment, rewrite ambiguous 'check' as 'bill' so the later Japanese translation maps to お会計. "
-            "For external-company speech, keep the speaker's side clear when needed, but do not make the English unnatural just to encode Japanese honorifics. "
-            "Prefer short, spoken English over stiff literal phrasing. "
-            "Return only the concise English rewrite. "
-            "No explanations. Return JSON only."
-        ),
-        "source_language": source_language,
-        "downstream_translation_language": target_language,
-        "source_text": source_text,
-            "rewrite_context": rewrite_context,
-            "source_candidates": payload_list(rewrite_context.get("transcription_candidates"))[:4],
-            "translation_candidates": payload_list(rewrite_context.get("translation_candidates"))[:4],
-            "hard_constraints": [
-            "source_rewrite must stay close to source_text unless the original is rude, awkward, or unclear.",
-            "Do not infer unstated objects. Keep this/that/here/there unless recent_dialogue explicitly resolves it.",
-            "Preserve who is doing the action: 'could we' means the speaker's side requests permission to do something; 'can you' asks the listener to do it.",
-            "Do not output Japanese.",
-            "Do not add apologies or thanks unless source_text says them or the situation absolutely requires a conventional attention-getter.",
-            "Preserve until/by distinctions exactly.",
-            "Use strong deference mainly for senior/client/external contexts, not ordinary coworkers.",
-            "Do not make source_rewrite unnatural English solely to force a Japanese honorific or business formula.",
-        ],
-        "examples": [
-            {
-                "source_text": "I want the check.",
-                "rewrite_context": {"tone": {"setting": "restaurant", "audience": "staff"}},
-                "source_rewrite": "I'd like the bill, please.",
-            },
-            {
-                "source_text": "I can't eat that because I have a shrimp allergy.",
-                "rewrite_context": {"tone": {"audience": "Family / in-laws"}},
-                "source_rewrite": "I can't eat that — I'm allergic to shrimp.",
-            },
-            {
-                "source_text": "My stomach hurts a lot.",
-                "rewrite_context": {"tone": {"setting": "clinic or hospital"}},
-                "source_rewrite": "My stomach hurts a lot.",
-            },
-            {
-                "source_text": "Could we leave our bags here until three?",
-                "rewrite_context": {"tone": {"setting": "hotel front desk", "audience": "staff"}},
-                "source_rewrite": "Could we leave our bags here until three?",
-            },
-            {
-                "source_text": "Can you check this before the meeting?",
-                "rewrite_context": {"tone": {"audience": "Coworker"}},
-                "source_rewrite": "Can you check this before the meeting?",
-            },
-            {
-                "source_text": "Our manager will send the document today.",
-                "rewrite_context": {"tone": {"audience": "External company"}},
-                "source_rewrite": "Our manager will send the document today.",
-            },
-            {
-                "source_text": "Send me the file by five.",
-                "rewrite_context": {"tone": {"audience": "Employee / student"}},
-                "source_rewrite": "Please send me the file by five.",
-            },
-            {
-                "source_text": "Could we move the meeting to Friday?",
-                "rewrite_context": {"tone": {"audience": "Client / customer"}},
-                "source_rewrite": "Could we reschedule the meeting to Friday?",
-            },
-            {
-                "source_text": "I’m tired, so let’s go home soon.",
-                "rewrite_context": {"tone": {"audience": "Spouse / partner"}},
-                "source_rewrite": "I’m tired, so let’s go home soon.",
-            },
-            {
-                "source_text": "Where is platform three?",
-                "rewrite_context": {"tone": {"setting": "train station", "audience": "Older stranger"}},
-                "source_rewrite": "Excuse me, where is train platform three?",
-            },
-        ],
-        "output_schema": {
-            "source_rewrite": "natural English rewrite of the intended utterance",
-        },
-    }
-    try:
-        response = requests.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": os.environ.get("GROQ_REWRITE_MODEL", "qwen/qwen3-32b"),
-                "messages": [
-                    {
-                        "role": "system",
-                        "content": "You adapt live English utterances into better English for downstream Japanese translation. Return only valid JSON with source_rewrite only.",
-                    },
-                    {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
-                ],
-                "response_format": {"type": "json_object"},
-                "reasoning_effort": "none",
-                "temperature": 0.2,
-                "max_completion_tokens": 300,
-            },
-            timeout=GROQ_REWRITE_TIMEOUT_SECONDS,
-        )
-    except requests.RequestException as exc:
-        raise RuntimeError(f"Groq phrase adaptation failed: {exc}") from exc
-    if response.status_code != 200:
-        raise RuntimeError(f"Groq phrase adaptation failed: {response.status_code} {response.text[:200]}")
-    data = response.json()
-    try:
-        text = data["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise RuntimeError("Groq phrase adaptation response had no message content") from exc
-    try:
-        payload = json.loads(_strip_reasoning_block(str(text)))
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("Groq phrase adaptation returned invalid JSON") from exc
-    return {
-        "source_rewrite": str(payload.get("source_rewrite") or "").strip(),
-    }
-
-
-def _translate_with_deepl(
-    api_key: str,
-    text: str,
-    source_language: str,
-    target_language: str,
-    context: str,
-    rewrite_context: dict[str, Any] | None = None,
-) -> str:
-    import requests
-
-    body: dict[str, Any] = {
-        "text": [text],
-        "source_lang": _deepl_language(source_language),
-        "target_lang": _deepl_language(target_language),
-        "model_type": "latency_optimized",
-    }
-    if context:
-        body["context"] = context[:4000]
-    formality = _deepl_formality(rewrite_context or {})
-    if formality:
-        body["formality"] = formality
-    glossary_id = os.environ.get("DEEPL_GLOSSARY_ID")
-    if glossary_id:
-        body["glossary_id"] = glossary_id
-    try:
-        response = requests.post(
-            _deepl_translate_url(api_key),
-            headers={"Authorization": f"DeepL-Auth-Key {api_key}", "Content-Type": "application/json"},
-            json=body,
-            timeout=DEEPL_TRANSLATE_TIMEOUT_SECONDS,
-        )
-    except requests.RequestException as exc:
-        raise RuntimeError(f"DeepL translation failed: {exc}") from exc
-    if response.status_code != 200:
-        raise RuntimeError(f"DeepL translation failed: {response.status_code} {response.text[:200]}")
-    data = response.json()
-    try:
-        translated = data["translations"][0]["text"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise RuntimeError("DeepL translation response had no translated text") from exc
-    return str(translated or "").strip()
-
-
-def _deepl_language(language: str) -> str:
-    mapping = {"en": "EN", "ja": "JA"}
-    return mapping.get(language.lower(), language.upper())
-
-
-def _deepl_translate_url(api_key: str) -> str:
-    configured = os.environ.get("DEEPL_API_URL")
-    if configured:
-        return configured
-    return DEEPL_PRO_TRANSLATE_URL
-
-
-def _deepl_formality(rewrite_context: dict[str, Any]) -> str:
-    configured = os.environ.get("DEEPL_FORMALITY")
-    if configured:
-        return configured
-    tone = rewrite_context.get("tone")
-    register = ""
-    audience = ""
-    explicit = ""
-    if isinstance(tone, dict):
-        explicit = str(tone.get("deepl_formality") or "").strip()
-        if explicit and explicit != "auto":
-            return explicit
-        register = str(tone.get("register") or "").strip()
-        audience = str(tone.get("audience") or "").strip().lower()
-    casual_registers = {"casual_intimate"}
-    if register in casual_registers and not any(marker in audience for marker in ("in-law", "older", "staff", "client", "customer")):
-        return "less"
-    return "more"
-
-
-def _deepl_context(rewrite_context: dict[str, Any], payload: dict[str, Any]) -> str:
-    parts: list[str] = []
-    draft_translation = str(payload.get("draft_translation") or "").strip()
-    if draft_translation:
-        parts.append(f"Previous Japanese draft: {draft_translation}")
-    tone = rewrite_context.get("tone")
-    if isinstance(tone, dict):
-        setting = str(tone.get("setting") or "").strip()
-        audience = str(tone.get("audience") or "").strip()
-        if setting:
-            parts.append(f"Setting: {setting}")
-        if audience:
-            parts.append(f"Audience: {audience}")
-    recent = rewrite_context.get("recent_dialogue")
-    if isinstance(recent, list):
-        for item in recent[-10:]:
-            if not isinstance(item, dict):
-                continue
-            english = str(item.get("english") or "").strip()
-            japanese = str(item.get("japanese") or "").strip()
-            if english or japanese:
-                parts.append(f"Previous turn: {english} / {japanese}".strip())
-    return "\n".join(parts)
-
-
-def payload_list(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [str(item).strip() for item in value if str(item).strip()]
-
-
-def _strip_reasoning_block(text: str) -> str:
-    stripped = text.strip()
-    if stripped.startswith("<think>") and "</think>" in stripped:
-        return stripped.split("</think>", 1)[1].strip()
-    return stripped
 
 
 @app.get("/sessions")

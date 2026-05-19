@@ -3,28 +3,20 @@
 from __future__ import annotations
 
 import asyncio
-import audioop
-import base64
 import json
 import os
 from typing import Any, Awaitable, Callable
 
 import websockets
 
+from .provider_streams import ProviderFanout
 from .sessions import DEFAULT_CONTEXT, build_phrases, make_session, process_soniox_tokens, summarize_finished_session
 
 
 SONIOX_WEBSOCKET_URL = "wss://stt-rt.soniox.com/transcribe-websocket"
-DEEPGRAM_WEBSOCKET_URL = (
-    "wss://api.deepgram.com/v1/listen"
-    "?model=nova-3&language=en&encoding=linear16&sample_rate=16000&channels=1"
-    "&interim_results=true&smart_format=true&endpointing=300"
-)
-OPENAI_TRANSLATION_WEBSOCKET_URL = "wss://api.openai.com/v1/realtime/translations?model=gpt-realtime-translate"
 SONIOX_MODEL = "stt-rt-v4"
 AUDIO_FORMAT = "pcm_s16le"
 SAMPLE_RATE = 16000
-OPENAI_TRANSLATION_SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
 
 SendEvent = Callable[[dict[str, Any]], Awaitable[None]]
@@ -142,18 +134,8 @@ async def run_transcription_bridge(
 
             stop_event = asyncio.Event()
             partial_tokens: list[dict[str, Any]] = []
-            provider_queues: list[asyncio.Queue[bytes | None]] = []
-            provider_tasks: list[asyncio.Task[None]] = []
-            deepgram_key = os.environ.get("DEEPGRAM_API_KEY")
-            openai_key = os.environ.get("OPENAI_API_KEY")
-            if deepgram_key:
-                deepgram_queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=80)
-                provider_queues.append(deepgram_queue)
-                provider_tasks.append(asyncio.create_task(run_deepgram_bridge(deepgram_key, deepgram_queue, safe_send_event)))
-            if openai_key:
-                openai_queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=80)
-                provider_queues.append(openai_queue)
-                provider_tasks.append(asyncio.create_task(run_openai_translation_bridge(openai_key, openai_queue, safe_send_event)))
+            providers = ProviderFanout(safe_send_event)
+            providers.start()
 
             async def browser_to_soniox() -> None:
                 while not stop_event.is_set():
@@ -171,17 +153,9 @@ async def run_transcription_bridge(
                     if payload:
                         session.add_audio_frame(payload)
                         await soniox.send(payload)
-                        for queue in provider_queues:
-                            try:
-                                queue.put_nowait(payload)
-                            except asyncio.QueueFull:
-                                pass
+                        providers.publish(payload)
                 stop_event.set()
-                for queue in provider_queues:
-                    try:
-                        queue.put_nowait(None)
-                    except asyncio.QueueFull:
-                        pass
+                providers.close_inputs()
                 try:
                     await soniox.send("")
                 except Exception:
@@ -224,8 +198,7 @@ async def run_transcription_bridge(
                 task.cancel()
             for task in done:
                 task.result()
-            for task in provider_tasks:
-                task.cancel()
+            providers.cancel()
 
     except Exception as exc:
         await safe_send_event({"type": "error", "message": str(exc)})
@@ -238,140 +211,6 @@ async def run_transcription_bridge(
             except OSError as exc:
                 await safe_send_event({"type": "error", "message": f"Failed to save session: {exc}"})
         await safe_send_event({"type": "status", "status": "stopped"})
-
-
-async def run_deepgram_bridge(
-    api_key: str,
-    audio_queue: asyncio.Queue[bytes | None],
-    send_event: SendEvent,
-) -> None:
-    try:
-        async with websockets.connect(
-            DEEPGRAM_WEBSOCKET_URL,
-            additional_headers={"Authorization": f"Token {api_key}"},
-            ping_interval=20,
-        ) as deepgram:
-            sender = asyncio.create_task(send_audio_queue(deepgram, audio_queue))
-
-            async for message in deepgram:
-                data = json.loads(message)
-                channel = data.get("channel") if isinstance(data, dict) else None
-                alternatives = channel.get("alternatives") if isinstance(channel, dict) else None
-                if not alternatives:
-                    continue
-                transcript = str(alternatives[0].get("transcript") or "").strip()
-                if transcript:
-                    await send_event({
-                        "type": "provider_update",
-                        "provider": "deepgram",
-                        "kind": "transcript",
-                        "text": transcript,
-                        "is_final": bool(data.get("is_final")),
-                    })
-                if sender.done():
-                    break
-    except Exception as exc:
-        await send_event({"type": "provider_update", "provider": "deepgram", "kind": "error", "text": str(exc), "is_final": True})
-
-
-async def run_openai_translation_bridge(
-    api_key: str,
-    audio_queue: asyncio.Queue[bytes | None],
-    send_event: SendEvent,
-) -> None:
-    try:
-        async with websockets.connect(
-            OPENAI_TRANSLATION_WEBSOCKET_URL,
-            additional_headers={"Authorization": f"Bearer {api_key}"},
-            ping_interval=20,
-        ) as openai:
-            await openai.send(json.dumps({
-                "type": "session.update",
-                "session": {
-                    "audio": {
-                        "input": {
-                            "transcription": {"model": "gpt-realtime-whisper"},
-                            "noise_reduction": {"type": "near_field"},
-                        },
-                        "output": {"language": "ja"},
-                    }
-                },
-            }))
-            sender = asyncio.create_task(send_openai_translation_audio(openai, audio_queue))
-            input_text = ""
-            output_text = ""
-            async for message in openai:
-                data = json.loads(message)
-                event_type = data.get("type")
-                if event_type == "session.input_transcript.delta":
-                    input_text += str(data.get("delta") or "")
-                    if input_text.strip():
-                        await send_event({
-                            "type": "provider_update",
-                            "provider": "openai_realtime",
-                            "kind": "transcript",
-                            "text": input_text.strip(),
-                            "is_final": False,
-                        })
-                elif event_type == "session.output_transcript.delta":
-                    output_text += str(data.get("delta") or "")
-                    if output_text.strip():
-                        await send_event({
-                            "type": "provider_update",
-                            "provider": "openai_realtime",
-                            "kind": "translation",
-                            "text": output_text.strip(),
-                            "is_final": False,
-                        })
-                elif event_type and event_type.endswith(".done"):
-                    if input_text.strip():
-                        await send_event({
-                            "type": "provider_update",
-                            "provider": "openai_realtime",
-                            "kind": "transcript",
-                            "text": input_text.strip(),
-                            "is_final": True,
-                        })
-                    if output_text.strip():
-                        await send_event({
-                            "type": "provider_update",
-                            "provider": "openai_realtime",
-                            "kind": "translation",
-                            "text": output_text.strip(),
-                            "is_final": True,
-                        })
-                elif event_type == "error":
-                    await send_event({
-                        "type": "provider_update",
-                        "provider": "openai_realtime",
-                        "kind": "error",
-                        "text": str(data.get("error") or data),
-                        "is_final": True,
-                    })
-                if sender.done():
-                    break
-    except Exception as exc:
-        await send_event({"type": "provider_update", "provider": "openai_realtime", "kind": "error", "text": str(exc), "is_final": True})
-
-
-async def send_audio_queue(socket: Any, audio_queue: asyncio.Queue[bytes | None]) -> None:
-    while True:
-        payload = await audio_queue.get()
-        if payload is None:
-            break
-        await socket.send(payload)
-
-
-async def send_openai_translation_audio(socket: Any, audio_queue: asyncio.Queue[bytes | None]) -> None:
-    while True:
-        payload = await audio_queue.get()
-        if payload is None:
-            break
-        resampled = audioop.ratecv(payload, 2, NUM_CHANNELS, SAMPLE_RATE, OPENAI_TRANSLATION_SAMPLE_RATE, None)[0]
-        await socket.send(json.dumps({
-            "type": "session.input_audio_buffer.append",
-            "audio": base64.b64encode(resampled).decode("ascii"),
-        }))
 
 
 def normalize_start_context(context: Any) -> str | dict[str, Any]:
