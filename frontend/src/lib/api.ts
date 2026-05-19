@@ -24,13 +24,48 @@ export type TranscriptEvent =
         name: string;
         source_languages: string[];
         target_language: string;
+        expected_speaker_count?: number | null;
+        expected_speaker_names?: string[];
         was_resumed: boolean;
         token_count: number;
       };
     }
   | { type: "transcript"; phrases: Phrase[]; final_token_count: number }
-  | { type: "saved"; path: string; phrases: Phrase[] }
+  | { type: "saved"; path: string; phrases: Phrase[]; token_count: number }
   | { type: "error"; message: string };
+
+export type RediarizeResult = {
+  session: string;
+  path: string;
+  speakers: string[];
+  speaker_count: number;
+  token_count: number;
+  phrases: Phrase[];
+};
+
+export type RetranslateResult = {
+  session: string;
+  path: string;
+  translation_count: number;
+  token_count: number;
+  phrases: Phrase[];
+};
+
+export type SpeakerReviewRow = {
+  speaker: number | string;
+  merge_into: number | string;
+  label?: string;
+};
+
+export type SpeakerReviewResult = {
+  session: string;
+  path: string;
+  speakers: string[];
+  speaker_count: number;
+  speaker_labels: Record<string, string>;
+  token_count: number;
+  phrases: Phrase[];
+};
 
 const DEFAULT_API_BASE_URL = "http://localhost:8000";
 
@@ -53,6 +88,44 @@ export async function fetchLanguages(): Promise<{
   const response = await fetch(`${apiBaseUrl()}/languages`, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`Could not load languages (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function rediarizeSession(sessionName: string): Promise<RediarizeResult> {
+  const response = await fetch(`${apiBaseUrl()}/sessions/${encodeURIComponent(sessionName)}/rediarize`, {
+    method: "POST"
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `Could not improve speakers (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function retranslateSession(sessionName: string): Promise<RetranslateResult> {
+  const response = await fetch(`${apiBaseUrl()}/sessions/${encodeURIComponent(sessionName)}/retranslate`, {
+    method: "POST"
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `Could not improve translations (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function saveSpeakerReview(
+  sessionName: string,
+  speakers: SpeakerReviewRow[]
+): Promise<SpeakerReviewResult> {
+  const response = await fetch(`${apiBaseUrl()}/sessions/${encodeURIComponent(sessionName)}/speakers`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ speakers })
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `Could not save speaker labels (${response.status})`);
   }
   return response.json();
 }

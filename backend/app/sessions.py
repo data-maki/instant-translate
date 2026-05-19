@@ -74,6 +74,7 @@ def process_soniox_tokens(
     final_tokens: list[dict[str, Any]] = []
     partial_tokens: list[dict[str, Any]] = []
 
+    session.record_translation_update(raw_tokens)
     for raw in raw_tokens:
         token = dict(raw)
         if not token.get("text"):

@@ -13,7 +13,7 @@ from .sessions import DEFAULT_CONTEXT, build_phrases, make_session, process_soni
 
 
 SONIOX_WEBSOCKET_URL = "wss://stt-rt.soniox.com/transcribe-websocket"
-SONIOX_MODEL = "stt-rt-v3"
+SONIOX_MODEL = "stt-rt-v4"
 AUDIO_FORMAT = "pcm_s16le"
 SAMPLE_RATE = 16000
 NUM_CHANNELS = 1
@@ -69,6 +69,9 @@ async def run_transcription_bridge(
         start_message.get("target_language") or "en",
     )
     context = (start_message.get("context") or DEFAULT_CONTEXT).strip()
+    session.context = context
+    session.expected_speaker_count = parse_expected_speaker_count(start_message.get("expected_speaker_count"))
+    session.expected_speaker_names = parse_expected_speaker_names(start_message.get("expected_speaker_names"))
 
     await send_event({
         "type": "session",
@@ -76,6 +79,8 @@ async def run_transcription_bridge(
             "name": session.name,
             "source_languages": session.source_languages,
             "target_language": session.target_language,
+            "expected_speaker_count": session.expected_speaker_count,
+            "expected_speaker_names": session.expected_speaker_names,
             "was_resumed": session.was_resumed,
             "token_count": len(session.final_tokens),
         },
@@ -155,11 +160,32 @@ async def run_transcription_bridge(
         if session.final_tokens:
             try:
                 path = session.save_segment()
-                await send_event({
-                    "type": "saved",
-                    "path": str(path),
-                    "phrases": build_phrases(session, []),
-                })
+                await send_event(saved_transcript_event(session, path))
             except OSError as exc:
                 await send_event({"type": "error", "message": f"Failed to save session: {exc}"})
         await send_event({"type": "status", "status": "stopped"})
+
+
+def saved_transcript_event(session, path) -> dict[str, Any]:
+    return {
+        "type": "saved",
+        "path": str(path),
+        "phrases": build_phrases(session, []),
+        "token_count": len(session.final_tokens),
+    }
+
+
+def parse_expected_speaker_count(value: Any) -> int | None:
+    if value in {None, ""}:
+        return None
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return None
+    return count if count > 0 else None
+
+
+def parse_expected_speaker_names(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(name).strip() for name in value if str(name).strip()]

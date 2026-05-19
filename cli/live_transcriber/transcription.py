@@ -33,7 +33,7 @@ def print_macos_mic_mode_advisory() -> None:
     )
 
 SONIOX_WEBSOCKET_URL = "wss://stt-rt.soniox.com/transcribe-websocket"
-SONIOX_MODEL = "stt-rt-v3"
+SONIOX_MODEL = "stt-rt-v4"
 AUDIO_FORMAT = "pcm_s16le"
 
 # Audio settings
@@ -218,8 +218,10 @@ class Transcriber:
                 # Parse tokens
                 final_tokens: list[dict] = []
                 non_final_tokens: list[dict] = []
-                
-                for token in res.get("tokens", []):
+
+                raw_tokens = res.get("tokens", [])
+                self.session.record_translation_update(raw_tokens)
+                for token in raw_tokens:
                     if token.get("text"):
                         # Resolve language using speaker history
                         resolved_lang = resolve_language(token, self.session)
@@ -330,4 +332,3 @@ class Transcriber:
         """Wait for transcription to complete."""
         if self._recv_thread:
             self._recv_thread.join()
-

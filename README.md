@@ -6,22 +6,32 @@ Cottonoha is a small "leaves of speech" translator. The main experience is a res
 
 ## Quick Start: Web App
 
-```bash
-cp .env.example .env  # then set SONIOX_API_KEY in .env
+Create local env first:
 
-# Backend
+```bash
+cp .env.example .env
+```
+
+Set `SONIOX_API_KEY` in `.env`. Set `OPENAI_API_KEY` too if you want the post-recording **Improve transcript** translation cleanup.
+
+Run the backend API in one terminal:
+
+```bash
 python3.12 -m venv venv
 source venv/bin/activate
 pip install -r backend/requirements.txt
-uvicorn app.main:app --app-dir backend --reload
+uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000 --reload
+```
 
-# Frontend, in another terminal
+Run the frontend in a second terminal:
+
+```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-Open `http://localhost:3000`.
+Open `http://localhost:3000`. The frontend talks to `http://localhost:8000` by default; override with `NEXT_PUBLIC_API_BASE_URL` only if you run the backend somewhere else.
 
 ## Web Usage
 
@@ -91,6 +101,12 @@ This tests your microphone directly and shows a live audio level meter. Common f
 ## Output
 
 Transcripts save to `output/<session>/` as JSON, TXT, and MP3/WAV when audio is available. Resume anytime with the same session name or change it for a new session.
+
+## Transcript Improvement
+
+After recording, the web app can run **Improve transcript**. This keeps the live Soniox realtime path simple, then applies a post-recording Soniox async speaker pass and an OpenAI translation revision pass to the saved transcript.
+
+The end-of-meeting speaker review panel lets you quickly filter by detected speaker, enter real names, merge extra clusters, and save `speaker_review.json`. The comparison notes that led to this path are in `docs/evaluation-decision-record.md`.
 
 ## Requirements
 

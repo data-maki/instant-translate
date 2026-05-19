@@ -1,4 +1,6 @@
 :root {
+  --font-geist-sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-geist-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   --background: #fbfaf6;
   --foreground: #1c211b;
   --muted: #6b7168;
@@ -308,6 +310,10 @@ textarea:focus {
   border-color: var(--line);
 }
 
+.fullWidthButton {
+  width: 100%;
+}
+
 .primaryButton:disabled,
 .secondaryButton:disabled {
   cursor: not-allowed;
@@ -376,6 +382,103 @@ textarea:focus {
   color: var(--muted);
   font-family: var(--font-geist-mono), monospace;
   font-size: 0.78rem;
+}
+
+.speakerReview {
+  display: grid;
+  gap: 10px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(243, 245, 238, 0.72);
+}
+
+.speakerReviewHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.speakerReviewHeader h3 {
+  margin: 0;
+  font-size: 0.98rem;
+}
+
+.speakerReviewActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.compactButton,
+.filterButton {
+  min-height: 36px;
+  border-radius: 8px;
+  padding: 0 12px;
+  font-size: 0.82rem;
+}
+
+.filterButton {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--foreground);
+  font-weight: 800;
+}
+
+.filterButton.active,
+.speakerRow.selected {
+  border-color: rgba(49, 95, 69, 0.44);
+  box-shadow: 0 0 0 3px rgba(49, 95, 69, 0.1);
+}
+
+.speakerRows {
+  display: grid;
+  gap: 8px;
+  max-height: 270px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.speakerRow {
+  display: grid;
+  grid-template-columns: minmax(132px, 0.9fr) minmax(140px, 1fr) minmax(130px, 0.85fr);
+  gap: 8px;
+  align-items: end;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.speakerJump {
+  display: grid;
+  gap: 3px;
+  min-height: 44px;
+  padding: 7px 9px;
+  border: 1px solid rgba(49, 95, 69, 0.18);
+  border-radius: 8px;
+  background: rgba(223, 233, 220, 0.55);
+  color: var(--foreground);
+  text-align: left;
+}
+
+.speakerJump strong {
+  overflow-wrap: anywhere;
+}
+
+.speakerJump span,
+.speakerSample {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.speakerSample {
+  grid-column: 1 / -1;
+  margin: -1px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .feed {
@@ -532,8 +635,18 @@ textarea:focus {
 
   .fieldRow,
   .actions,
-  .phraseLines {
+  .phraseLines,
+  .speakerRow {
     grid-template-columns: 1fr;
+  }
+
+  .speakerReviewHeader {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .speakerReviewActions {
+    justify-content: start;
   }
 
   .subhead {

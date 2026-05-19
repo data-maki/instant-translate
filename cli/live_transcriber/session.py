@@ -101,7 +101,11 @@ class Session:
         self.speaker_profiles: dict[int, SpeakerProfile] = {}
         self.final_tokens: list[dict] = []
         self.segment_count = 0
+        self.context: Optional[str] = None
+        self.expected_speaker_count: Optional[int] = None
+        self.expected_speaker_names: list[str] = []
         self.audio_frames: list[bytes] = []
+        self.translation_update_stats: dict = self._empty_translation_update_stats()
         self._was_resumed = False
         self._dirty = False
 
@@ -135,6 +139,16 @@ class Session:
                 if "source_languages" in state and "target_language" in state:
                     self.source_languages = state["source_languages"]
                     self.target_language = state["target_language"]
+                self.context = state.get("context")
+                self.expected_speaker_count = state.get("expected_speaker_count")
+                self.expected_speaker_names = [
+                    str(name).strip()
+                    for name in state.get("expected_speaker_names", [])
+                    if str(name).strip()
+                ]
+                self.translation_update_stats = self._normalize_translation_update_stats(
+                    state.get("translation_update_stats")
+                )
 
                 # Restore speaker profiles. Backfill A/B/C letters for
                 # legacy sessions that were saved before profiles carried one.
@@ -170,6 +184,10 @@ class Session:
             "updated": datetime.now().isoformat(),
             "source_languages": self.source_languages,
             "target_language": self.target_language,
+            "context": self.context,
+            "expected_speaker_count": self.expected_speaker_count,
+            "expected_speaker_names": self.expected_speaker_names,
+            "translation_update_stats": self.translation_update_stats,
             "segment_count": self.segment_count,
             "tokens": self.final_tokens,
             "speaker_profiles": {
@@ -226,6 +244,35 @@ class Session:
         """Add audio frame to buffer."""
         self.audio_frames.append(frame)
 
+    def record_translation_update(self, raw_tokens: list[dict]) -> None:
+        """Track how much translation churn Soniox emits before utterances finalize."""
+        if not raw_tokens:
+            return
+        stats = self.translation_update_stats
+        stats["responses"] += 1
+        by_direction = stats.setdefault("translation_token_events_by_direction", {})
+        for token in raw_tokens:
+            text = token.get("text")
+            if not text:
+                continue
+            stats["token_events"] += 1
+            status = token.get("translation_status")
+            is_final = bool(token.get("is_final"))
+            if status == "original":
+                key = "final_original_token_events" if is_final else "nonfinal_original_token_events"
+                stats[key] += 1
+            elif status == "translation":
+                stats["translation_token_events"] += 1
+                key = "final_translation_token_events" if is_final else "nonfinal_translation_token_events"
+                stats[key] += 1
+                source = token.get("source_language") or "unknown"
+                target = token.get("language") or "unknown"
+                direction = f"{source}->{target}"
+                by_direction[direction] = by_direction.get(direction, 0) + 1
+            elif is_final and str(text).strip() in {"<end>", "<END>"}:
+                stats["final_end_events"] += 1
+        self._dirty = True
+
     def add_token(self, token: dict) -> None:
         """Add a finalized token to the session."""
         self.final_tokens.append(token)
@@ -258,13 +305,16 @@ class Session:
                 "segment": self.segment_count,
                 "saved": datetime.now().isoformat(),
                 "tokens": self.final_tokens,
+                "expected_speaker_count": self.expected_speaker_count,
+                "expected_speaker_names": self.expected_speaker_names,
                 "speaker_profiles": {
                     sid: {
                         "label": profile.get_label(),
                         "language_counts": dict(profile.language_counts),
                     }
                     for sid, profile in self.speaker_profiles.items()
-                }
+                },
+                "translation_update_stats": self.translation_update_stats,
             }, f, ensure_ascii=False, indent=2)
 
         # 3. Snapshot plain text.
@@ -279,6 +329,37 @@ class Session:
             self._save_audio(base_name)
 
         return json_path
+
+    @staticmethod
+    def _empty_translation_update_stats() -> dict:
+        return {
+            "responses": 0,
+            "token_events": 0,
+            "translation_token_events": 0,
+            "final_translation_token_events": 0,
+            "nonfinal_translation_token_events": 0,
+            "final_original_token_events": 0,
+            "nonfinal_original_token_events": 0,
+            "final_end_events": 0,
+            "translation_token_events_by_direction": {},
+        }
+
+    @classmethod
+    def _normalize_translation_update_stats(cls, value: Optional[dict]) -> dict:
+        stats = cls._empty_translation_update_stats()
+        if not isinstance(value, dict):
+            return stats
+        for key in stats:
+            if key == "translation_token_events_by_direction":
+                if isinstance(value.get(key), dict):
+                    stats[key] = {
+                        str(direction): int(count)
+                        for direction, count in value[key].items()
+                        if isinstance(count, int)
+                    }
+            elif isinstance(value.get(key), int):
+                stats[key] = value[key]
+        return stats
     
     def _save_audio(self, base_name: str) -> str:
         """Save audio frames to WAV, then convert to MP3 if possible."""
@@ -392,4 +473,3 @@ def resolve_language(token: dict, session: Session) -> str:
     if last_lang is not None:
         return last_lang
     return "en"
-

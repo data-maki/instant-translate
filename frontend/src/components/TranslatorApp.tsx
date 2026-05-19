@@ -1,7 +1,17 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { fetchLanguages, Language, Phrase, TranscriptEvent, websocketUrl } from "@/lib/api";
+import {
+  fetchLanguages,
+  Language,
+  Phrase,
+  rediarizeSession,
+  retranslateSession,
+  saveSpeakerReview,
+  SpeakerReviewRow,
+  TranscriptEvent,
+  websocketUrl
+} from "@/lib/api";
 import { RecorderHandle, startPcmRecorder } from "@/lib/audio";
 
 type AppStatus =
@@ -17,12 +27,26 @@ type AppStatus =
 const DEFAULT_CONTEXT =
   "Natural bilingual conversation in Japan. Preserve nuance, casual tone, names, places, food, family context, and culturally specific references.";
 
+type SpeakerDraft = {
+  mergeInto: string;
+  label: string;
+};
+
+type SpeakerSummary = {
+  id: string;
+  label: string;
+  count: number;
+  sample: string;
+};
+
 export function TranslatorApp() {
   const [languages, setLanguages] = useState<Language[]>([]);
   const [sourceA, setSourceA] = useState("ja");
   const [sourceB, setSourceB] = useState("en");
   const [targetLanguage, setTargetLanguage] = useState("en");
   const [sessionName, setSessionName] = useState("");
+  const [expectedSpeakerCount, setExpectedSpeakerCount] = useState("");
+  const [expectedSpeakerNames, setExpectedSpeakerNames] = useState("");
   const [context, setContext] = useState(DEFAULT_CONTEXT);
   const [status, setStatus] = useState<AppStatus>("checking");
   const [error, setError] = useState("");
@@ -30,6 +54,15 @@ export function TranslatorApp() {
   const [tokenCount, setTokenCount] = useState(0);
   const [savedPath, setSavedPath] = useState("");
   const [activeSession, setActiveSession] = useState("");
+  const [rediarizeStatus, setRediarizeStatus] = useState("");
+  const [rediarizing, setRediarizing] = useState(false);
+  const [translationStatus, setTranslationStatus] = useState("");
+  const [translating, setTranslating] = useState(false);
+  const [improvingAll, setImprovingAll] = useState(false);
+  const [speakerDrafts, setSpeakerDrafts] = useState<Record<string, SpeakerDraft>>({});
+  const [selectedSpeaker, setSelectedSpeaker] = useState<string | null>(null);
+  const [reviewStatus, setReviewStatus] = useState("");
+  const [savingReview, setSavingReview] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
   const recorderRef = useRef<RecorderHandle | null>(null);
@@ -66,11 +99,23 @@ export function TranslatorApp() {
 
   const canStart = status === "idle" || status === "stopped" || status === "error";
   const isLive = status === "requesting microphone" || status === "connecting" || status === "listening";
+  const postProcessing = rediarizing || translating || improvingAll;
   const statusLabel = status === "requesting microphone" ? "mic access" : status;
+  const speakerNames = expectedSpeakerNames.split(",").map((name) => name.trim()).filter(Boolean);
+  const speakerSummaries = useMemo(() => summarizeSpeakers(phrases), [phrases]);
+  const displayedPhrases = selectedSpeaker
+    ? phrases.filter((phrase) => speakerKey(phrase.speaker) === selectedSpeaker)
+    : phrases;
 
   async function start() {
     setError("");
     setSavedPath("");
+    setActiveSession("");
+    setRediarizeStatus("");
+    setTranslationStatus("");
+    setReviewStatus("");
+    setSpeakerDrafts({});
+    setSelectedSpeaker(null);
     setPhrases([]);
     setTokenCount(0);
     setStatus("requesting microphone");
@@ -96,6 +141,8 @@ export function TranslatorApp() {
             session_name: sessionName,
             source_languages: [sourceA, sourceB],
             target_language: targetLanguage,
+            expected_speaker_count: expectedSpeakerCount ? Number(expectedSpeakerCount) : null,
+            expected_speaker_names: speakerNames,
             context
           })
         );
@@ -143,6 +190,7 @@ export function TranslatorApp() {
     if (message.type === "saved") {
       setSavedPath(message.path);
       setPhrases(message.phrases);
+      setTokenCount(message.token_count);
       return;
     }
     if (message.type === "error") {
@@ -163,6 +211,79 @@ export function TranslatorApp() {
       cleanup();
       setStatus("stopped");
     }, 350);
+  }
+
+  async function improveSpeakersAndTranslations() {
+    if (!activeSession) {
+      return;
+    }
+    setError("");
+    setImprovingAll(true);
+    setRediarizing(true);
+    setTranslating(false);
+    setRediarizeStatus("Improving speakers...");
+    setTranslationStatus("");
+    try {
+      const speakerResult = await rediarizeSession(activeSession);
+      setPhrases(speakerResult.phrases);
+      setTokenCount(speakerResult.token_count);
+      setSavedPath(speakerResult.path);
+      setRediarizeStatus(`Improved: ${speakerResult.speaker_count} speakers`);
+
+      setRediarizing(false);
+      setTranslating(true);
+      setTranslationStatus("Improving translations...");
+      const translationResult = await retranslateSession(activeSession);
+      setPhrases(translationResult.phrases);
+      setTokenCount(translationResult.token_count);
+      setSavedPath(translationResult.path);
+      setTranslationStatus(`Improved: ${translationResult.translation_count} translations`);
+      setReviewStatus("Ready for speaker review");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not improve transcript.");
+    } finally {
+      setRediarizing(false);
+      setTranslating(false);
+      setImprovingAll(false);
+    }
+  }
+
+  async function saveReview() {
+    if (!activeSession || speakerSummaries.length === 0) {
+      return;
+    }
+    setError("");
+    setSavingReview(true);
+    setReviewStatus("Saving speaker labels...");
+    try {
+      const rows: SpeakerReviewRow[] = speakerSummaries.map((speaker) => ({
+        speaker: speaker.id,
+        merge_into: speakerDrafts[speaker.id]?.mergeInto || speaker.id,
+        label: speakerDrafts[speaker.id]?.label.trim() || undefined
+      }));
+      const result = await saveSpeakerReview(activeSession, rows);
+      setPhrases(result.phrases);
+      setTokenCount(result.token_count);
+      setSavedPath(result.path);
+      setReviewStatus(`Saved ${result.speaker_count} speaker${result.speaker_count === 1 ? "" : "s"}`);
+      setSelectedSpeaker(null);
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not save speaker labels.");
+      setReviewStatus("");
+    } finally {
+      setSavingReview(false);
+    }
+  }
+
+  function updateSpeakerDraft(speakerId: string, patch: Partial<SpeakerDraft>) {
+    setSpeakerDrafts((current) => ({
+      ...current,
+      [speakerId]: {
+        mergeInto: current[speakerId]?.mergeInto || speakerId,
+        label: current[speakerId]?.label || "",
+        ...patch
+      }
+    }));
   }
 
   function cleanup() {
@@ -212,6 +333,29 @@ export function TranslatorApp() {
               />
             </label>
             <p className="hint">Blank creates a timestamped web session. Saved transcripts stay under output/.</p>
+          </div>
+
+          <div className="fieldGroup">
+            <label>
+              Expected speakers
+              <input
+                value={expectedSpeakerCount}
+                onChange={(event) => setExpectedSpeakerCount(event.target.value)}
+                placeholder="6"
+                inputMode="numeric"
+                disabled={isLive}
+              />
+            </label>
+            <label>
+              Speaker names
+              <input
+                value={expectedSpeakerNames}
+                onChange={(event) => setExpectedSpeakerNames(event.target.value)}
+                placeholder="Aiko, Jan, Maria"
+                disabled={isLive}
+              />
+            </label>
+            <p className="hint">Optional. Used later for fast label/merge review; it does not force Soniox to merge speakers.</p>
           </div>
 
           <div className="fieldGroup">
@@ -275,7 +419,18 @@ export function TranslatorApp() {
             <span>{sourceA.toUpperCase()} ↔ {sourceB.toUpperCase()} · focus {targetLanguage.toUpperCase()}</span>
             <span>Browser audio is converted to 16 kHz mono PCM before streaming.</span>
             {savedPath ? <span>Saved: {savedPath}</span> : null}
+            {rediarizeStatus ? <span>{rediarizeStatus}</span> : null}
+            {translationStatus ? <span>{translationStatus}</span> : null}
+            {reviewStatus ? <span>{reviewStatus}</span> : null}
           </div>
+
+          <button
+            className="primaryButton fullWidthButton"
+            onClick={improveSpeakersAndTranslations}
+            disabled={!activeSession || isLive || postProcessing}
+          >
+            {improvingAll ? "Improving transcript..." : "Improve transcript"}
+          </button>
 
           {error ? <div className="errorBox">{error}</div> : null}
         </aside>
@@ -288,6 +443,18 @@ export function TranslatorApp() {
             </div>
             <span className="tokenCount">{tokenCount} final tokens</span>
           </div>
+          {speakerSummaries.length > 0 ? (
+            <SpeakerReviewPanel
+              drafts={speakerDrafts}
+              expectedNames={speakerNames}
+              onSave={saveReview}
+              onSelect={setSelectedSpeaker}
+              onUpdate={updateSpeakerDraft}
+              saving={savingReview}
+              selectedSpeaker={selectedSpeaker}
+              speakers={speakerSummaries}
+            />
+          ) : null}
           <div className="feed" ref={feedRef}>
             {phrases.length === 0 ? (
               <div className="emptyState">
@@ -297,7 +464,7 @@ export function TranslatorApp() {
                 translation feed grows.
               </div>
             ) : (
-              phrases.map((phrase) => (
+              displayedPhrases.map((phrase) => (
                 <PhraseCard
                   key={phrase.id}
                   phrase={phrase}
@@ -325,6 +492,96 @@ function BrandMark({ compact = false }: { compact?: boolean }) {
         <circle className="markCotton" cx="33" cy="33" r="12" />
       </svg>
     </span>
+  );
+}
+
+function SpeakerReviewPanel({
+  drafts,
+  expectedNames,
+  onSave,
+  onSelect,
+  onUpdate,
+  saving,
+  selectedSpeaker,
+  speakers
+}: {
+  drafts: Record<string, SpeakerDraft>;
+  expectedNames: string[];
+  onSave: () => void;
+  onSelect: (speakerId: string | null) => void;
+  onUpdate: (speakerId: string, patch: Partial<SpeakerDraft>) => void;
+  saving: boolean;
+  selectedSpeaker: string | null;
+  speakers: SpeakerSummary[];
+}) {
+  const datalistId = "expected-speaker-names";
+
+  return (
+    <section className="speakerReview" aria-label="Speaker review">
+      <div className="speakerReviewHeader">
+        <div>
+          <p className="panelKicker">speaker review</p>
+          <h3>Label and merge</h3>
+        </div>
+        <div className="speakerReviewActions">
+          <button
+            className={`filterButton ${selectedSpeaker === null ? "active" : ""}`}
+            onClick={() => onSelect(null)}
+            type="button"
+          >
+            All
+          </button>
+          <button className="primaryButton compactButton" disabled={saving} onClick={onSave} type="button">
+            {saving ? "Saving..." : "Save speakers"}
+          </button>
+        </div>
+      </div>
+
+      {expectedNames.length > 0 ? (
+        <datalist id={datalistId}>
+          {expectedNames.map((name) => (
+            <option key={name} value={name} />
+          ))}
+        </datalist>
+      ) : null}
+
+      <div className="speakerRows">
+        {speakers.map((speaker) => {
+          const draft = drafts[speaker.id] || { mergeInto: speaker.id, label: "" };
+          return (
+            <div className={`speakerRow ${selectedSpeaker === speaker.id ? "selected" : ""}`} key={speaker.id}>
+              <button className="speakerJump" onClick={() => onSelect(speaker.id)} type="button">
+                <strong>{draft.label.trim() || speaker.label}</strong>
+                <span>{speaker.count} turn{speaker.count === 1 ? "" : "s"}</span>
+              </button>
+              <label>
+                Name
+                <input
+                  list={expectedNames.length > 0 ? datalistId : undefined}
+                  onChange={(event) => onUpdate(speaker.id, { label: event.target.value })}
+                  placeholder={speaker.label}
+                  value={draft.label}
+                />
+              </label>
+              <label>
+                Merge into
+                <select
+                  onChange={(event) => onUpdate(speaker.id, { mergeInto: event.target.value })}
+                  value={draft.mergeInto}
+                >
+                  {speakers.map((target) => (
+                    <option key={target.id} value={target.id}>
+                      {drafts[target.id]?.label.trim() || target.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <p className="speakerSample">{speaker.sample}</p>
+            </div>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -361,4 +618,41 @@ function PhraseCard({
       </div>
     </article>
   );
+}
+
+function summarizeSpeakers(phrases: Phrase[]): SpeakerSummary[] {
+  const summaries = new Map<string, SpeakerSummary>();
+  for (const phrase of phrases) {
+    const id = speakerKey(phrase.speaker);
+    if (!id) {
+      continue;
+    }
+    const existing = summaries.get(id);
+    if (existing) {
+      existing.count += 1;
+      if (!existing.sample) {
+        existing.sample = phraseSnippet(phrase);
+      }
+    } else {
+      summaries.set(id, {
+        id,
+        label: phrase.speaker_label || `Speaker ${id}`,
+        count: 1,
+        sample: phraseSnippet(phrase)
+      });
+    }
+  }
+  return Array.from(summaries.values()).sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function speakerKey(speaker: number | string | null): string {
+  if (speaker === null || speaker === undefined) {
+    return "";
+  }
+  return String(speaker);
+}
+
+function phraseSnippet(phrase: Phrase): string {
+  const text = Object.values(phrase.texts).find((value) => value.trim());
+  return text ? text.trim().slice(0, 120) : "";
 }
