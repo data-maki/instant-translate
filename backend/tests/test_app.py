@@ -10,7 +10,7 @@ from app import main as app_main
 from app.languages import validate_language_pair
 from app.main import app
 from app.soniox import get_soniox_config, normalize_start_context
-from app.sessions import build_phrases, make_session, process_soniox_tokens
+from app.sessions import build_phrases, list_sessions, make_session, process_soniox_tokens
 
 
 def test_health_and_language_defaults():
@@ -372,6 +372,26 @@ def test_session_state_persists_context_and_speaker_plan(tmp_path, monkeypatch):
     resumed = make_session("speaker plan", ["ja", "en"], "en")
     assert resumed.expected_speaker_count == 6
     assert resumed.expected_speaker_names == ["Akiko", "John"]
+
+
+def test_list_sessions_sorts_by_updated_newest_first(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.shared.REPO_ROOT", tmp_path)
+    output = tmp_path / "output"
+    output.mkdir()
+    for name, updated in [
+        ("old", "2026-05-12T10:00:00"),
+        ("new", "2026-05-18T10:00:00"),
+        ("middle", "2026-05-15T10:00:00"),
+    ]:
+        session_dir = output / name
+        session_dir.mkdir()
+        (session_dir / "session_state.json").write_text(
+            json.dumps({"updated": updated, "tokens": [], "source_languages": ["en", "ja"], "target_language": "en"}),
+            encoding="utf-8",
+        )
+    (output / "legacy-without-state").mkdir()
+
+    assert [session["name"] for session in list_sessions()] == ["new", "middle", "old"]
 
 
 def test_translation_update_stats_are_persisted(tmp_path, monkeypatch):

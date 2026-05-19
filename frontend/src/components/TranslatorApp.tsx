@@ -37,7 +37,7 @@ type AppStatus =
   | "stopped"
   | "error";
 
-const DEFAULT_AUDIENCE_PRESET = "older-stranger";
+const DEFAULT_AUDIENCE_PRESET = "polite-stranger";
 const REGISTER_BLOCK_START = "[Japanese register preset]";
 const REGISTER_BLOCK_END = "[/Japanese register preset]";
 
@@ -46,13 +46,7 @@ type HiddenRegister =
   | "polite_neutral"
   | "polite_neutral_soft"
   | "polite_professional"
-  | "upward_polite_professional"
-  | "downward_polite_clear"
-  | "external_formal_business"
-  | "polished_professional"
-  | "public_institution_polite"
-  | "host_guest_respect"
-  | "uchi_soto_business";
+  | "public_institution_polite";
 
 type SessionIntent = "restaurant" | "train" | "family" | "shopping" | "doctor" | "custom";
 type DeepLFormality = "auto" | "more" | "less" | "default";
@@ -68,184 +62,62 @@ const AUDIENCE_PRESETS: {
   behavior: string;
 }[] = [
   {
-    id: "tourism-staff",
+    id: "service-staff",
     emoji: "🛍️",
-    label: "Shops & hotels",
+    label: "Staff & services",
     intent: "shopping",
     deeplFormality: "more",
     tone: "Polite customer Japanese",
     register: "polite_neutral",
     behavior:
-      "Speak as a customer: polite, simple requests with desu/masu. No need to mirror service keigo; keep it practical for shops, restaurants, hotels, and travel."
+      "Speak as a customer or traveler talking to staff. Use clear desu/masu requests; keep it practical for shops, restaurants, hotels, stations, taxis, and travel counters."
   },
   {
-    id: "restaurant-staff",
-    emoji: "🍜",
-    label: "Restaurant staff",
-    intent: "restaurant",
-    deeplFormality: "more",
-    tone: "Polite customer Japanese",
-    register: "polite_neutral",
-    behavior:
-      "Speak as a restaurant customer: polite, clear, and practical. Use simple desu/masu requests and make allergies or payment requests explicit."
-  },
-  {
-    id: "station-staff",
-    emoji: "🚉",
-    label: "Station staff",
-    intent: "train",
-    deeplFormality: "more",
-    tone: "Polite practical Japanese",
-    register: "polite_neutral",
-    behavior:
-      "Speak as a traveler asking station or transport staff for help. Use short polite requests and favor clear words for route, platform, ticket gate, and last train."
-  },
-  {
-    id: "stranger",
+    id: "polite-stranger",
     emoji: "👋",
-    label: "New person",
-    intent: "custom",
-    deeplFormality: "more",
-    tone: "Safe polite Japanese",
-    register: "polite_neutral",
-    behavior:
-      "Use safe spoken desu/masu. Avoid plain-form directness, imperatives, and anata. Use simple polite requests like shite moraemasu ka or dekimasu ka."
-  },
-  {
-    id: "older-stranger",
-    emoji: "👵",
-    label: "Older stranger",
+    label: "Strangers & elders",
     intent: "custom",
     deeplFormality: "more",
     tone: "Soft polite Japanese",
     register: "polite_neutral_soft",
     behavior:
-      "Use desu/masu with extra softness. Prefer cushions like sumimasen, yoroshikereba, and shite itadakemasu ka. Avoid heavy ceremonial keigo unless the situation becomes formal."
+      "Use safe spoken desu/masu with extra softness. Prefer cushions like sumimasen, yoroshikereba, and shite itadakemasu ka. Avoid plain-form directness, imperatives, and anata."
   },
   {
-    id: "host-guest",
-    emoji: "🏠",
-    label: "Host or guest",
-    intent: "family",
-    deeplFormality: "more",
-    tone: "Warm respectful Japanese",
-    register: "host_guest_respect",
-    behavior:
-      "Use hospitality-oriented formulas. If hosting, elevate the guest and show care/gratitude. If visiting, sound appreciative and humble."
-  },
-  {
-    id: "public-institution",
-    emoji: "🏛️",
-    label: "Police & gov",
-    intent: "doctor",
-    deeplFormality: "more",
-    tone: "Precise polite Japanese",
-    register: "public_institution_polite",
-    behavior:
-      "Use polite, precise, complete phrases. Avoid casual vagueness. Good for immigration, banks, hospitals, police, and public counters."
-  },
-  {
-    id: "close-friend",
+    id: "close-people",
     emoji: "😊",
-    label: "Close friend",
-    intent: "custom",
-    deeplFormality: "less",
-    tone: "Friendly plain Japanese",
-    register: "casual_intimate",
-    behavior:
-      "Use friendly plain form, natural contractions, and light teasing only when the source supports it. Keep it direct and relaxed. Avoid desu/masu, sama, and heavy keigo unless intentionally joking or formal."
-  },
-  {
-    id: "spouse-partner",
-    emoji: "💍",
-    label: "Spouse / partner",
+    label: "Friends & family",
     intent: "family",
     deeplFormality: "less",
-    tone: "Warm intimate Japanese",
+    tone: "Warm casual Japanese",
     register: "casual_intimate",
     behavior:
-      "Use intimate, warm plain form. Sound close and caring rather than buddy-like or customer-service polite. Prefer soft directness, affectionate nuance, and natural household phrasing."
+      "Use warm natural speech for close people. Plain form is normal, but keep the wording kind and not blunt. Add polite softness only when the note or relationship implies distance."
   },
   {
-    id: "family",
-    emoji: "👪",
-    label: "Family / in-laws",
-    intent: "family",
-    deeplFormality: "more",
-    tone: "Warm family Japanese",
-    register: "casual_intimate",
-    behavior:
-      "Use warm family speech. Plain form is natural for close family; add polite softness for in-laws, elders, or family members who are not very close."
-  },
-  {
-    id: "coworker",
+    id: "work-school",
     emoji: "💼",
-    label: "Coworker",
+    label: "Work & school",
     intent: "custom",
     deeplFormality: "more",
     tone: "Professional spoken Japanese",
     register: "polite_professional",
     behavior:
-      "Use professional spoken Japanese, not full keigo. Prefer onegai dekimasu ka, kakunin shite moraemasu ka, and concise work phrasing."
+      "Use professional spoken Japanese, not email-like over-keigo. Prefer concise desu/masu, onegai dekimasu ka, kakunin shite moraemasu ka, and clear work or classroom phrasing."
   },
   {
-    id: "boss-professor",
-    emoji: "🎓",
-    label: "Boss / teacher",
-    intent: "custom",
+    id: "official-care",
+    emoji: "🏛️",
+    label: "Official & care",
+    intent: "doctor",
     deeplFormality: "more",
-    tone: "Respectful professional Japanese",
-    register: "upward_polite_professional",
+    tone: "Precise polite Japanese",
+    register: "public_institution_polite",
     behavior:
-      "Use desu/masu plus respectful request forms such as go-kakunin itadakemasu ka. Avoid overlong keigo chains; voice should be respectful but still speakable."
-  },
-  {
-    id: "employee-student",
-    emoji: "🧭",
-    label: "Employee / student",
-    intent: "custom",
-    deeplFormality: "more",
-    tone: "Clear respectful Japanese",
-    register: "downward_polite_clear",
-    behavior:
-      "Use clear, respectful instructions without being deferential. Prefer shite kudasai, onegai shimasu, or shite moraemasu ka. Avoid barking or overly humble forms."
-  },
-  {
-    id: "client-customer",
-    emoji: "🤝",
-    label: "Client / customer",
-    intent: "custom",
-    deeplFormality: "more",
-    tone: "Formal business Japanese",
-    register: "external_formal_business",
-    behavior:
-      "Use respectful language for the listener and humble framing for self/company. Prefer osoreirimasu ga and itadakemasu ka. Voice should be formal but less ornate than email."
-  },
-  {
-    id: "investor-partner",
-    emoji: "📈",
-    label: "Investor / partner",
-    intent: "custom",
-    deeplFormality: "more",
-    tone: "Polished professional Japanese",
-    register: "polished_professional",
-    behavior:
-      "Use polished, concise professional Japanese. Be respectful and competent, not servile. Prefer go-iken o itadakemasu ka and clear business phrasing."
-  },
-  {
-    id: "other-company",
-    emoji: "🏢",
-    label: "External company",
-    intent: "custom",
-    deeplFormality: "more",
-    tone: "Uchi/soto business Japanese",
-    register: "uchi_soto_business",
-    behavior:
-      "Apply uchi/soto for external business. Humble your own company/team, elevate their side, use heisha/onsha, avoid san for your own boss, and use sama for people on their side."
+      "Use polite, precise, complete phrases. Avoid casual vagueness. Good for hospitals, pharmacies, immigration, police, banks, city offices, and formal counters."
   }
 ];
 
-const PRIMARY_AUDIENCE_PRESET_COUNT = 5;
 const SPEAKER_COUNT_OPTIONS = ["2", "3", "4", "5", "6"];
 const NOTE_EXAMPLES = [
   "Reservation is under Ana",
@@ -351,11 +223,12 @@ export function TranslatorApp({
   initialTargetLanguage = "en"
 }: TranslatorAppProps) {
   const [languages] = useState<Language[]>(initialLanguages);
-  const [sourceALanguages, setSourceALanguages] = useState(initialSourceLanguages);
+  const [sourceALanguages, setSourceALanguages] = useState(() =>
+    normalizeSourceLanguagesForTarget(initialSourceLanguages, initialTargetLanguage)
+  );
   const [sourceB, setSourceB] = useState(initialTargetLanguage);
   const [expectedSpeakerCount, setExpectedSpeakerCount] = useState("2");
   const [audiencePreset, setAudiencePreset] = useState(DEFAULT_AUDIENCE_PRESET);
-  const [audienceExpanded, setAudienceExpanded] = useState(false);
   const [deeplFormality, setDeepLFormality] = useState<DeepLFormality>(() => {
     if (typeof window === "undefined") return "auto";
     const saved = window.localStorage.getItem(DEEPL_FORMALITY_STORAGE_KEY);
@@ -410,7 +283,7 @@ export function TranslatorApp({
   const postProcessing = rediarizing || translating || improvingAll;
   const statusLabel = status === "requesting microphone" ? "mic access" : status;
   const hasLanguagePair = sourceALanguages.length > 0 && !sourceALanguages.includes(sourceB);
-  const hasSessionStatus = Boolean(activeSession || savedPath || rediarizeStatus || translationStatus || reviewStatus);
+  const showOnboarding = !isLive && phrases.length === 0 && !activeSession;
 
   const languageMap = useMemo(() => {
     return new Map(languages.map((language) => [language.code, language]));
@@ -1053,7 +926,7 @@ export function TranslatorApp({
           total={sessions.length}
         />
 
-        <section className={`transcriptPanel ${phrases.length === 0 ? "setupMode" : ""}`} aria-label="Live transcript">
+        <section className={`transcriptPanel ${showOnboarding ? "setupMode" : ""}`} aria-label="Live transcript">
           <div className="transcriptHeader">
             <div>
               <p className="panelKicker">conversation</p>
@@ -1072,96 +945,47 @@ export function TranslatorApp({
               targetLanguage={sourceB}
             />
           </div>
-          <section className="startPanel" aria-label="Start conversation">
-            <div className="startPanelHeader">
-              <div>
-                <p className="panelKicker">new conversation</p>
-                <h3>{activeSessionTitle || "Start a session"}</h3>
-              </div>
-            </div>
-
-            <div className="quickStartFields">
-              <AudiencePicker
-                disabled={isLive}
-                expanded={audienceExpanded}
-                onChange={changeAudiencePreset}
-                onToggleExpanded={() => setAudienceExpanded((current) => !current)}
-                value={audiencePreset}
-              />
-              <SpeakerCountPicker
-                disabled={isLive}
-                onChange={setExpectedSpeakerCount}
-                value={expectedSpeakerCount}
-              />
-              <div className="gpsField">
-                <button className="secondaryButton" onClick={injectCurrentLocation} disabled={isLive} type="button">
-                  Use current location
-                </button>
-                {geoStatus ? <span className="hint">{geoStatus}</span> : null}
-              </div>
-            </div>
-            <ToneSummary deeplFormality={deeplFormality} preset={selectedPreset} />
-            <ProfileSummary profile={travelerProfile} />
-            <div className="startPanelFooter">
-              {hasFinishedSession ? (
-                <button className="secondaryButton" onClick={improveSpeakersAndTranslations} disabled={postProcessing}>
-                  {improvingAll ? "Improving transcript..." : "Improve transcript"}
-                </button>
-              ) : null}
-              {isLive ? (
-                <button className="secondaryButton" onClick={stop}>
-                  Stop
-                </button>
-              ) : (
-                <button className="primaryButton" onClick={start} disabled={!canStart || !hasLanguagePair}>
-                  Start session
-                </button>
-              )}
-            </div>
-            <details className="advancedSetup">
-              <summary>Tone override and optional note</summary>
-              <div className="startFields">
-                <DeepLFormalityPicker disabled={isLive} onChange={changeDeepLFormality} value={deeplFormality} />
-              </div>
-              <div className="startFields contextFields">
-                <label className="contextField">
-                  Useful detail for this conversation
-                  <textarea
-                    value={context}
-                    onChange={(event) => setContext(event.target.value)}
-                    disabled={isLive}
-                    placeholder="Only add something special, like a reservation name, a thing you are buying, a medical concern, or a phrase you want to say gently."
-                  />
-                </label>
-                <div className="contextExampleRow" aria-label="Context examples">
-                  {NOTE_EXAMPLES.map((example) => (
-                    <button
-                      className="contextExampleButton"
-                      disabled={isLive}
-                      key={example}
-                      onClick={() => appendContextExample(example)}
-                      type="button"
-                    >
-                      {example}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </details>
-            
-
-            {hasSessionStatus ? (
-              <div className="statusBox inlineStatus">
-                {activeSessionTitle ? <strong>{activeSessionTitle}</strong> : null}
-                {savedPath ? <span>Saved: {savedPath}</span> : null}
-                {rediarizeStatus ? <span>{rediarizeStatus}</span> : null}
-                {translationStatus ? <span>{translationStatus}</span> : null}
-                {reviewStatus ? <span>{reviewStatus}</span> : null}
-              </div>
-            ) : null}
-
-            {error ? <div className="errorBox">{error}</div> : null}
-          </section>
+          {showOnboarding ? (
+            <ConversationOnboarding
+              audiencePreset={audiencePreset}
+              canStart={canStart && hasLanguagePair}
+              context={context}
+              deeplFormality={deeplFormality}
+              disabled={isLive}
+              error={error}
+              expectedSpeakerCount={expectedSpeakerCount}
+              geoStatus={geoStatus}
+              onAudienceChange={changeAudiencePreset}
+              onContextChange={setContext}
+              onContextExample={appendContextExample}
+              onDeepLFormalityChange={changeDeepLFormality}
+              onLocation={injectCurrentLocation}
+              onSpeakerCountChange={setExpectedSpeakerCount}
+              onStart={start}
+              preset={selectedPreset}
+              title={activeSessionTitle || "Live transcript"}
+            />
+          ) : error ? (
+            <div className="errorBox">{error}</div>
+          ) : null}
+          {isLive ? (
+            <LiveSessionBar
+              title={activeSessionTitle || "New chat"}
+              status={statusLabel}
+              onStop={stop}
+            />
+          ) : null}
+          {!isLive && hasFinishedSession ? (
+            <FinishedSessionBar
+              improving={postProcessing}
+              onImprove={improveSpeakersAndTranslations}
+              rediarizeStatus={rediarizeStatus}
+              reviewStatus={reviewStatus}
+              savedPath={savedPath}
+              title={activeSessionTitle || "Saved chat"}
+              translationStatus={translationStatus}
+            />
+          ) : null}
           {speakerSummaries.length > 0 ? (
             <SpeakerReviewPanel
               drafts={speakerDrafts}
@@ -1192,6 +1016,151 @@ export function TranslatorApp({
         </section>
       </section>
     </main>
+  );
+}
+
+function ConversationOnboarding({
+  audiencePreset,
+  canStart,
+  context,
+  deeplFormality,
+  disabled,
+  error,
+  expectedSpeakerCount,
+  geoStatus,
+  onAudienceChange,
+  onContextChange,
+  onContextExample,
+  onDeepLFormalityChange,
+  onLocation,
+  onSpeakerCountChange,
+  onStart,
+  preset,
+  title
+}: {
+  audiencePreset: string;
+  canStart: boolean;
+  context: string;
+  deeplFormality: DeepLFormality;
+  disabled: boolean;
+  error: string;
+  expectedSpeakerCount: string;
+  geoStatus: string;
+  onAudienceChange: (presetId: string) => void;
+  onContextChange: (value: string) => void;
+  onContextExample: (example: string) => void;
+  onDeepLFormalityChange: (value: DeepLFormality) => void;
+  onLocation: () => void;
+  onSpeakerCountChange: (count: string) => void;
+  onStart: () => void;
+  preset: typeof AUDIENCE_PRESETS[number];
+  title: string;
+}) {
+  return (
+    <section className="startPanel" aria-label="Start conversation">
+      <div className="startPanelHeader">
+        <div>
+          <p className="panelKicker">new conversation</p>
+          <h3>{title}</h3>
+        </div>
+      </div>
+
+      <div className="quickStartFields">
+        <AudiencePicker disabled={disabled} onChange={onAudienceChange} value={audiencePreset} />
+        <SpeakerCountPicker disabled={disabled} onChange={onSpeakerCountChange} value={expectedSpeakerCount} />
+        <div className="gpsField">
+          <button className="secondaryButton" onClick={onLocation} disabled={disabled} type="button">
+            Use current location
+          </button>
+          {geoStatus ? <span className="hint">{geoStatus}</span> : null}
+        </div>
+      </div>
+
+      <ToneSummary deeplFormality={deeplFormality} preset={preset} />
+      <details className="advancedSetup">
+        <summary>Tone override and optional note</summary>
+        <div className="startFields">
+          <DeepLFormalityPicker disabled={disabled} onChange={onDeepLFormalityChange} value={deeplFormality} />
+        </div>
+        <div className="startFields contextFields">
+          <label className="contextField">
+            Useful detail for this conversation
+            <textarea
+              value={context}
+              onChange={(event) => onContextChange(event.target.value)}
+              disabled={disabled}
+              placeholder="Only add something special, like a reservation name, a thing you are buying, a medical concern, or a phrase you want to say gently."
+            />
+          </label>
+          <div className="contextExampleRow" aria-label="Context examples">
+            {NOTE_EXAMPLES.map((example) => (
+              <button
+                className="contextExampleButton"
+                disabled={disabled}
+                key={example}
+                onClick={() => onContextExample(example)}
+                type="button"
+              >
+                {example}
+              </button>
+            ))}
+          </div>
+        </div>
+      </details>
+
+      <div className="startPanelFooter">
+        <button className="primaryButton" onClick={onStart} disabled={!canStart} type="button">
+          Start session
+        </button>
+      </div>
+      {error ? <div className="errorBox">{error}</div> : null}
+    </section>
+  );
+}
+
+function LiveSessionBar({ onStop, status, title }: { onStop: () => void; status: string; title: string }) {
+  return (
+    <section className="liveSessionBar" aria-label="Live session controls">
+      <div>
+        <p className="panelKicker">live</p>
+        <strong>{title}</strong>
+      </div>
+      <span>{status}</span>
+      <button className="secondaryButton compactButton" onClick={onStop} type="button">
+        Stop
+      </button>
+    </section>
+  );
+}
+
+function FinishedSessionBar({
+  improving,
+  onImprove,
+  rediarizeStatus,
+  reviewStatus,
+  savedPath,
+  title,
+  translationStatus
+}: {
+  improving: boolean;
+  onImprove: () => void;
+  rediarizeStatus: string;
+  reviewStatus: string;
+  savedPath: string;
+  title: string;
+  translationStatus: string;
+}) {
+  return (
+    <section className="liveSessionBar savedSessionBar" aria-label="Saved session controls">
+      <div>
+        <p className="panelKicker">saved</p>
+        <strong>{title}</strong>
+      </div>
+      <span>{reviewStatus || translationStatus || rediarizeStatus || savedPath}</span>
+      <button className="secondaryButton compactButton" disabled={improving} onClick={onImprove} type="button">
+        {improving ? "Improving..." : "Improve"}
+      </button>
+    </section>
   );
 }
 
@@ -1348,27 +1317,6 @@ function LanguagePicker({
   );
 }
 
-function ProfileSummary({ profile }: { profile: TravelerProfile }) {
-  const signals = [
-    profileWesternFullName(profile) ? "name" : "",
-    profile.age ? "age" : "",
-    profile.hotel ? "hotel" : "",
-    profile.travel_party ? "party" : "",
-    profile.allergies ? "diet" : "",
-    profile.spice_level ? "spice" : "",
-    profile.mobility ? "mobility" : ""
-  ].filter(Boolean);
-  return (
-    <section className="profileSummary" aria-label="Traveler profile">
-      <div>
-        <p className="panelKicker">profile</p>
-        <strong>{signals.length ? `${signals.length} reusable preference${signals.length === 1 ? "" : "s"} loaded` : "No reusable preferences yet"}</strong>
-      </div>
-      <Link className="filterButton profileLink" href="/profile">Edit profile</Link>
-    </section>
-  );
-}
-
 function ToneSummary({ deeplFormality, preset }: { deeplFormality: DeepLFormality; preset: typeof AUDIENCE_PRESETS[number] }) {
   const effective = effectiveDeepLFormality(deeplFormality, preset);
   return (
@@ -1414,25 +1362,18 @@ function SpeakerCountPicker({
 
 function AudiencePicker({
   disabled,
-  expanded,
   onChange,
-  onToggleExpanded,
   value
 }: {
   disabled: boolean;
-  expanded: boolean;
   onChange: (presetId: string) => void;
-  onToggleExpanded: () => void;
   value: string;
 }) {
-  const primary = AUDIENCE_PRESETS.slice(0, PRIMARY_AUDIENCE_PRESET_COUNT);
-  const secondary = AUDIENCE_PRESETS.slice(PRIMARY_AUDIENCE_PRESET_COUNT);
-
   return (
     <fieldset className="audiencePicker">
       <legend>Who are you speaking to?</legend>
       <div className="audienceOptions">
-        {primary.map((preset) => (
+        {AUDIENCE_PRESETS.map((preset) => (
           <label className="audienceOption" key={preset.id}>
             <input
               checked={value === preset.id}
@@ -1448,28 +1389,6 @@ function AudiencePicker({
           </label>
         ))}
       </div>
-      {expanded ? (
-        <div className="audienceOptions secondary">
-          {secondary.map((preset) => (
-            <label className="audienceOption" key={preset.id}>
-              <input
-                checked={value === preset.id}
-                disabled={disabled}
-                name="audience-preset"
-                onChange={() => onChange(preset.id)}
-                type="radio"
-              />
-              <span className="audienceEmoji" aria-hidden="true">
-                {preset.emoji}
-              </span>
-              <span className="audienceName">{preset.label}</span>
-            </label>
-          ))}
-        </div>
-      ) : null}
-      <button className="filterButton audienceMore" onClick={onToggleExpanded} type="button">
-        {expanded ? "Show common only" : "More situations"}
-      </button>
     </fieldset>
   );
 }
@@ -2052,6 +1971,14 @@ function formalityLabel(value: Exclude<DeepLFormality, "auto">): string {
   return "default";
 }
 
+function normalizeSourceLanguagesForTarget(sourceLanguages: string[], targetLanguage: string): string[] {
+  const sources = Array.from(new Set(sourceLanguages.filter((code) => code && code !== targetLanguage)));
+  if (sources.length > 0) {
+    return sources;
+  }
+  return [targetLanguage === "en" ? "ja" : "en"];
+}
+
 function inferPoiType(intent: SessionIntent): string {
   if (intent === "restaurant") return "restaurant";
   if (intent === "train") return "train station";
@@ -2100,7 +2027,7 @@ function groupSessions(sessions: SessionSummary[]): SessionGroup[] {
   todayStart.setHours(0, 0, 0, 0);
   const groups = new Map<string, SessionSummary[]>();
 
-  for (const session of sessions) {
+  for (const session of [...sessions].sort((a, b) => sessionUpdatedMs(b) - sessionUpdatedMs(a))) {
     const updated = session.updated ? new Date(session.updated).getTime() : 0;
     const label = updated >= todayStart.getTime()
       ? "Today"
@@ -2113,6 +2040,14 @@ function groupSessions(sessions: SessionSummary[]): SessionGroup[] {
   return ["Today", "Last week", "Older"]
     .map((label) => ({ label, sessions: groups.get(label) || [] }))
     .filter((group) => group.sessions.length > 0);
+}
+
+function sessionUpdatedMs(session: SessionSummary): number {
+  if (!session.updated) {
+    return 0;
+  }
+  const updated = new Date(session.updated).getTime();
+  return Number.isFinite(updated) ? updated : 0;
 }
 
 function limitSessionGroups(groups: SessionGroup[], limit: number): SessionGroup[] {

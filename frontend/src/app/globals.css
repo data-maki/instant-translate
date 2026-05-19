@@ -1121,6 +1121,33 @@ textarea:focus {
   font-size: 0.78rem;
 }
 
+.liveSessionBar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(243, 245, 238, 0.74);
+}
+
+.liveSessionBar strong,
+.liveSessionBar span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.liveSessionBar span {
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 780;
+}
+
+.savedSessionBar {
+  background: rgba(255, 255, 255, 0.68);
+}
+
 .speakerReview {
   display: grid;
   gap: 10px;
@@ -1467,6 +1494,15 @@ textarea:focus {
   .startPanelFooter .primaryButton,
   .startPanelFooter .secondaryButton {
     width: 100%;
+  }
+
+  .liveSessionBar {
+    grid-template-columns: minmax(0, 1fr) auto;
+    padding: 9px 14px;
+  }
+
+  .liveSessionBar span {
+    display: none;
   }
 }
 
