@@ -443,12 +443,21 @@ textarea:focus {
 .languageMenu {
   position: relative;
   min-width: 0;
+  padding: 0 10px;
+}
+
+.languageMenu:first-child {
+  padding-left: 0;
+}
+
+.languageMenu + .languageMenu {
+  border-left: 1px solid rgba(44, 48, 39, 0.12);
 }
 
 .languageMenu summary {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 10px;
   min-height: 36px;
   cursor: pointer;
@@ -564,6 +573,7 @@ textarea:focus {
 }
 
 .audienceOption {
+  position: relative;
   display: flex;
   align-items: flex-start;
   gap: 7px;
@@ -584,9 +594,17 @@ textarea:focus {
   background: rgba(223, 233, 220, 0.7);
 }
 
+.audienceOption:has(input:focus-visible) {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(36, 88, 166, 0.13);
+}
+
 .audienceOption input {
-  min-height: auto;
-  width: auto;
+  position: absolute;
+  width: 1px;
+  min-height: 1px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 .audienceEmoji {

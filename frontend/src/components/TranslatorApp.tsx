@@ -29,7 +29,7 @@ type AppStatus =
   | "error";
 
 const BASE_CONTEXT =
-  "Natural bilingual conversation in Japan. Preserve nuance, casual tone, names, places, food, family context, and culturally specific references.";
+  "Add useful context for this conversation: names, places, itinerary, topic, vocabulary, food, family context, or culturally specific references.";
 const DEFAULT_AUDIENCE_PRESET = "older-stranger";
 const REGISTER_BLOCK_START = "[Japanese register preset]";
 const REGISTER_BLOCK_END = "[/Japanese register preset]";
@@ -197,7 +197,7 @@ export function TranslatorApp() {
   const [expectedSpeakerCount, setExpectedSpeakerCount] = useState("");
   const [audiencePreset, setAudiencePreset] = useState(DEFAULT_AUDIENCE_PRESET);
   const [audienceExpanded, setAudienceExpanded] = useState(false);
-  const [context, setContext] = useState(contextWithRegister(BASE_CONTEXT, DEFAULT_AUDIENCE_PRESET));
+  const [context, setContext] = useState(BASE_CONTEXT);
   const [status, setStatus] = useState<AppStatus>("checking");
   const [error, setError] = useState("");
   const [phrases, setPhrases] = useState<Phrase[]>([]);
@@ -344,7 +344,7 @@ export function TranslatorApp() {
             target_language: sourceB,
             expected_speaker_count: expectedSpeakerCount ? Number(expectedSpeakerCount) : null,
             expected_speaker_names: [],
-            context
+            context: contextWithRegister(context, audiencePreset)
           })
         );
       };
@@ -400,7 +400,7 @@ export function TranslatorApp() {
       setActiveSessionTitle(detail.session.title || "New chat");
       setSourceALanguages(loadedSources.length > 0 ? loadedSources : [sourceA]);
       setSourceB(loadedTarget);
-      setContext(detail.session.context || contextWithRegister(BASE_CONTEXT, DEFAULT_AUDIENCE_PRESET));
+      setContext(stripRegisterBlock(detail.session.context || BASE_CONTEXT) || BASE_CONTEXT);
       setExpectedSpeakerCount(
         detail.session.expected_speaker_count ? String(detail.session.expected_speaker_count) : ""
       );
@@ -470,7 +470,6 @@ export function TranslatorApp() {
 
   function changeAudiencePreset(presetId: string) {
     setAudiencePreset(presetId);
-    setContext((current) => contextWithRegister(stripRegisterBlock(current || BASE_CONTEXT), presetId));
   }
 
   function handleServerEvent(message: TranscriptEvent) {
