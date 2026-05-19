@@ -54,6 +54,20 @@ const AUDIENCE_PRESETS: {
   behavior: string;
 }[] = [
   {
+    id: "tourism-staff",
+    label: "Shops, restaurants, hotels",
+    register: "polite_neutral",
+    behavior:
+      "Speak as a customer: polite, simple requests with desu/masu. No need to mirror service keigo; keep it practical for shops, restaurants, hotels, and travel."
+  },
+  {
+    id: "stranger",
+    label: "Stranger or new person",
+    register: "polite_neutral",
+    behavior:
+      "Use safe spoken desu/masu. Avoid plain-form directness, imperatives, and anata. Use simple polite requests like shite moraemasu ka or dekimasu ka."
+  },
+  {
     id: "older-stranger",
     label: "Older stranger",
     register: "polite_neutral_soft",
@@ -61,15 +75,22 @@ const AUDIENCE_PRESETS: {
       "Use desu/masu with extra softness. Prefer cushions like sumimasen, yoroshikereba, and shite itadakemasu ka. Avoid heavy ceremonial keigo unless the situation becomes formal."
   },
   {
-    id: "stranger",
-    label: "Stranger/new acquaintance",
-    register: "polite_neutral",
+    id: "host-guest",
+    label: "Host or guest",
+    register: "host_guest_respect",
     behavior:
-      "Use safe spoken desu/masu. Avoid plain-form directness, imperatives, and anata. Use simple polite requests like shite moraemasu ka or dekimasu ka."
+      "Use hospitality-oriented formulas. If hosting, elevate the guest and show care/gratitude. If visiting, sound appreciative and humble."
+  },
+  {
+    id: "public-institution",
+    label: "Government, bank, hospital",
+    register: "public_institution_polite",
+    behavior:
+      "Use polite, precise, complete phrases. Avoid casual vagueness. Good for immigration, banks, hospitals, police, and public counters."
   },
   {
     id: "friend-partner",
-    label: "Close friend/partner",
+    label: "Close friend or partner",
     register: "casual_intimate",
     behavior:
       "Use plain form, warmth, and direct natural phrasing. Avoid desu/masu overuse, sama, or heavy keigo unless the source is intentionally joking or formal."
@@ -82,13 +103,6 @@ const AUDIENCE_PRESETS: {
       "Use warm family speech. Plain form is natural for close family; add polite softness for in-laws, elders, or family members who are not very close."
   },
   {
-    id: "tourism-staff",
-    label: "Shop/hotel/staff",
-    register: "polite_neutral",
-    behavior:
-      "Speak as a customer: polite, simple requests with desu/masu. No need to mirror service keigo; keep it practical for shops, restaurants, hotels, and travel."
-  },
-  {
     id: "coworker",
     label: "Coworker",
     register: "polite_professional",
@@ -97,54 +111,42 @@ const AUDIENCE_PRESETS: {
   },
   {
     id: "boss-professor",
-    label: "Boss/senior/teacher",
+    label: "Boss, senior, or teacher",
     register: "upward_polite_professional",
     behavior:
       "Use desu/masu plus respectful request forms such as go-kakunin itadakemasu ka. Avoid overlong keigo chains; voice should be respectful but still speakable."
   },
   {
     id: "employee-student",
-    label: "Employee/student",
+    label: "Employee or student",
     register: "downward_polite_clear",
     behavior:
       "Use clear, respectful instructions without being deferential. Prefer shite kudasai, onegai shimasu, or shite moraemasu ka. Avoid barking or overly humble forms."
   },
   {
     id: "client-customer",
-    label: "Client/customer",
+    label: "Client or customer",
     register: "external_formal_business",
     behavior:
       "Use respectful language for the listener and humble framing for self/company. Prefer osoreirimasu ga and itadakemasu ka. Voice should be formal but less ornate than email."
   },
   {
     id: "investor-partner",
-    label: "Investor/senior partner",
+    label: "Investor or senior partner",
     register: "polished_professional",
     behavior:
       "Use polished, concise professional Japanese. Be respectful and competent, not servile. Prefer go-iken o itadakemasu ka and clear business phrasing."
   },
   {
-    id: "public-institution",
-    label: "Government/bank/hospital",
-    register: "public_institution_polite",
-    behavior:
-      "Use polite, precise, complete phrases. Avoid casual vagueness. Good for immigration, banks, hospitals, police, and public counters."
-  },
-  {
-    id: "host-guest",
-    label: "Host/guest",
-    register: "host_guest_respect",
-    behavior:
-      "Use hospitality-oriented formulas. If hosting, elevate the guest and show care/gratitude. If visiting, sound appreciative and humble."
-  },
-  {
     id: "uchi-soto",
-    label: "Company inside/outside",
+    label: "Inside vs outside company",
     register: "uchi_soto_business",
     behavior:
       "Apply uchi/soto. To outsiders, humble your own company/team, elevate their side, use heisha/ onsha, avoid san for your own boss, and use sama for their side."
   }
 ];
+
+const PRIMARY_AUDIENCE_PRESET_COUNT = 5;
 
 type SpeakerDraft = {
   mergeInto: string;
@@ -180,6 +182,7 @@ export function TranslatorApp() {
   const [sourceB, setSourceB] = useState("en");
   const [expectedSpeakerCount, setExpectedSpeakerCount] = useState("");
   const [audiencePreset, setAudiencePreset] = useState(DEFAULT_AUDIENCE_PRESET);
+  const [audienceExpanded, setAudienceExpanded] = useState(false);
   const [context, setContext] = useState(contextWithRegister(BASE_CONTEXT, DEFAULT_AUDIENCE_PRESET));
   const [status, setStatus] = useState<AppStatus>("checking");
   const [error, setError] = useState("");
@@ -681,20 +684,13 @@ export function TranslatorApp() {
                   disabled={isLive}
                 />
               </label>
-              <label>
-                Speaking to
-                <select
-                  value={audiencePreset}
-                  onChange={(event) => changeAudiencePreset(event.target.value)}
-                  disabled={isLive}
-                >
-                  {AUDIENCE_PRESETS.map((preset) => (
-                    <option key={preset.id} value={preset.id}>
-                      {preset.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <AudiencePicker
+                disabled={isLive}
+                expanded={audienceExpanded}
+                onChange={changeAudiencePreset}
+                onToggleExpanded={() => setAudienceExpanded((current) => !current)}
+                value={audiencePreset}
+              />
             </div>
 
             <div className="startFields contextFields">
@@ -898,6 +894,62 @@ function LanguagePicker({
         </div>
       </details>
     </>
+  );
+}
+
+function AudiencePicker({
+  disabled,
+  expanded,
+  onChange,
+  onToggleExpanded,
+  value
+}: {
+  disabled: boolean;
+  expanded: boolean;
+  onChange: (presetId: string) => void;
+  onToggleExpanded: () => void;
+  value: string;
+}) {
+  const primary = AUDIENCE_PRESETS.slice(0, PRIMARY_AUDIENCE_PRESET_COUNT);
+  const secondary = AUDIENCE_PRESETS.slice(PRIMARY_AUDIENCE_PRESET_COUNT);
+
+  return (
+    <fieldset className="audiencePicker">
+      <legend>Speaking to</legend>
+      <div className="audienceOptions">
+        {primary.map((preset) => (
+          <label className="audienceOption" key={preset.id}>
+            <input
+              checked={value === preset.id}
+              disabled={disabled}
+              name="audience-preset"
+              onChange={() => onChange(preset.id)}
+              type="radio"
+            />
+            <span>{preset.label}</span>
+          </label>
+        ))}
+      </div>
+      {expanded ? (
+        <div className="audienceOptions secondary">
+          {secondary.map((preset) => (
+            <label className="audienceOption" key={preset.id}>
+              <input
+                checked={value === preset.id}
+                disabled={disabled}
+                name="audience-preset"
+                onChange={() => onChange(preset.id)}
+                type="radio"
+              />
+              <span>{preset.label}</span>
+            </label>
+          ))}
+        </div>
+      ) : null}
+      <button className="filterButton audienceMore" onClick={onToggleExpanded} type="button">
+        {expanded ? "Show common only" : "More situations"}
+      </button>
+    </fieldset>
   );
 }
 
