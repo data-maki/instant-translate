@@ -30,46 +30,119 @@ type AppStatus =
 
 const BASE_CONTEXT =
   "Natural bilingual conversation in Japan. Preserve nuance, casual tone, names, places, food, family context, and culturally specific references.";
-const DEFAULT_TONE_PRESET = "older-stranger";
-const TONE_BLOCK_START = "[Tone preset]";
-const TONE_BLOCK_END = "[/Tone preset]";
+const DEFAULT_AUDIENCE_PRESET = "older-stranger";
+const REGISTER_BLOCK_START = "[Japanese register preset]";
+const REGISTER_BLOCK_END = "[/Japanese register preset]";
 
-const TONE_PRESETS = [
+type HiddenRegister =
+  | "casual_intimate"
+  | "polite_neutral"
+  | "polite_neutral_soft"
+  | "polite_professional"
+  | "upward_polite_professional"
+  | "downward_polite_clear"
+  | "external_formal_business"
+  | "polished_professional"
+  | "public_institution_polite"
+  | "host_guest_respect"
+  | "uchi_soto_business";
+
+const AUDIENCE_PRESETS: {
+  id: string;
+  label: string;
+  register: HiddenRegister;
+  behavior: string;
+}[] = [
   {
     id: "older-stranger",
     label: "Older stranger",
-    instruction:
-      "Default to respectful, polite Japanese suitable for speaking with an older person or someone just met. Prefer desu/masu, avoid overly casual phrasing, and preserve warmth without sounding stiff."
+    register: "polite_neutral_soft",
+    behavior:
+      "Use desu/masu with extra softness. Prefer cushions like sumimasen, yoroshikereba, and shite itadakemasu ka. Avoid heavy ceremonial keigo unless the situation becomes formal."
   },
   {
-    id: "tourism-service",
-    label: "Tourism/service",
-    instruction:
-      "Use clear, courteous service-style Japanese suitable for tourism, restaurants, shops, directions, announcements, and public-facing help. Keep wording practical and easy to understand."
+    id: "stranger",
+    label: "Stranger/new acquaintance",
+    register: "polite_neutral",
+    behavior:
+      "Use safe spoken desu/masu. Avoid plain-form directness, imperatives, and anata. Use simple polite requests like shite moraemasu ka or dekimasu ka."
   },
   {
-    id: "business-superior",
-    label: "Boss/client",
-    instruction:
-      "Use business-appropriate polite Japanese for a boss, senior colleague, or client. Prefer respectful phrasing and avoid casual shortcuts. Use honorific/respectful wording when natural."
+    id: "friend-partner",
+    label: "Close friend/partner",
+    register: "casual_intimate",
+    behavior:
+      "Use plain form, warmth, and direct natural phrasing. Avoid desu/masu overuse, sama, or heavy keigo unless the source is intentionally joking or formal."
   },
   {
-    id: "business-peer",
-    label: "Coworker/peer",
-    instruction:
-      "Use polite but natural Japanese for coworkers or peers. Keep it professional without overusing stiff keigo."
+    id: "family",
+    label: "Family/in-laws",
+    register: "casual_intimate",
+    behavior:
+      "Use warm family speech. Plain form is natural for close family; add polite softness for in-laws, elders, or family members who are not very close."
   },
   {
-    id: "direct-report",
-    label: "Employee/report",
-    instruction:
-      "Use clear, respectful Japanese for speaking with an employee or direct report. Avoid sounding condescending; prefer concise, professional, supportive phrasing."
+    id: "tourism-staff",
+    label: "Shop/hotel/staff",
+    register: "polite_neutral",
+    behavior:
+      "Speak as a customer: polite, simple requests with desu/masu. No need to mirror service keigo; keep it practical for shops, restaurants, hotels, and travel."
   },
   {
-    id: "close-family",
-    label: "Family/friend",
-    instruction:
-      "Use warm, natural Japanese for close family or friends. Casual phrasing is acceptable when it matches the source, but preserve respect where age or family role implies it."
+    id: "coworker",
+    label: "Coworker",
+    register: "polite_professional",
+    behavior:
+      "Use professional spoken Japanese, not full keigo. Prefer onegai dekimasu ka, kakunin shite moraemasu ka, and concise work phrasing."
+  },
+  {
+    id: "boss-professor",
+    label: "Boss/senior/teacher",
+    register: "upward_polite_professional",
+    behavior:
+      "Use desu/masu plus respectful request forms such as go-kakunin itadakemasu ka. Avoid overlong keigo chains; voice should be respectful but still speakable."
+  },
+  {
+    id: "employee-student",
+    label: "Employee/student",
+    register: "downward_polite_clear",
+    behavior:
+      "Use clear, respectful instructions without being deferential. Prefer shite kudasai, onegai shimasu, or shite moraemasu ka. Avoid barking or overly humble forms."
+  },
+  {
+    id: "client-customer",
+    label: "Client/customer",
+    register: "external_formal_business",
+    behavior:
+      "Use respectful language for the listener and humble framing for self/company. Prefer osoreirimasu ga and itadakemasu ka. Voice should be formal but less ornate than email."
+  },
+  {
+    id: "investor-partner",
+    label: "Investor/senior partner",
+    register: "polished_professional",
+    behavior:
+      "Use polished, concise professional Japanese. Be respectful and competent, not servile. Prefer go-iken o itadakemasu ka and clear business phrasing."
+  },
+  {
+    id: "public-institution",
+    label: "Government/bank/hospital",
+    register: "public_institution_polite",
+    behavior:
+      "Use polite, precise, complete phrases. Avoid casual vagueness. Good for immigration, banks, hospitals, police, and public counters."
+  },
+  {
+    id: "host-guest",
+    label: "Host/guest",
+    register: "host_guest_respect",
+    behavior:
+      "Use hospitality-oriented formulas. If hosting, elevate the guest and show care/gratitude. If visiting, sound appreciative and humble."
+  },
+  {
+    id: "uchi-soto",
+    label: "Company inside/outside",
+    register: "uchi_soto_business",
+    behavior:
+      "Apply uchi/soto. To outsiders, humble your own company/team, elevate their side, use heisha/ onsha, avoid san for your own boss, and use sama for their side."
   }
 ];
 
@@ -106,8 +179,8 @@ export function TranslatorApp() {
   const [sourceALanguages, setSourceALanguages] = useState(["ja"]);
   const [sourceB, setSourceB] = useState("en");
   const [expectedSpeakerCount, setExpectedSpeakerCount] = useState("");
-  const [tonePreset, setTonePreset] = useState(DEFAULT_TONE_PRESET);
-  const [context, setContext] = useState(contextWithTone(BASE_CONTEXT, DEFAULT_TONE_PRESET));
+  const [audiencePreset, setAudiencePreset] = useState(DEFAULT_AUDIENCE_PRESET);
+  const [context, setContext] = useState(contextWithRegister(BASE_CONTEXT, DEFAULT_AUDIENCE_PRESET));
   const [status, setStatus] = useState<AppStatus>("checking");
   const [error, setError] = useState("");
   const [phrases, setPhrases] = useState<Phrase[]>([]);
@@ -310,7 +383,7 @@ export function TranslatorApp() {
       setActiveSessionTitle(detail.session.title || "New chat");
       setSourceALanguages(loadedSources.length > 0 ? loadedSources : [sourceA]);
       setSourceB(loadedTarget);
-      setContext(detail.session.context || contextWithTone(BASE_CONTEXT, DEFAULT_TONE_PRESET));
+      setContext(detail.session.context || contextWithRegister(BASE_CONTEXT, DEFAULT_AUDIENCE_PRESET));
       setExpectedSpeakerCount(
         detail.session.expected_speaker_count ? String(detail.session.expected_speaker_count) : ""
       );
@@ -378,9 +451,9 @@ export function TranslatorApp() {
     });
   }
 
-  function changeTonePreset(presetId: string) {
-    setTonePreset(presetId);
-    setContext((current) => contextWithTone(stripToneBlock(current || BASE_CONTEXT), presetId));
+  function changeAudiencePreset(presetId: string) {
+    setAudiencePreset(presetId);
+    setContext((current) => contextWithRegister(stripRegisterBlock(current || BASE_CONTEXT), presetId));
   }
 
   function handleServerEvent(message: TranscriptEvent) {
@@ -609,9 +682,13 @@ export function TranslatorApp() {
                 />
               </label>
               <label>
-                Tone
-                <select value={tonePreset} onChange={(event) => changeTonePreset(event.target.value)} disabled={isLive}>
-                  {TONE_PRESETS.map((preset) => (
+                Speaking to
+                <select
+                  value={audiencePreset}
+                  onChange={(event) => changeAudiencePreset(event.target.value)}
+                  disabled={isLive}
+                >
+                  {AUDIENCE_PRESETS.map((preset) => (
                     <option key={preset.id} value={preset.id}>
                       {preset.label}
                     </option>
@@ -1113,19 +1190,19 @@ function countWords(text: string): number {
   return latinWords + kanaKanjiRuns;
 }
 
-function contextWithTone(baseContext: string, presetId: string): string {
-  const preset = TONE_PRESETS.find((item) => item.id === presetId) || TONE_PRESETS[0];
-  const cleanBase = stripToneBlock(baseContext).trim() || BASE_CONTEXT;
-  return `${cleanBase}\n\n${TONE_BLOCK_START}\n${preset.instruction}\n${TONE_BLOCK_END}`;
+function contextWithRegister(baseContext: string, presetId: string): string {
+  const preset = AUDIENCE_PRESETS.find((item) => item.id === presetId) || AUDIENCE_PRESETS[0];
+  const cleanBase = stripRegisterBlock(baseContext).trim() || BASE_CONTEXT;
+  return `${cleanBase}\n\n${REGISTER_BLOCK_START}\nMedium: voice\nSpeaking to: ${preset.label}\nHidden register: ${preset.register}\nJapanese behavior: ${preset.behavior}\nVoice rules: Prefer short complete spoken sentences. Use names/titles instead of anata. Raise politeness for requests, apologies, refusals, and invitations. Avoid email-only formulas unless this is explicitly a business call opening.\n${REGISTER_BLOCK_END}`;
 }
 
-function stripToneBlock(value: string): string {
-  const start = value.indexOf(TONE_BLOCK_START);
-  const end = value.indexOf(TONE_BLOCK_END);
+function stripRegisterBlock(value: string): string {
+  const start = value.indexOf(REGISTER_BLOCK_START);
+  const end = value.indexOf(REGISTER_BLOCK_END);
   if (start === -1 || end === -1 || end < start) {
     return value;
   }
-  return `${value.slice(0, start)}${value.slice(end + TONE_BLOCK_END.length)}`.trim();
+  return `${value.slice(0, start)}${value.slice(end + REGISTER_BLOCK_END.length)}`.trim();
 }
 
 function groupSessions(sessions: SessionSummary[]): SessionGroup[] {
