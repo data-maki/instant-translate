@@ -95,12 +95,20 @@ const AUDIENCE_PRESETS: {
       "Use polite, precise, complete phrases. Avoid casual vagueness. Good for immigration, banks, hospitals, police, and public counters."
   },
   {
-    id: "friend-partner",
+    id: "close-friend",
     emoji: "😊",
-    label: "Friend or partner",
+    label: "Close friend",
     register: "casual_intimate",
     behavior:
-      "Use plain form, warmth, and direct natural phrasing. Avoid desu/masu overuse, sama, or heavy keigo unless the source is intentionally joking or formal."
+      "Use friendly plain form, natural contractions, and light teasing only when the source supports it. Keep it direct and relaxed. Avoid desu/masu, sama, and heavy keigo unless intentionally joking or formal."
+  },
+  {
+    id: "spouse-partner",
+    emoji: "💍",
+    label: "Spouse / partner",
+    register: "casual_intimate",
+    behavior:
+      "Use intimate, warm plain form. Sound close and caring rather than buddy-like or customer-service polite. Prefer soft directness, affectionate nuance, and natural household phrasing."
   },
   {
     id: "family",
@@ -151,12 +159,12 @@ const AUDIENCE_PRESETS: {
       "Use polished, concise professional Japanese. Be respectful and competent, not servile. Prefer go-iken o itadakemasu ka and clear business phrasing."
   },
   {
-    id: "uchi-soto",
+    id: "other-company",
     emoji: "🏢",
-    label: "Inside vs outside company",
+    label: "External company",
     register: "uchi_soto_business",
     behavior:
-      "Apply uchi/soto. To outsiders, humble your own company/team, elevate their side, use heisha/ onsha, avoid san for your own boss, and use sama for their side."
+      "Apply uchi/soto for external business. Humble your own company/team, elevate their side, use heisha/onsha, avoid san for your own boss, and use sama for people on their side."
   }
 ];
 
