@@ -55,6 +55,7 @@ def list_sessions() -> list[dict[str, Any]]:
             "title": title,
             "updated": state.get("updated") if state else None,
             "token_count": len(state.get("tokens", [])) if state else 0,
+            "duration_seconds": session_duration_seconds(state.get("tokens", []) if state else []),
             "source_languages": state.get("source_languages") if state else None,
             "target_language": state.get("target_language") if state else None,
         })
@@ -209,6 +210,22 @@ def read_session_state(name: str) -> dict[str, Any] | None:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def session_duration_seconds(tokens: list[dict[str, Any]]) -> int | None:
+    end_ms = 0.0
+    for token in tokens:
+        for key in ("end_ms", "start_ms"):
+            value = token.get(key)
+            if isinstance(value, (int, float)):
+                end_ms = max(end_ms, float(value))
+        for key in ("end_time", "start_time", "time"):
+            value = token.get(key)
+            if isinstance(value, (int, float)):
+                end_ms = max(end_ms, float(value) * 1000)
+    if end_ms <= 0:
+        return None
+    return max(1, round(end_ms / 1000))
 
 
 def process_soniox_tokens(

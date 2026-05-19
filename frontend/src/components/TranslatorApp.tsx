@@ -115,6 +115,8 @@ export function TranslatorApp() {
   const [savedPath, setSavedPath] = useState("");
   const [activeSession, setActiveSession] = useState("");
   const [activeSessionTitle, setActiveSessionTitle] = useState("");
+  const [activeDurationSeconds, setActiveDurationSeconds] = useState<number | null>(null);
+  const [sessionStartedAt, setSessionStartedAt] = useState<number | null>(null);
   const [rediarizeStatus, setRediarizeStatus] = useState("");
   const [rediarizing, setRediarizing] = useState(false);
   const [translationStatus, setTranslationStatus] = useState("");
@@ -132,6 +134,14 @@ export function TranslatorApp() {
   const recorderRef = useRef<RecorderHandle | null>(null);
   const feedRef = useRef<HTMLDivElement | null>(null);
   const shouldFollowFeedRef = useRef(true);
+
+  const sourceA = sourceALanguages[0] || (sourceB === "en" ? "ja" : "en");
+  const canStart = status === "idle" || status === "stopped" || status === "error";
+  const isLive = status === "requesting microphone" || status === "connecting" || status === "listening";
+  const postProcessing = rediarizing || translating || improvingAll;
+  const statusLabel = status === "requesting microphone" ? "mic access" : status;
+  const hasLanguagePair = sourceALanguages.length > 0 && !sourceALanguages.includes(sourceB);
+  const hasSessionStatus = Boolean(activeSession || savedPath || rediarizeStatus || translationStatus || reviewStatus);
 
   useEffect(() => {
     fetchLanguages()
@@ -160,6 +170,16 @@ export function TranslatorApp() {
     });
   }, [phrases, selectedSpeaker]);
 
+  useEffect(() => {
+    if (!isLive || !sessionStartedAt) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setActiveDurationSeconds(Math.max(1, Math.floor((Date.now() - sessionStartedAt) / 1000)));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [isLive, sessionStartedAt]);
+
   const languageMap = useMemo(() => {
     return new Map(languages.map((language) => [language.code, language]));
   }, [languages]);
@@ -170,13 +190,16 @@ export function TranslatorApp() {
     return [...core, ...rest];
   }, [languages]);
 
-  const sourceA = sourceALanguages[0] || (sourceB === "en" ? "ja" : "en");
-  const canStart = status === "idle" || status === "stopped" || status === "error";
-  const isLive = status === "requesting microphone" || status === "connecting" || status === "listening";
-  const postProcessing = rediarizing || translating || improvingAll;
-  const statusLabel = status === "requesting microphone" ? "mic access" : status;
-  const hasLanguagePair = sourceALanguages.length > 0 && !sourceALanguages.includes(sourceB);
   const speakerSummaries = useMemo(() => summarizeSpeakers(phrases), [phrases]);
+  const transcriptStats = useMemo(() => {
+    const durationSeconds = activeDurationSeconds ?? durationFromPhrases(phrases);
+    return {
+      durationSeconds,
+      words: countPhraseWords(phrases),
+      tokens: tokenCount
+    };
+  }, [activeDurationSeconds, phrases, tokenCount]);
+  const hasFinishedSession = Boolean(activeSession && savedPath && !isLive);
   const sessionGroups = useMemo(() => groupSessions(sessions), [sessions]);
   const visibleSessionGroups = useMemo(() => {
     if (sessionsExpanded) {
@@ -203,6 +226,8 @@ export function TranslatorApp() {
     setSelectedSpeaker(null);
     setPhrases([]);
     setTokenCount(0);
+    setActiveDurationSeconds(0);
+    setSessionStartedAt(Date.now());
     shouldFollowFeedRef.current = true;
     setStatus("requesting microphone");
 
@@ -291,6 +316,8 @@ export function TranslatorApp() {
       );
       setPhrases(detail.phrases || []);
       setTokenCount(detail.session.tokens?.length || detail.phrases?.length || 0);
+      setActiveDurationSeconds(detail.session.duration_seconds ?? durationFromPhrases(detail.phrases || []));
+      setSessionStartedAt(null);
       setSavedPath(detail.session.artifact?.path || "");
       setRediarizeStatus("");
       setTranslationStatus("");
@@ -320,6 +347,8 @@ export function TranslatorApp() {
     setSelectedSpeaker(null);
     setPhrases([]);
     setTokenCount(0);
+    setActiveDurationSeconds(null);
+    setSessionStartedAt(null);
     shouldFollowFeedRef.current = true;
     setStatus("idle");
   }
@@ -376,6 +405,8 @@ export function TranslatorApp() {
       setSavedPath(message.path);
       setPhrases(message.phrases);
       setTokenCount(message.token_count);
+      setActiveDurationSeconds(durationFromPhrases(message.phrases));
+      setSessionStartedAt(null);
       refreshSessions();
       return;
     }
@@ -515,6 +546,7 @@ export function TranslatorApp() {
 
       <section className="workspace">
         <SessionSidebar
+          activeDurationSeconds={activeDurationSeconds}
           activeSession={activeSession}
           activeSessionTitle={activeSessionTitle}
           expanded={sessionsExpanded}
@@ -533,7 +565,7 @@ export function TranslatorApp() {
               <p className="panelKicker">conversation</p>
               <h2>Live transcript</h2>
             </div>
-            <span className="tokenCount">{tokenCount} final tokens</span>
+            <span className="tokenCount">{formatTranscriptStats(transcriptStats)}</span>
           </div>
           <div className="languageRail" aria-label="Transcript languages">
             <LanguagePicker
@@ -553,12 +585,15 @@ export function TranslatorApp() {
                 <h3>{activeSessionTitle || "Start a session"}</h3>
               </div>
               <div className="actions compactActions">
-                <button className="primaryButton" onClick={start} disabled={!canStart || !hasLanguagePair}>
-                  Listen
-                </button>
-                <button className="secondaryButton" onClick={stop} disabled={!isLive}>
-                  Stop
-                </button>
+                {isLive ? (
+                  <button className="secondaryButton" onClick={stop}>
+                    Stop
+                  </button>
+                ) : (
+                  <button className="primaryButton" onClick={start} disabled={!canStart || !hasLanguagePair}>
+                    Start session
+                  </button>
+                )}
               </div>
             </div>
 
@@ -592,22 +627,25 @@ export function TranslatorApp() {
               </label>
             </div>
 
-            <div className="statusBox inlineStatus">
-              <strong>{activeSessionTitle || "No active session"}</strong>
-              <span>{sourceALanguages.join(", ").toUpperCase()} → {sourceB.toUpperCase()}</span>
-              {savedPath ? <span>Saved: {savedPath}</span> : null}
-              {rediarizeStatus ? <span>{rediarizeStatus}</span> : null}
-              {translationStatus ? <span>{translationStatus}</span> : null}
-              {reviewStatus ? <span>{reviewStatus}</span> : null}
-            </div>
+            {hasSessionStatus ? (
+              <div className="statusBox inlineStatus">
+                {activeSessionTitle ? <strong>{activeSessionTitle}</strong> : null}
+                {savedPath ? <span>Saved: {savedPath}</span> : null}
+                {rediarizeStatus ? <span>{rediarizeStatus}</span> : null}
+                {translationStatus ? <span>{translationStatus}</span> : null}
+                {reviewStatus ? <span>{reviewStatus}</span> : null}
+              </div>
+            ) : null}
 
-            <button
-              className="secondaryButton fullWidthButton"
-              onClick={improveSpeakersAndTranslations}
-              disabled={!activeSession || isLive || postProcessing}
-            >
-              {improvingAll ? "Improving transcript..." : "Improve transcript"}
-            </button>
+            {hasFinishedSession ? (
+              <button
+                className="secondaryButton fullWidthButton"
+                onClick={improveSpeakersAndTranslations}
+                disabled={postProcessing}
+              >
+                {improvingAll ? "Improving transcript..." : "Improve transcript"}
+              </button>
+            ) : null}
             {error ? <div className="errorBox">{error}</div> : null}
           </section>
           {speakerSummaries.length > 0 ? (
@@ -625,12 +663,7 @@ export function TranslatorApp() {
           ) : null}
           <div className="feed" onScroll={handleFeedScroll} ref={feedRef}>
             {phrases.length === 0 ? (
-              <div className="emptyState">
-                <BrandMark compact />
-                <strong>Ready for the next conversation.</strong>
-                Keep the phone near the speakers. Cottonoha will keep the latest translation in view as the
-                conversation grows.
-              </div>
+              <div className="emptyState" aria-hidden="true" />
             ) : (
               displayedPhrases.map((phrase) => (
                 <PhraseCard
@@ -648,6 +681,7 @@ export function TranslatorApp() {
 }
 
 function SessionSidebar({
+  activeDurationSeconds,
   activeSession,
   activeSessionTitle,
   expanded,
@@ -659,6 +693,7 @@ function SessionSidebar({
   onToggleExpanded,
   total
 }: {
+  activeDurationSeconds: number | null;
   activeSession: string;
   activeSessionTitle: string;
   expanded: boolean;
@@ -688,7 +723,7 @@ function SessionSidebar({
             <h3>Current</h3>
             <button className="sessionButton active" disabled type="button">
               <strong>{activeSessionTitle || "New chat"}</strong>
-              <span>recording</span>
+              <span>{formatDuration(activeDurationSeconds)} · recording</span>
             </button>
           </section>
         ) : null}
@@ -708,7 +743,7 @@ function SessionSidebar({
                 >
                   <strong>{session.title || session.name}</strong>
                   <span>
-                    {session.token_count} tokens
+                    {formatDuration(session.duration_seconds)}
                     {loadingSession === session.name ? " · loading" : ""}
                   </span>
                 </button>
@@ -1031,6 +1066,51 @@ function phraseColumns(phrase: Phrase, sourceLanguages: string[], targetLanguage
     targetLanguage
   ];
   return Array.from(new Set(columns));
+}
+
+function formatTranscriptStats(stats: { durationSeconds: number | null; words: number; tokens: number }): string {
+  return `${formatDuration(stats.durationSeconds)}, ${stats.words} words, ${stats.tokens} tokens`;
+}
+
+function formatDuration(seconds: number | null | undefined): string {
+  if (!seconds || seconds < 0) {
+    return "0s";
+  }
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const rest = seconds % 60;
+  if (hours > 0) {
+    return `${hours}h${String(minutes).padStart(2, "0")}m`;
+  }
+  if (minutes > 0) {
+    return `${minutes}m${String(rest).padStart(2, "0")}s`;
+  }
+  return `${rest}s`;
+}
+
+function durationFromPhrases(phrases: Phrase[]): number | null {
+  let maxSeconds = 0;
+  for (const phrase of phrases) {
+    const value = phrase.time;
+    if (typeof value === "number") {
+      maxSeconds = Math.max(maxSeconds, value > 10_000 ? value / 1000 : value);
+    }
+  }
+  return maxSeconds > 0 ? Math.round(maxSeconds) : null;
+}
+
+function countPhraseWords(phrases: Phrase[]): number {
+  return phrases.reduce((count, phrase) => {
+    const sourceText = phrase.source_lang ? phrase.texts[phrase.source_lang] : "";
+    const text = sourceText || Object.values(phrase.texts).find(Boolean) || "";
+    return count + countWords(text);
+  }, 0);
+}
+
+function countWords(text: string): number {
+  const latinWords = text.match(/[A-Za-z0-9]+(?:['-][A-Za-z0-9]+)?/g)?.length || 0;
+  const kanaKanjiRuns = text.match(/[\u3040-\u30ff\u3400-\u9fff]+/g)?.length || 0;
+  return latinWords + kanaKanjiRuns;
 }
 
 function contextWithTone(baseContext: string, presetId: string): string {

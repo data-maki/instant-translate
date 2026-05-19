@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .languages import DEFAULT_SOURCE_LANGUAGES, DEFAULT_TARGET_LANGUAGE, list_languages
 from . import shared
-from .sessions import DEFAULT_CONTEXT, build_phrases, make_session, read_session_state, list_sessions, sanitize_session_name, session_display_title
+from .sessions import DEFAULT_CONTEXT, build_phrases, make_session, read_session_state, list_sessions, sanitize_session_name, session_display_title, session_duration_seconds
 from .soniox import NUM_CHANNELS, SAMPLE_RATE, run_transcription_bridge
 from cli.live_transcriber.async_diarize import AsyncDiarizeError, redo_diarization
 
@@ -88,6 +88,7 @@ def session_detail(session_name: str) -> dict[str, Any]:
         except (OSError, json.JSONDecodeError):
             pass
     enriched_state["tokens"] = tokens
+    enriched_state["duration_seconds"] = session_duration_seconds(tokens)
     if latest_artifact:
         enriched_state["artifact"] = latest_artifact
     return {

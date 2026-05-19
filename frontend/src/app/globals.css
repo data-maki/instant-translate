@@ -327,6 +327,7 @@ textarea:focus {
 }
 
 .compactActions {
+  grid-template-columns: 1fr;
   width: min(260px, 100%);
 }
 

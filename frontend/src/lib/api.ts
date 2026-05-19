@@ -81,6 +81,7 @@ export type SessionSummary = {
   title: string;
   updated?: string | null;
   token_count: number;
+  duration_seconds?: number | null;
   source_languages?: string[] | null;
   target_language?: string | null;
 };
@@ -91,6 +92,7 @@ export type SessionDetail = {
     title?: string | null;
     summary?: string | null;
     updated?: string;
+    duration_seconds?: number | null;
     source_languages?: string[];
     target_language?: string;
     context?: string | null;
