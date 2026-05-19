@@ -347,8 +347,8 @@ textarea:focus {
 }
 
 .transcriptPanel {
-  display: grid;
-  grid-template-rows: auto 1fr;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
   overflow: hidden;
   background:
@@ -382,6 +382,18 @@ textarea:focus {
   color: var(--muted);
   font-family: var(--font-geist-mono), monospace;
   font-size: 0.78rem;
+}
+
+.languageRail {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(243, 245, 238, 0.7);
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 850;
 }
 
 .speakerReview {
@@ -482,10 +494,11 @@ textarea:focus {
 }
 
 .feed {
+  flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   scroll-behavior: smooth;
-  padding: 18px;
+  padding: 10px 18px 18px;
 }
 
 .emptyState {
@@ -508,91 +521,52 @@ textarea:focus {
 
 .phrase {
   --speaker-color: var(--green);
-  position: relative;
   display: grid;
-  gap: 8px;
   max-width: 920px;
-  margin: 0 0 12px;
-  padding: 10px 12px 12px;
+  margin: 0 0 8px;
+  padding: 8px 11px 9px;
   border: 1px solid var(--line);
-  border-left: 5px solid var(--speaker-color);
+  border-left: 4px solid var(--speaker-color);
   border-radius: 8px;
   background: var(--panel);
-  box-shadow: 0 12px 30px rgba(44, 48, 39, 0.07);
-}
-
-.phrase.partial {
-  opacity: 0.88;
-}
-
-.phraseMeta {
-  position: absolute;
-  top: 8px;
-  right: 10px;
-  z-index: 1;
-}
-
-.statusDot {
-  display: block;
-  width: 9px;
-  height: 9px;
-  border-radius: 999px;
-  background: var(--gold);
-  box-shadow: 0 0 0 4px rgba(169, 120, 35, 0.12);
-}
-
-.statusDot.final {
-  background: var(--green);
-  box-shadow: 0 0 0 4px rgba(49, 95, 69, 0.12);
+  box-shadow: 0 8px 22px rgba(44, 48, 39, 0.045);
 }
 
 .phraseLines {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 8px;
+  gap: 14px;
 }
 
 .lineBox {
   display: grid;
-  gap: 4px;
+  align-content: start;
+  gap: 3px;
   min-width: 0;
-  padding: 8px 10px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: #f7f7f1;
+  padding: 0 0 0 10px;
+  border-left: 1px solid rgba(44, 48, 39, 0.1);
 }
 
 .lineBox.sourceLine {
-  border-color: color-mix(in srgb, var(--speaker-color) 26%, transparent);
-  box-shadow: inset 3px 0 0 var(--speaker-color);
-}
-
-.lineLabel {
-  color: var(--muted);
-  font-size: 0.72rem;
-  font-weight: 800;
-}
-
-.sourceLine .lineLabel {
-  color: var(--speaker-color);
+  border-left-color: var(--speaker-color);
 }
 
 .lineText {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
-  font-size: 1rem;
-  line-height: 1.42;
+  font-size: 0.95rem;
+  line-height: 1.35;
 }
 
 .lineText.japanese {
   font-family: var(--font-geist-sans), "Hiragino Sans", "Yu Gothic", "Noto Sans JP", sans-serif;
-  font-size: 1.08rem;
+  font-size: 1.02rem;
 }
 
 .romaji {
   color: var(--muted);
-  font-size: 0.76rem;
-  line-height: 1.32;
+  font-size: 0.72rem;
+  line-height: 1.25;
   white-space: pre-wrap;
 }
 
@@ -648,6 +622,7 @@ textarea:focus {
   .fieldRow,
   .actions,
   .phraseLines,
+  .languageRail,
   .speakerRow {
     grid-template-columns: 1fr;
   }

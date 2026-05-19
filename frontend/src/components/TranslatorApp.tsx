@@ -79,6 +79,7 @@ export function TranslatorApp() {
   const wsRef = useRef<WebSocket | null>(null);
   const recorderRef = useRef<RecorderHandle | null>(null);
   const feedRef = useRef<HTMLDivElement | null>(null);
+  const shouldFollowFeedRef = useRef(true);
 
   useEffect(() => {
     fetchLanguages()
@@ -93,8 +94,12 @@ export function TranslatorApp() {
   }, []);
 
   useEffect(() => {
-    feedRef.current?.scrollTo({
-      top: 0,
+    const feed = feedRef.current;
+    if (!feed || !shouldFollowFeedRef.current) {
+      return;
+    }
+    feed.scrollTo({
+      top: feed.scrollHeight,
       behavior: "smooth"
     });
   }, [phrases, selectedSpeaker]);
@@ -117,10 +122,9 @@ export function TranslatorApp() {
   const speakerSummaries = useMemo(() => summarizeSpeakers(phrases), [phrases]);
   const displayedPhrases = useMemo(() => {
     const compacted = compactPhrases(phrases);
-    const filtered = selectedSpeaker
+    return selectedSpeaker
       ? compacted.filter((phrase) => speakerKey(phrase.speaker) === selectedSpeaker)
       : compacted;
-    return filtered.slice().reverse();
   }, [phrases, selectedSpeaker]);
 
   async function start() {
@@ -134,6 +138,7 @@ export function TranslatorApp() {
     setSelectedSpeaker(null);
     setPhrases([]);
     setTokenCount(0);
+    shouldFollowFeedRef.current = true;
     setStatus("requesting microphone");
 
     try {
@@ -311,6 +316,14 @@ export function TranslatorApp() {
     wsRef.current = null;
   }
 
+  function handleFeedScroll() {
+    const feed = feedRef.current;
+    if (!feed) {
+      return;
+    }
+    shouldFollowFeedRef.current = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 120;
+  }
+
   return (
     <main className="appShell">
       <header className="topBar">
@@ -457,6 +470,16 @@ export function TranslatorApp() {
             </div>
             <span className="tokenCount">{tokenCount} final tokens</span>
           </div>
+          <div className="languageRail" aria-label="Transcript languages">
+            {[sourceA, sourceB].map((code) => {
+              const language = languageMap.get(code);
+              return (
+                <span key={code}>
+                  {language?.flag} {language?.name ?? code.toUpperCase()}
+                </span>
+              );
+            })}
+          </div>
           {speakerSummaries.length > 0 ? (
             <SpeakerReviewPanel
               drafts={speakerDrafts}
@@ -469,20 +492,19 @@ export function TranslatorApp() {
               speakers={speakerSummaries}
             />
           ) : null}
-          <div className="feed" ref={feedRef}>
+          <div className="feed" onScroll={handleFeedScroll} ref={feedRef}>
             {phrases.length === 0 ? (
               <div className="emptyState">
                 <BrandMark compact />
                 <strong>Ready for the next conversation.</strong>
-                Keep the phone near the speakers. Cottonoha will separate live speech from final captions as the
-                translation feed grows.
+                Keep the phone near the speakers. Cottonoha will keep the latest translation in view as the
+                conversation grows.
               </div>
             ) : (
               displayedPhrases.map((phrase) => (
                 <PhraseCard
                   key={phrase.id}
                   phrase={phrase}
-                  languageMap={languageMap}
                   columns={[sourceA, sourceB]}
                 />
               ))
@@ -599,35 +621,18 @@ function SpeakerReviewPanel({
   );
 }
 
-function PhraseCard({
-  phrase,
-  languageMap,
-  columns
-}: {
-  phrase: Phrase;
-  languageMap: Map<string, Language>;
-  columns: string[];
-}) {
+function PhraseCard({ phrase, columns }: { phrase: Phrase; columns: string[] }) {
   const color = speakerColor(speakerKey(phrase.speaker));
   const style = { "--speaker-color": color } as CSSProperties;
 
   return (
-    <article className={`phrase ${phrase.is_final ? "" : "partial"}`} style={style}>
-      <div className="phraseMeta">
-        <span
-          className={`statusDot ${phrase.is_final ? "final" : "live"}`}
-          aria-label={phrase.is_final ? "final" : "live"}
-          title={phrase.is_final ? "final" : "live"}
-        />
-      </div>
+    <article className="phrase" style={style}>
       <div className="phraseLines">
         {columns.map((code) => {
-          const language = languageMap.get(code);
           const text = phrase.texts[code] || "";
           const isSource = code === phrase.source_lang;
           return (
             <div className={`lineBox ${isSource ? "sourceLine" : ""}`} key={code}>
-              <span className="lineLabel">{language?.flag} {language?.name ?? code.toUpperCase()}</span>
               <span className={`lineText ${code === "ja" ? "japanese" : ""}`}>{text || "..."}</span>
               {code === "ja" && phrase.romaji_ja ? <span className="romaji">{phrase.romaji_ja}</span> : null}
             </div>
