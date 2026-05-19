@@ -1,6 +1,7 @@
 # Transcripts
 output/
 old/
+eval/
 
 .env
 
@@ -11,15 +12,12 @@ old/
 # Soniox cache
 .soniox_cache/
 
-
-
 # Python
 venv/
 env/
 .vscode/
 __pycache__/
 *.pyc
-.env
 family_chat/__pycache__/
 
 # Frontend
@@ -27,6 +25,7 @@ frontend/node_modules/
 frontend/.next/
 frontend/out/
 frontend/.env*.local
+frontend/tsconfig.tsbuildinfo
 
 # Backend
 .pytest_cache/

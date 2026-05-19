@@ -9,11 +9,11 @@ from typing import Any, Awaitable, Callable
 
 import websockets
 
-from .sessions import DEFAULT_CONTEXT, build_phrases, make_session, process_soniox_tokens
+from .sessions import DEFAULT_CONTEXT, build_phrases, make_session, process_soniox_tokens, summarize_finished_session
 
 
 SONIOX_WEBSOCKET_URL = "wss://stt-rt.soniox.com/transcribe-websocket"
-SONIOX_MODEL = "stt-rt-v3"
+SONIOX_MODEL = "stt-rt-v4"
 AUDIO_FORMAT = "pcm_s16le"
 SAMPLE_RATE = 16000
 NUM_CHANNELS = 1
@@ -26,15 +26,17 @@ def get_soniox_config(
     api_key: str,
     source_languages: list[str],
     context: str | None = None,
+    language_hints: list[str] | None = None,
 ) -> dict[str, Any]:
     lang_a, lang_b = source_languages[0], source_languages[1]
+    hints = list(dict.fromkeys(language_hints or source_languages))
     config: dict[str, Any] = {
         "api_key": api_key,
         "model": SONIOX_MODEL,
         "audio_format": AUDIO_FORMAT,
         "sample_rate": SAMPLE_RATE,
         "num_channels": NUM_CHANNELS,
-        "language_hints": [lang_a, lang_b],
+        "language_hints": hints,
         "enable_language_identification": True,
         "enable_speaker_diarization": True,
         "enable_endpoint_detection": True,
@@ -63,19 +65,23 @@ async def run_transcription_bridge(
         })
         return
 
-    session = make_session(
-        start_message.get("session_name") or "",
-        start_message.get("source_languages") or ["en", "ja"],
-        start_message.get("target_language") or "en",
-    )
+    requested_languages = start_message.get("source_languages") or ["en", "ja"]
+    target_language = start_message.get("target_language") or "en"
+    session = make_session(start_message.get("session_name") or "", requested_languages, target_language)
     context = (start_message.get("context") or DEFAULT_CONTEXT).strip()
+    session.context = context
+    session.expected_speaker_count = parse_expected_speaker_count(start_message.get("expected_speaker_count"))
+    session.expected_speaker_names = parse_expected_speaker_names(start_message.get("expected_speaker_names"))
 
     await send_event({
         "type": "session",
         "session": {
             "name": session.name,
+            "title": "New chat",
             "source_languages": session.source_languages,
             "target_language": session.target_language,
+            "expected_speaker_count": session.expected_speaker_count,
+            "expected_speaker_names": session.expected_speaker_names,
             "was_resumed": session.was_resumed,
             "token_count": len(session.final_tokens),
         },
@@ -83,7 +89,12 @@ async def run_transcription_bridge(
 
     try:
         async with websockets.connect(SONIOX_WEBSOCKET_URL, ping_interval=20) as soniox:
-            await soniox.send(json.dumps(get_soniox_config(api_key, session.source_languages, context)))
+            await soniox.send(json.dumps(get_soniox_config(
+                api_key,
+                session.source_languages,
+                context,
+                list(requested_languages) + [target_language],
+            )))
             await send_event({"type": "status", "status": "listening"})
 
             stop_event = asyncio.Event()
@@ -155,11 +166,36 @@ async def run_transcription_bridge(
         if session.final_tokens:
             try:
                 path = session.save_segment()
-                await send_event({
-                    "type": "saved",
-                    "path": str(path),
-                    "phrases": build_phrases(session, []),
-                })
+                summary = summarize_finished_session(session)
+                await send_event(saved_transcript_event(session, path, summary))
             except OSError as exc:
                 await send_event({"type": "error", "message": f"Failed to save session: {exc}"})
         await send_event({"type": "status", "status": "stopped"})
+
+
+def saved_transcript_event(session, path, summary: dict[str, str] | None = None) -> dict[str, Any]:
+    return {
+        "type": "saved",
+        "session": session.name,
+        "path": str(path),
+        "title": summary.get("title") if summary else "New chat",
+        "summary": summary.get("summary") if summary else None,
+        "phrases": build_phrases(session, []),
+        "token_count": len(session.final_tokens),
+    }
+
+
+def parse_expected_speaker_count(value: Any) -> int | None:
+    if value in {None, ""}:
+        return None
+    try:
+        count = int(value)
+    except (TypeError, ValueError):
+        return None
+    return count if count > 0 else None
+
+
+def parse_expected_speaker_names(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(name).strip() for name in value if str(name).strip()]

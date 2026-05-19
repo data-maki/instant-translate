@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from . import shared
 from .languages import validate_language_pair
@@ -32,7 +34,7 @@ def make_session(
 def sanitize_session_name(name: str | None) -> str:
     raw = (name or "").strip()
     if not raw:
-        raw = datetime.now(timezone.utc).strftime("web-%Y%m%d-%H%M%S")
+        raw = str(uuid4())
     safe = "".join(ch if ch.isalnum() or ch in ("-", "_", " ") else "-" for ch in raw)
     return "-".join(safe.split())[:80] or "web-session"
 
@@ -47,14 +49,157 @@ def list_sessions() -> list[dict[str, Any]]:
         if not path.is_dir():
             continue
         state = read_session_state(path.name)
+        title = session_display_title(path, state)
         sessions.append({
             "name": path.name,
+            "title": title,
             "updated": state.get("updated") if state else None,
             "token_count": len(state.get("tokens", [])) if state else 0,
+            "duration_seconds": session_duration_seconds(state.get("tokens", []) if state else []),
             "source_languages": state.get("source_languages") if state else None,
             "target_language": state.get("target_language") if state else None,
         })
     return sessions
+
+
+def session_display_title(session_dir: Path, state: dict[str, Any] | None) -> str:
+    summary = read_session_summary(session_dir)
+    if summary and summary.get("title"):
+        return str(summary["title"])[:48]
+    if state and state.get("tokens"):
+        return fallback_session_title(session_dir.name)
+    return "New chat"
+
+
+def read_session_summary(session_dir: Path) -> dict[str, Any] | None:
+    path = session_dir / "session_summary.json"
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return data
+
+
+def write_session_summary(session_dir: Path, summary: str, title: str, model: str) -> None:
+    clean_title = title.strip()[:48]
+    clean_summary = summary.strip()
+    if not clean_title or not clean_summary:
+        return
+    path = session_dir / "session_summary.json"
+    path.write_text(
+        json.dumps(
+            {
+                "summary": clean_summary,
+                "title": clean_title,
+                "model": model,
+                "updated": datetime.now(timezone.utc).isoformat(),
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
+def summarize_finished_session(session: Session) -> dict[str, str] | None:
+    existing = read_session_summary(Path(session.session_dir))
+    if existing and existing.get("title") and existing.get("summary"):
+        return {"title": str(existing["title"]), "summary": str(existing["summary"])}
+    if not os.environ.get("OPENAI_API_KEY"):
+        return None
+
+    result = generate_session_summary(session.name, session.final_tokens)
+    if result:
+        write_session_summary(
+            Path(session.session_dir),
+            result["summary"],
+            result["title"],
+            os.environ.get("OPENAI_SESSION_TITLE_MODEL", "gpt-4o-mini"),
+        )
+    return result
+
+
+def generate_session_summary(session_name: str, tokens: list[dict[str, Any]]) -> dict[str, str] | None:
+    import requests
+
+    transcript = session_title_sample(tokens)
+    if not transcript:
+        return None
+
+    prompt = {
+        "task": (
+            "Summarize this bilingual transcript and generate a short sidebar title. "
+            "The title should be 2 to 6 words, concrete, and max 48 characters. "
+            "The summary should be one concise sentence."
+        ),
+        "session_id": session_name,
+        "transcript": transcript,
+        "output_schema": {"summary": "...", "title": "..."},
+    }
+    model = os.environ.get("OPENAI_SESSION_TITLE_MODEL", "gpt-4o-mini")
+    try:
+        response = requests.post(
+            "https://api.openai.com/v1/responses",
+            headers={
+                "Authorization": f"Bearer {os.environ['OPENAI_API_KEY']}",
+                "Content-Type": "application/json",
+            },
+            json={
+                "model": model,
+                "input": json.dumps(prompt, ensure_ascii=False),
+                "text": {"format": {"type": "json_object"}},
+                "max_output_tokens": 160,
+            },
+            timeout=30,
+        )
+        if response.status_code != 200:
+            return None
+        payload = json.loads(extract_openai_text(response.json()))
+    except (OSError, KeyError, ValueError, requests.RequestException):
+        return None
+    summary = str(payload.get("summary") or "").strip()
+    title = str(payload.get("title") or "").strip().strip('"').strip()
+    if not summary or not title:
+        return None
+    return {"summary": summary, "title": title[:48]}
+
+
+def session_title_sample(tokens: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for token in tokens:
+        text = str(token.get("text") or "").replace("<end>", "").replace("<END>", "").strip()
+        if not text or token.get("is_audio_event"):
+            continue
+        language = token.get("language") or token.get("source_language") or ""
+        parts.append(f"[{language}] {text}")
+        if sum(len(part) for part in parts) > 1200:
+            break
+    return "\n".join(parts)[:1200]
+
+
+def extract_openai_text(data: dict[str, Any]) -> str:
+    text = data.get("output_text")
+    if isinstance(text, str):
+        return text
+    parts = []
+    for item in data.get("output", []):
+        for content in item.get("content", []):
+            if content.get("type") in {"output_text", "text"} and content.get("text"):
+                parts.append(content["text"])
+    return "".join(parts)
+
+
+def fallback_session_title(name: str) -> str:
+    if len(name) >= 32 and name.count("-") >= 4:
+        return "New chat"
+    clean = name.replace("web-", "").replace("-", " ").replace("_", " ").strip()
+    if not clean:
+        return "Untitled session"
+    return clean[:48]
 
 
 def read_session_state(name: str) -> dict[str, Any] | None:
@@ -67,6 +212,22 @@ def read_session_state(name: str) -> dict[str, Any] | None:
         return None
 
 
+def session_duration_seconds(tokens: list[dict[str, Any]]) -> int | None:
+    end_ms = 0.0
+    for token in tokens:
+        for key in ("end_ms", "start_ms"):
+            value = token.get(key)
+            if isinstance(value, (int, float)):
+                end_ms = max(end_ms, float(value))
+        for key in ("end_time", "start_time", "time"):
+            value = token.get(key)
+            if isinstance(value, (int, float)):
+                end_ms = max(end_ms, float(value) * 1000)
+    if end_ms <= 0:
+        return None
+    return max(1, round(end_ms / 1000))
+
+
 def process_soniox_tokens(
     session: Session,
     raw_tokens: list[dict[str, Any]],
@@ -74,6 +235,7 @@ def process_soniox_tokens(
     final_tokens: list[dict[str, Any]] = []
     partial_tokens: list[dict[str, Any]] = []
 
+    session.record_translation_update(raw_tokens)
     for raw in raw_tokens:
         token = dict(raw)
         if not token.get("text"):

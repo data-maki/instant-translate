@@ -1,6 +1,6 @@
 """Run Soniox async transcription over a saved audio file to redo diarization.
 
-The streaming `stt-rt-v3` model assigns speaker IDs chunk-by-chunk and tends
+The streaming `stt-rt-v4` model assigns speaker IDs chunk-by-chunk and tends
 to collapse similar voices into Speaker 1/2 when run on a far-field mic. The
 async `stt-async-v4` model gets the full audio in one shot, so it can
 cluster voice embeddings globally and often separates speakers the realtime

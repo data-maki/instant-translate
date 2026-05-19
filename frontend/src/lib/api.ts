@@ -22,15 +22,90 @@ export type TranscriptEvent =
       type: "session";
       session: {
         name: string;
+        title?: string | null;
         source_languages: string[];
         target_language: string;
+        expected_speaker_count?: number | null;
+        expected_speaker_names?: string[];
         was_resumed: boolean;
         token_count: number;
       };
     }
   | { type: "transcript"; phrases: Phrase[]; final_token_count: number }
-  | { type: "saved"; path: string; phrases: Phrase[] }
+  | {
+      type: "saved";
+      session: string;
+      path: string;
+      title?: string | null;
+      summary?: string | null;
+      phrases: Phrase[];
+      token_count: number;
+    }
   | { type: "error"; message: string };
+
+export type RediarizeResult = {
+  session: string;
+  path: string;
+  speakers: string[];
+  speaker_count: number;
+  token_count: number;
+  phrases: Phrase[];
+};
+
+export type RetranslateResult = {
+  session: string;
+  path: string;
+  translation_count: number;
+  token_count: number;
+  phrases: Phrase[];
+};
+
+export type SpeakerReviewRow = {
+  speaker: number | string;
+  merge_into: number | string;
+  label?: string;
+};
+
+export type SpeakerReviewResult = {
+  session: string;
+  path: string;
+  speakers: string[];
+  speaker_count: number;
+  speaker_labels: Record<string, string>;
+  token_count: number;
+  phrases: Phrase[];
+};
+
+export type SessionSummary = {
+  name: string;
+  title: string;
+  updated?: string | null;
+  token_count: number;
+  duration_seconds?: number | null;
+  source_languages?: string[] | null;
+  target_language?: string | null;
+};
+
+export type SessionDetail = {
+  session: {
+    name: string;
+    title?: string | null;
+    summary?: string | null;
+    updated?: string;
+    duration_seconds?: number | null;
+    source_languages?: string[];
+    target_language?: string;
+    context?: string | null;
+    expected_speaker_count?: number | null;
+    expected_speaker_names?: string[];
+    tokens?: unknown[];
+    artifact?: {
+      kind: string;
+      path: string;
+    };
+  } | null;
+  phrases?: Phrase[];
+};
 
 const DEFAULT_API_BASE_URL = "http://localhost:8000";
 
@@ -53,6 +128,60 @@ export async function fetchLanguages(): Promise<{
   const response = await fetch(`${apiBaseUrl()}/languages`, { cache: "no-store" });
   if (!response.ok) {
     throw new Error(`Could not load languages (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function fetchSessions(): Promise<{ sessions: SessionSummary[] }> {
+  const response = await fetch(`${apiBaseUrl()}/sessions`, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Could not load sessions (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function fetchSessionDetail(sessionName: string): Promise<SessionDetail> {
+  const response = await fetch(`${apiBaseUrl()}/sessions/${encodeURIComponent(sessionName)}`, { cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Could not load session (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function rediarizeSession(sessionName: string): Promise<RediarizeResult> {
+  const response = await fetch(`${apiBaseUrl()}/sessions/${encodeURIComponent(sessionName)}/rediarize`, {
+    method: "POST"
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `Could not improve speakers (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function retranslateSession(sessionName: string): Promise<RetranslateResult> {
+  const response = await fetch(`${apiBaseUrl()}/sessions/${encodeURIComponent(sessionName)}/retranslate`, {
+    method: "POST"
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `Could not improve translations (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function saveSpeakerReview(
+  sessionName: string,
+  speakers: SpeakerReviewRow[]
+): Promise<SpeakerReviewResult> {
+  const response = await fetch(`${apiBaseUrl()}/sessions/${encodeURIComponent(sessionName)}/speakers`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ speakers })
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `Could not save speaker labels (${response.status})`);
   }
   return response.json();
 }

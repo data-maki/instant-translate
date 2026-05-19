@@ -1,4 +1,6 @@
 :root {
+  --font-geist-sans: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-geist-mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
   --background: #fbfaf6;
   --foreground: #1c211b;
   --muted: #6b7168;
@@ -55,7 +57,8 @@ button {
 .appShell {
   display: grid;
   grid-template-rows: auto 1fr;
-  min-height: 100dvh;
+  height: 100dvh;
+  min-height: 0;
   max-width: 1440px;
   margin: 0 auto;
 }
@@ -69,6 +72,27 @@ button {
   border-bottom: 1px solid var(--line);
   background: rgba(251, 250, 246, 0.86);
   backdrop-filter: blur(16px);
+}
+
+.menuButton {
+  display: none;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 8px 18px rgba(44, 48, 39, 0.08);
+}
+
+.menuButton span {
+  display: block;
+  width: 18px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--foreground);
 }
 
 .identity {
@@ -137,7 +161,7 @@ button {
 
 h1 {
   margin: 0;
-  font-size: clamp(1.65rem, 3.5vw, 2.55rem);
+  font-size: clamp(1.45rem, 3.3vw, 2.4rem);
   line-height: 1.08;
   font-weight: 850;
 }
@@ -180,14 +204,20 @@ h1 {
 }
 
 .workspace {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(286px, 350px) minmax(0, 1fr);
   gap: 18px;
+  align-items: stretch;
   min-height: 0;
   padding: 16px clamp(14px, 3vw, 34px) 24px;
 }
 
-.controlPanel,
+.sessionBackdrop {
+  display: none;
+}
+
+.sessionPanel,
 .transcriptPanel {
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -195,42 +225,97 @@ h1 {
   box-shadow: var(--shadow);
 }
 
-.controlPanel {
-  align-self: start;
+.sessionPanel {
+  display: grid;
+  gap: 12px;
+  min-height: 0;
+  padding: 14px;
+  overflow: hidden;
+}
+
+.sessionPanelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.sessionHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.drawerCloseButton {
+  display: none;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--foreground);
+  font-size: 1.35rem;
+  line-height: 1;
+}
+
+.sessionPanelHeader h2 {
+  margin: 0;
+  font-size: 1.04rem;
+}
+
+.sessionList {
   display: grid;
   gap: 14px;
-  padding: 16px;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 2px;
 }
 
-.pairStrip {
+.sessionGroup {
   display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: center;
-  gap: 9px;
-  min-height: 48px;
-  padding: 0 12px;
-  border: 1px solid rgba(49, 95, 69, 0.18);
-  border-radius: 8px;
-  background: linear-gradient(90deg, rgba(223, 233, 220, 0.78), rgba(255, 255, 255, 0.88));
-  color: var(--green);
+  gap: 6px;
+}
+
+.sessionGroup h3 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.7rem;
   font-weight: 850;
-  text-align: center;
+  text-transform: uppercase;
 }
 
-.pairStrip strong {
-  color: var(--accent);
-  font-size: 1.05rem;
-}
-
-.fieldGroup {
+.sessionButton {
   display: grid;
-  gap: 8px;
+  gap: 3px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--foreground);
+  text-align: left;
 }
 
-.fieldRow {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
+.sessionButton:hover,
+.sessionButton.active {
+  border-color: rgba(49, 95, 69, 0.18);
+  background: rgba(223, 233, 220, 0.5);
+}
+
+.sessionButton:disabled {
+  cursor: default;
+}
+
+.sessionButton strong {
+  overflow: hidden;
+  font-size: 0.88rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sessionButton span {
+  color: var(--muted);
+  font-size: 0.72rem;
 }
 
 label {
@@ -279,12 +364,6 @@ textarea:focus {
   line-height: 1.4;
 }
 
-.actions {
-  display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
-  gap: 8px;
-}
-
 .primaryButton,
 .secondaryButton {
   min-height: 46px;
@@ -306,6 +385,10 @@ textarea:focus {
   background: var(--panel-soft);
   color: var(--foreground);
   border-color: var(--line);
+}
+
+.fullWidthButton {
+  width: 100%;
 }
 
 .primaryButton:disabled,
@@ -341,12 +424,23 @@ textarea:focus {
 }
 
 .transcriptPanel {
-  display: grid;
-  grid-template-rows: auto 1fr;
+  display: flex;
+  flex-direction: column;
   min-height: 0;
   overflow: hidden;
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(252, 251, 247, 0.94));
+}
+
+.transcriptPanel.setupMode .startPanel {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.transcriptPanel.setupMode .feed {
+  display: none;
 }
 
 .transcriptHeader {
@@ -378,11 +472,408 @@ textarea:focus {
   font-size: 0.78rem;
 }
 
+.languageRail {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(243, 245, 238, 0.7);
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 850;
+}
+
+.languageMenu {
+  position: relative;
+  min-width: 0;
+  padding: 0 10px;
+}
+
+.languageMenu:first-child {
+  padding-left: 0;
+}
+
+.languageMenu + .languageMenu {
+  border-left: 1px solid rgba(44, 48, 39, 0.12);
+}
+
+.languageMenu summary {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 10px;
+  min-height: 36px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.languageMenu summary::-webkit-details-marker {
+  display: none;
+}
+
+.languageMenu summary span {
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+}
+
+.languageMenu summary strong {
+  overflow: hidden;
+  color: var(--foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.languageMenuPanel {
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 0;
+  z-index: 4;
+  display: grid;
+  gap: 3px;
+  width: min(280px, 80vw);
+  max-height: 330px;
+  overflow-y: auto;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.languageOption {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  color: var(--foreground);
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.languageOption:hover {
+  background: var(--panel-soft);
+}
+
+.languageOption input {
+  min-height: auto;
+  width: auto;
+}
+
+.startPanel {
+  display: grid;
+  gap: 12px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.startPanelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.startPanelHeader h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.startFields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.speakerCountPicker {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.setupFieldLabel {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 780;
+}
+
+.speakerCountOptions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.speakerCountOption {
+  min-width: 40px;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--foreground);
+  font-size: 0.78rem;
+  font-weight: 820;
+}
+
+.speakerCountOption.active {
+  border-color: rgba(49, 95, 69, 0.42);
+  background: rgba(223, 233, 220, 0.7);
+}
+
+.speakerCountOption:focus-visible {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(36, 88, 166, 0.13);
+  outline: none;
+}
+
+.audiencePicker {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.audiencePicker legend {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 780;
+}
+
+.audienceOptions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.audienceOptions.secondary {
+  display: flex;
+}
+
+.audienceOption {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  min-height: 30px;
+  min-width: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--foreground);
+  font-size: 0.78rem;
+  font-weight: 800;
+  line-height: 1.18;
+}
+
+.audienceOption:has(input:checked) {
+  border-color: rgba(49, 95, 69, 0.42);
+  background: rgba(223, 233, 220, 0.7);
+}
+
+.audienceOption:has(input:focus-visible) {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(36, 88, 166, 0.13);
+}
+
+.audienceOption input {
+  position: absolute;
+  width: 1px;
+  min-height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.audienceEmoji {
+  flex: 0 0 auto;
+}
+
+.audienceName {
+  min-width: 0;
+  overflow-wrap: normal;
+  white-space: normal;
+}
+
+.audienceMore {
+  justify-self: start;
+}
+
+.contextFields {
+  grid-template-columns: 1fr;
+  min-height: 0;
+}
+
+.transcriptPanel.setupMode .contextFields {
+  flex: 1 1 auto;
+  height: 100%;
+}
+
+.contextField textarea {
+  min-height: 44px;
+  max-height: 90px;
+}
+
+.transcriptPanel.setupMode .contextField {
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  min-height: 0;
+}
+
+.transcriptPanel.setupMode .contextField textarea {
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  resize: none;
+}
+
+.startPanelFooter {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.startPanelFooter .primaryButton,
+.startPanelFooter .secondaryButton {
+  min-width: min(270px, 100%);
+}
+
+.inlineStatus {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  align-items: center;
+  padding: 9px 10px;
+  font-size: 0.78rem;
+}
+
+.speakerReview {
+  display: grid;
+  gap: 10px;
+  padding: 12px 18px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(243, 245, 238, 0.72);
+}
+
+.speakerReview.liveMode {
+  gap: 8px;
+  padding-block: 9px;
+}
+
+.speakerReviewHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.speakerReviewHeader h3 {
+  margin: 0;
+  font-size: 0.98rem;
+}
+
+.speakerReviewActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.compactButton,
+.filterButton {
+  min-height: 36px;
+  border-radius: 8px;
+  padding: 0 12px;
+  font-size: 0.82rem;
+}
+
+.filterButton {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--foreground);
+  font-weight: 800;
+}
+
+.filterButton.active,
+.speakerRow.selected {
+  border-color: rgba(49, 95, 69, 0.44);
+  box-shadow: 0 0 0 3px rgba(49, 95, 69, 0.1);
+}
+
+.speakerRows {
+  display: grid;
+  gap: 8px;
+  max-height: 270px;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.speakerRow {
+  --speaker-color: var(--green);
+  display: grid;
+  grid-template-columns: minmax(132px, 0.9fr) minmax(140px, 1fr) minmax(130px, 0.85fr);
+  gap: 8px;
+  align-items: end;
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--speaker-color);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.speakerRow.liveMode {
+  grid-template-columns: minmax(108px, 0.7fr) minmax(160px, 1fr);
+  padding: 7px 9px;
+}
+
+.speakerJump {
+  display: grid;
+  gap: 3px;
+  min-height: 44px;
+  padding: 7px 9px;
+  border: 1px solid rgba(49, 95, 69, 0.18);
+  border-radius: 8px;
+  background: rgba(223, 233, 220, 0.55);
+  color: var(--foreground);
+  text-align: left;
+}
+
+.speakerBadge {
+  cursor: default;
+}
+
+.speakerJump strong {
+  overflow-wrap: anywhere;
+}
+
+.speakerJump span,
+.speakerSample {
+  color: var(--muted);
+  font-size: 0.76rem;
+}
+
+.speakerSample {
+  grid-column: 1 / -1;
+  margin: -1px 0 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .feed {
+  flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   scroll-behavior: smooth;
-  padding: 18px;
+  padding: 10px 18px 18px;
 }
 
 .emptyState {
@@ -404,122 +895,182 @@ textarea:focus {
 }
 
 .phrase {
+  --speaker-color: var(--green);
   display: grid;
-  gap: 9px;
   max-width: 920px;
-  margin: 0 0 12px;
-  padding: 14px;
+  margin: 0 0 8px;
+  padding: 8px 11px 9px;
   border: 1px solid var(--line);
-  border-left: 5px solid var(--green);
+  border-left: 4px solid var(--speaker-color);
   border-radius: 8px;
   background: var(--panel);
-  box-shadow: 0 12px 30px rgba(44, 48, 39, 0.07);
-}
-
-.phrase.partial {
-  opacity: 0.72;
-  border-left-color: var(--gold);
-}
-
-.phraseMeta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
-  color: var(--muted);
-  font-size: 0.78rem;
-}
-
-.speakerBadge {
-  color: var(--foreground);
-  font-weight: 850;
-}
-
-.sourceBadge {
-  padding: 2px 7px;
-  border-radius: 999px;
-  background: rgba(21, 107, 85, 0.11);
-  color: var(--green);
-  font-weight: 800;
+  box-shadow: 0 8px 22px rgba(44, 48, 39, 0.045);
 }
 
 .phraseLines {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 11px;
+  gap: 14px;
 }
 
 .lineBox {
   display: grid;
-  gap: 5px;
+  align-content: start;
+  gap: 3px;
   min-width: 0;
-  padding: 11px;
-  border-radius: 8px;
-  background: #f7f7f1;
+  padding: 0 0 0 10px;
+  border-left: 1px solid rgba(44, 48, 39, 0.1);
 }
 
-.lineLabel {
-  color: var(--muted);
-  font-size: 0.72rem;
-  font-weight: 800;
+.lineBox.sourceLine {
+  border-left-color: var(--speaker-color);
 }
 
 .lineText {
   overflow-wrap: anywhere;
-  font-size: 1.06rem;
-  line-height: 1.55;
+  white-space: pre-wrap;
+  font-size: 0.95rem;
+  line-height: 1.35;
 }
 
 .lineText.japanese {
   font-family: var(--font-geist-sans), "Hiragino Sans", "Yu Gothic", "Noto Sans JP", sans-serif;
-  font-size: 1.18rem;
+  font-size: 1.02rem;
 }
 
 .romaji {
   color: var(--muted);
-  font-size: 0.82rem;
-  line-height: 1.4;
+  font-size: 0.72rem;
+  line-height: 1.25;
+  white-space: pre-wrap;
 }
 
 @media (max-width: 860px) {
+  body {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(251, 250, 246, 0.92)),
+      var(--background);
+  }
+
+  .appShell {
+    height: 100dvh;
+  }
+
   .topBar {
-    grid-template-columns: 1fr;
-    align-items: start;
+    position: sticky;
+    top: 0;
+    z-index: 7;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 10px;
+    padding: 10px 12px;
+  }
+
+  .menuButton {
+    display: grid;
+  }
+
+  .brandLockup {
+    gap: 8px;
+  }
+
+  .brandMark {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+  }
+
+  .brandMark svg {
+    width: 31px;
+    height: 31px;
+  }
+
+  h1 {
+    font-size: 1.45rem;
   }
 
   .connectionPill {
-    justify-self: start;
+    justify-self: end;
+    min-height: 34px;
+    padding: 0 10px;
+    font-size: 0.76rem;
   }
 
   .workspace {
     grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(420px, 1fr);
-    gap: 14px;
+    grid-template-rows: minmax(0, 1fr);
+    gap: 0;
+    padding: 10px;
   }
 
-  .controlPanel {
-    position: static;
+  .sessionBackdrop.open {
+    position: fixed;
+    inset: 0;
+    z-index: 8;
+    display: block;
+    border: 0;
+    background: rgba(28, 33, 27, 0.24);
+    backdrop-filter: blur(2px);
+  }
+
+  .sessionPanel {
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 9;
+    width: min(360px, 88vw);
+    max-height: none;
+    border-radius: 0 8px 8px 0;
+    transform: translateX(-104%);
+    transition: transform 180ms ease;
+  }
+
+  .sessionPanel.open {
+    transform: translateX(0);
+  }
+
+  .drawerCloseButton {
+    display: inline-grid;
+    place-items: center;
   }
 
   .transcriptPanel {
-    min-height: 55dvh;
+    min-height: 0;
+    border-radius: 8px;
+  }
+
+  .transcriptHeader {
+    padding: 12px 14px;
+  }
+
+  .tokenCount {
+    font-size: 0.7rem;
+    text-align: right;
+  }
+
+  .languageRail {
+    padding: 7px 14px;
+  }
+
+  .startPanel {
+    padding: 14px;
+  }
+
+  .startPanelFooter {
+    position: sticky;
+    bottom: 0;
+    margin: 0 -14px -14px;
+    padding: 10px 14px 14px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.96));
+  }
+
+  .startPanelFooter .primaryButton,
+  .startPanelFooter .secondaryButton {
+    width: 100%;
   }
 }
 
 @media (max-width: 560px) {
   .topBar {
-    padding-top: 14px;
-  }
-
-  .brandMark {
-    width: 46px;
-    height: 46px;
-    border-radius: 14px;
-  }
-
-  .brandMark svg {
-    width: 36px;
-    height: 36px;
+    padding-top: 9px;
   }
 
   .subhead {
@@ -527,13 +1078,82 @@ textarea:focus {
   }
 
   .workspace {
-    padding-top: 12px;
+    padding: 8px;
   }
 
-  .fieldRow,
-  .actions,
-  .phraseLines {
+  .startFields,
+  .audienceOptions,
+  .contextFields,
+  .phraseLines,
+  .languageRail,
+  .speakerRow {
     grid-template-columns: 1fr;
+  }
+
+  .languageRail {
+    gap: 4px;
+  }
+
+  .languageMenu {
+    padding: 0;
+  }
+
+  .languageMenu + .languageMenu {
+    border-left: 0;
+    border-top: 1px solid rgba(44, 48, 39, 0.1);
+  }
+
+  .languageMenu summary {
+    min-height: 34px;
+  }
+
+  .transcriptHeader {
+    align-items: start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .tokenCount {
+    text-align: left;
+  }
+
+  .speakerCountPicker {
+    align-items: start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .audienceOptions {
+    gap: 5px;
+  }
+
+  .audienceOption {
+    min-height: 34px;
+  }
+
+  .contextField textarea {
+    min-height: 118px;
+  }
+
+  .transcriptPanel.setupMode .contextField textarea {
+    min-height: 130px;
+  }
+
+  .phrase {
+    padding: 8px 9px;
+  }
+
+  .lineBox {
+    padding-left: 8px;
+  }
+
+  .speakerReviewHeader {
+    align-items: start;
+    flex-direction: column;
+  }
+
+  .speakerReviewActions {
+    justify-content: start;
   }
 
   .subhead {
