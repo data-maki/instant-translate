@@ -74,6 +74,27 @@ button {
   backdrop-filter: blur(16px);
 }
 
+.menuButton {
+  display: none;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  gap: 4px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 8px 18px rgba(44, 48, 39, 0.08);
+}
+
+.menuButton span {
+  display: block;
+  width: 18px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--foreground);
+}
+
 .identity {
   min-width: 0;
 }
@@ -140,7 +161,7 @@ button {
 
 h1 {
   margin: 0;
-  font-size: clamp(1.65rem, 3.5vw, 2.55rem);
+  font-size: clamp(1.45rem, 3.3vw, 2.4rem);
   line-height: 1.08;
   font-weight: 850;
 }
@@ -183,12 +204,17 @@ h1 {
 }
 
 .workspace {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(286px, 350px) minmax(0, 1fr);
   gap: 18px;
   align-items: stretch;
   min-height: 0;
   padding: 16px clamp(14px, 3vw, 34px) 24px;
+}
+
+.sessionBackdrop {
+  display: none;
 }
 
 .sessionPanel,
@@ -212,6 +238,24 @@ h1 {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.sessionHeaderActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.drawerCloseButton {
+  display: none;
+  width: 36px;
+  height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--foreground);
+  font-size: 1.35rem;
+  line-height: 1;
 }
 
 .sessionPanelHeader h2 {
@@ -431,7 +475,7 @@ textarea:focus {
 .languageRail {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: 0;
   padding: 8px 18px;
   border-bottom: 1px solid var(--line);
   background: rgba(243, 245, 238, 0.7);
@@ -521,8 +565,8 @@ textarea:focus {
 
 .startPanel {
   display: grid;
-  gap: 10px;
-  padding: 12px 18px;
+  gap: 12px;
+  padding: 14px 18px;
   border-bottom: 1px solid var(--line);
   background: rgba(255, 255, 255, 0.74);
 }
@@ -536,7 +580,7 @@ textarea:focus {
 
 .startPanelHeader h3 {
   margin: 0;
-  font-size: 1rem;
+  font-size: 1.1rem;
 }
 
 .startFields {
@@ -567,8 +611,8 @@ textarea:focus {
 }
 
 .speakerCountOption {
-  min-width: 42px;
-  min-height: 32px;
+  min-width: 40px;
+  min-height: 30px;
   padding: 0 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
@@ -592,7 +636,7 @@ textarea:focus {
 .audiencePicker {
   grid-column: 1 / -1;
   display: grid;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
   margin: 0;
   padding: 0;
@@ -621,7 +665,7 @@ textarea:focus {
   display: flex;
   align-items: flex-start;
   gap: 7px;
-  min-height: 32px;
+  min-height: 30px;
   min-width: 0;
   padding: 6px 10px;
   border: 1px solid var(--line);
@@ -902,45 +946,131 @@ textarea:focus {
 }
 
 @media (max-width: 860px) {
+  body {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.98), rgba(251, 250, 246, 0.92)),
+      var(--background);
+  }
+
+  .appShell {
+    height: 100dvh;
+  }
+
   .topBar {
-    grid-template-columns: 1fr;
-    align-items: start;
+    position: sticky;
+    top: 0;
+    z-index: 7;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    gap: 10px;
+    padding: 10px 12px;
+  }
+
+  .menuButton {
+    display: grid;
+  }
+
+  .brandLockup {
+    gap: 8px;
+  }
+
+  .brandMark {
+    width: 40px;
+    height: 40px;
+    border-radius: 12px;
+  }
+
+  .brandMark svg {
+    width: 31px;
+    height: 31px;
+  }
+
+  h1 {
+    font-size: 1.45rem;
   }
 
   .connectionPill {
-    justify-self: start;
+    justify-self: end;
+    min-height: 34px;
+    padding: 0 10px;
+    font-size: 0.76rem;
   }
 
   .workspace {
     grid-template-columns: 1fr;
-    grid-template-rows: auto minmax(420px, 1fr);
-    gap: 14px;
+    grid-template-rows: minmax(0, 1fr);
+    gap: 0;
+    padding: 10px;
+  }
+
+  .sessionBackdrop.open {
+    position: fixed;
+    inset: 0;
+    z-index: 8;
+    display: block;
+    border: 0;
+    background: rgba(28, 33, 27, 0.24);
+    backdrop-filter: blur(2px);
   }
 
   .sessionPanel {
-    position: static;
-    max-height: 260px;
+    position: fixed;
+    inset: 0 auto 0 0;
+    z-index: 9;
+    width: min(360px, 88vw);
+    max-height: none;
+    border-radius: 0 8px 8px 0;
+    transform: translateX(-104%);
+    transition: transform 180ms ease;
+  }
+
+  .sessionPanel.open {
+    transform: translateX(0);
+  }
+
+  .drawerCloseButton {
+    display: inline-grid;
+    place-items: center;
   }
 
   .transcriptPanel {
-    min-height: 55dvh;
+    min-height: 0;
+    border-radius: 8px;
+  }
+
+  .transcriptHeader {
+    padding: 12px 14px;
+  }
+
+  .tokenCount {
+    font-size: 0.7rem;
+    text-align: right;
+  }
+
+  .languageRail {
+    padding: 7px 14px;
+  }
+
+  .startPanel {
+    padding: 14px;
+  }
+
+  .startPanelFooter {
+    position: sticky;
+    bottom: 0;
+    margin: 0 -14px -14px;
+    padding: 10px 14px 14px;
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.96));
+  }
+
+  .startPanelFooter .primaryButton,
+  .startPanelFooter .secondaryButton {
+    width: 100%;
   }
 }
 
 @media (max-width: 560px) {
   .topBar {
-    padding-top: 14px;
-  }
-
-  .brandMark {
-    width: 46px;
-    height: 46px;
-    border-radius: 14px;
-  }
-
-  .brandMark svg {
-    width: 36px;
-    height: 36px;
+    padding-top: 9px;
   }
 
   .subhead {
@@ -948,7 +1078,7 @@ textarea:focus {
   }
 
   .workspace {
-    padding-top: 12px;
+    padding: 8px;
   }
 
   .startFields,
@@ -958,6 +1088,63 @@ textarea:focus {
   .languageRail,
   .speakerRow {
     grid-template-columns: 1fr;
+  }
+
+  .languageRail {
+    gap: 4px;
+  }
+
+  .languageMenu {
+    padding: 0;
+  }
+
+  .languageMenu + .languageMenu {
+    border-left: 0;
+    border-top: 1px solid rgba(44, 48, 39, 0.1);
+  }
+
+  .languageMenu summary {
+    min-height: 34px;
+  }
+
+  .transcriptHeader {
+    align-items: start;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .tokenCount {
+    text-align: left;
+  }
+
+  .speakerCountPicker {
+    align-items: start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .audienceOptions {
+    gap: 5px;
+  }
+
+  .audienceOption {
+    min-height: 34px;
+  }
+
+  .contextField textarea {
+    min-height: 118px;
+  }
+
+  .transcriptPanel.setupMode .contextField textarea {
+    min-height: 130px;
+  }
+
+  .phrase {
+    padding: 8px 9px;
+  }
+
+  .lineBox {
+    padding-left: 8px;
   }
 
   .speakerReviewHeader {

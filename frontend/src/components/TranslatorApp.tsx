@@ -219,6 +219,7 @@ export function TranslatorApp() {
   const [savingReview, setSavingReview] = useState(false);
   const [sessions, setSessions] = useState<SessionSummary[]>([]);
   const [sessionsExpanded, setSessionsExpanded] = useState(false);
+  const [sessionsOpen, setSessionsOpen] = useState(false);
   const [loadingSession, setLoadingSession] = useState("");
 
   const wsRef = useRef<WebSocket | null>(null);
@@ -417,6 +418,7 @@ export function TranslatorApp() {
       setSelectedSpeaker(null);
       shouldFollowFeedRef.current = true;
       setStatus("stopped");
+      setSessionsOpen(false);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not load session.");
     } finally {
@@ -443,6 +445,7 @@ export function TranslatorApp() {
     setExpectedSpeakerCount("6");
     shouldFollowFeedRef.current = true;
     setStatus("idle");
+    setSessionsOpen(false);
   }
 
   function toggleSourceLanguage(code: string) {
@@ -621,6 +624,16 @@ export function TranslatorApp() {
   return (
     <main className="appShell">
       <header className="topBar">
+        <button
+          aria-label="Open sessions"
+          className="menuButton"
+          onClick={() => setSessionsOpen(true)}
+          type="button"
+        >
+          <span />
+          <span />
+          <span />
+        </button>
         <div className="identity">
           <div className="brandLockup">
             <BrandMark />
@@ -636,6 +649,12 @@ export function TranslatorApp() {
       </header>
 
       <section className="workspace">
+        <button
+          aria-label="Close sessions"
+          className={`sessionBackdrop ${sessionsOpen ? "open" : ""}`}
+          onClick={() => setSessionsOpen(false)}
+          type="button"
+        />
         <SessionSidebar
           activeDurationSeconds={activeDurationSeconds}
           activeSession={activeSession}
@@ -643,7 +662,9 @@ export function TranslatorApp() {
           expanded={sessionsExpanded}
           groups={visibleSessionGroups}
           hasMore={sessions.length > countGroupedSessions(visibleSessionGroups)}
+          isOpen={sessionsOpen}
           loadingSession={loadingSession}
+          onClose={() => setSessionsOpen(false)}
           onLoad={loadSession}
           onNew={newSession}
           onToggleExpanded={() => setSessionsExpanded((current) => !current)}
@@ -767,7 +788,9 @@ function SessionSidebar({
   expanded,
   groups,
   hasMore,
+  isOpen,
   loadingSession,
+  onClose,
   onLoad,
   onNew,
   onToggleExpanded,
@@ -779,22 +802,29 @@ function SessionSidebar({
   expanded: boolean;
   groups: SessionGroup[];
   hasMore: boolean;
+  isOpen: boolean;
   loadingSession: string;
+  onClose: () => void;
   onLoad: (name: string) => void;
   onNew: () => void;
   onToggleExpanded: () => void;
   total: number;
 }) {
   return (
-    <aside className="sessionPanel" aria-label="Sessions">
+    <aside className={`sessionPanel ${isOpen ? "open" : ""}`} aria-label="Sessions">
       <div className="sessionPanelHeader">
         <div>
           <p className="panelKicker">sessions</p>
           <h2>History</h2>
         </div>
-        <button className="secondaryButton compactButton" onClick={onNew} type="button">
-          New
-        </button>
+        <div className="sessionHeaderActions">
+          <button className="secondaryButton compactButton" onClick={onNew} type="button">
+            New
+          </button>
+          <button aria-label="Close sessions" className="drawerCloseButton" onClick={onClose} type="button">
+            ×
+          </button>
+        </div>
       </div>
 
       <div className="sessionList">
