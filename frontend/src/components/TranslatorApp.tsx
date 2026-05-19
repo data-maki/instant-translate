@@ -161,6 +161,7 @@ const AUDIENCE_PRESETS: {
 ];
 
 const PRIMARY_AUDIENCE_PRESET_COUNT = 5;
+const SPEAKER_COUNT_OPTIONS = ["2", "3", "4", "5", "6"];
 
 type SpeakerDraft = {
   mergeInto: string;
@@ -194,7 +195,7 @@ export function TranslatorApp() {
   const [languages, setLanguages] = useState<Language[]>([]);
   const [sourceALanguages, setSourceALanguages] = useState(["ja"]);
   const [sourceB, setSourceB] = useState("en");
-  const [expectedSpeakerCount, setExpectedSpeakerCount] = useState("");
+  const [expectedSpeakerCount, setExpectedSpeakerCount] = useState("6");
   const [audiencePreset, setAudiencePreset] = useState(DEFAULT_AUDIENCE_PRESET);
   const [audienceExpanded, setAudienceExpanded] = useState(false);
   const [context, setContext] = useState(BASE_CONTEXT);
@@ -402,7 +403,7 @@ export function TranslatorApp() {
       setSourceB(loadedTarget);
       setContext(stripRegisterBlock(detail.session.context || BASE_CONTEXT) || BASE_CONTEXT);
       setExpectedSpeakerCount(
-        detail.session.expected_speaker_count ? String(detail.session.expected_speaker_count) : ""
+        detail.session.expected_speaker_count ? String(detail.session.expected_speaker_count) : "6"
       );
       setPhrases(detail.phrases || []);
       setTokenCount(detail.session.tokens?.length || detail.phrases?.length || 0);
@@ -439,6 +440,7 @@ export function TranslatorApp() {
     setTokenCount(0);
     setActiveDurationSeconds(null);
     setSessionStartedAt(null);
+    setExpectedSpeakerCount("6");
     shouldFollowFeedRef.current = true;
     setStatus("idle");
   }
@@ -676,16 +678,11 @@ export function TranslatorApp() {
             </div>
 
             <div className="startFields">
-              <label>
-                Expected speakers
-                <input
-                  value={expectedSpeakerCount}
-                  onChange={(event) => setExpectedSpeakerCount(event.target.value)}
-                  placeholder="6"
-                  inputMode="numeric"
-                  disabled={isLive}
-                />
-              </label>
+              <SpeakerCountPicker
+                disabled={isLive}
+                onChange={setExpectedSpeakerCount}
+                value={expectedSpeakerCount}
+              />
               <AudiencePicker
                 disabled={isLive}
                 expanded={audienceExpanded}
@@ -904,6 +901,36 @@ function LanguagePicker({
         </div>
       </details>
     </>
+  );
+}
+
+function SpeakerCountPicker({
+  disabled,
+  onChange,
+  value
+}: {
+  disabled: boolean;
+  onChange: (count: string) => void;
+  value: string;
+}) {
+  return (
+    <div className="speakerCountPicker" role="group" aria-label="Expected speakers">
+      <span className="setupFieldLabel">Expected speakers</span>
+      <div className="speakerCountOptions">
+        {SPEAKER_COUNT_OPTIONS.map((count) => (
+          <button
+            aria-pressed={value === count}
+            className={`speakerCountOption ${value === count ? "active" : ""}`}
+            disabled={disabled}
+            key={count}
+            onClick={() => onChange(count)}
+            type="button"
+          >
+            {count === "6" ? "6+" : count}
+          </button>
+        ))}
+      </div>
+    </div>
   );
 }
 

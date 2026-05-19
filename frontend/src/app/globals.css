@@ -545,6 +545,50 @@ textarea:focus {
   gap: 8px;
 }
 
+.speakerCountPicker {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.setupFieldLabel {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 780;
+}
+
+.speakerCountOptions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.speakerCountOption {
+  min-width: 42px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.82);
+  color: var(--foreground);
+  font-size: 0.78rem;
+  font-weight: 820;
+}
+
+.speakerCountOption.active {
+  border-color: rgba(49, 95, 69, 0.42);
+  background: rgba(223, 233, 220, 0.7);
+}
+
+.speakerCountOption:focus-visible {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px rgba(36, 88, 166, 0.13);
+  outline: none;
+}
+
 .audiencePicker {
   grid-column: 1 / -1;
   display: grid;
@@ -563,13 +607,13 @@ textarea:focus {
 }
 
 .audienceOptions {
-  display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
 }
 
 .audienceOptions.secondary {
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  display: flex;
 }
 
 .audienceOption {
@@ -577,14 +621,14 @@ textarea:focus {
   display: flex;
   align-items: flex-start;
   gap: 7px;
-  min-height: 38px;
+  min-height: 32px;
   min-width: 0;
-  padding: 7px 9px;
+  padding: 6px 10px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.82);
   color: var(--foreground);
-  font-size: 0.8rem;
+  font-size: 0.78rem;
   font-weight: 800;
   line-height: 1.18;
 }
