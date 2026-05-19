@@ -3,6 +3,10 @@ output/
 old/
 eval/
 
+TOOLCALLING_FAILURES.md
+MISTAKES.md
+LEARNINGS.md
+
 .env
 
 # Audio files
