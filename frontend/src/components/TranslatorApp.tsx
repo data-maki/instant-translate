@@ -4,11 +4,14 @@ import type { CSSProperties } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchLanguages,
+  fetchSessionDetail,
+  fetchSessions,
   Language,
   Phrase,
   rediarizeSession,
   retranslateSession,
   saveSpeakerReview,
+  SessionSummary,
   SpeakerReviewRow,
   TranscriptEvent,
   websocketUrl
@@ -40,6 +43,11 @@ type SpeakerSummary = {
   sample: string;
 };
 
+type SessionGroup = {
+  label: string;
+  sessions: SessionSummary[];
+};
+
 const SPEAKER_COLORS = [
   "#2f6f55",
   "#b45f2a",
@@ -56,7 +64,6 @@ export function TranslatorApp() {
   const [sourceA, setSourceA] = useState("ja");
   const [sourceB, setSourceB] = useState("en");
   const [targetLanguage, setTargetLanguage] = useState("en");
-  const [sessionName, setSessionName] = useState("");
   const [expectedSpeakerCount, setExpectedSpeakerCount] = useState("");
   const [expectedSpeakerNames, setExpectedSpeakerNames] = useState("");
   const [context, setContext] = useState(DEFAULT_CONTEXT);
@@ -66,6 +73,7 @@ export function TranslatorApp() {
   const [tokenCount, setTokenCount] = useState(0);
   const [savedPath, setSavedPath] = useState("");
   const [activeSession, setActiveSession] = useState("");
+  const [activeSessionTitle, setActiveSessionTitle] = useState("");
   const [rediarizeStatus, setRediarizeStatus] = useState("");
   const [rediarizing, setRediarizing] = useState(false);
   const [translationStatus, setTranslationStatus] = useState("");
@@ -75,6 +83,9 @@ export function TranslatorApp() {
   const [selectedSpeaker, setSelectedSpeaker] = useState<string | null>(null);
   const [reviewStatus, setReviewStatus] = useState("");
   const [savingReview, setSavingReview] = useState(false);
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [sessionsExpanded, setSessionsExpanded] = useState(false);
+  const [loadingSession, setLoadingSession] = useState("");
 
   const wsRef = useRef<WebSocket | null>(null);
   const recorderRef = useRef<RecorderHandle | null>(null);
@@ -91,6 +102,10 @@ export function TranslatorApp() {
         setError(err instanceof Error ? err.message : "Could not load backend languages.");
         setStatus("error");
       });
+  }, []);
+
+  useEffect(() => {
+    refreshSessions();
   }, []);
 
   useEffect(() => {
@@ -120,6 +135,13 @@ export function TranslatorApp() {
   const statusLabel = status === "requesting microphone" ? "mic access" : status;
   const speakerNames = expectedSpeakerNames.split(",").map((name) => name.trim()).filter(Boolean);
   const speakerSummaries = useMemo(() => summarizeSpeakers(phrases), [phrases]);
+  const sessionGroups = useMemo(() => groupSessions(sessions), [sessions]);
+  const visibleSessionGroups = useMemo(() => {
+    if (sessionsExpanded) {
+      return sessionGroups;
+    }
+    return limitSessionGroups(sessionGroups, 8);
+  }, [sessionGroups, sessionsExpanded]);
   const displayedPhrases = useMemo(() => {
     const compacted = compactPhrases(phrases);
     return selectedSpeaker
@@ -131,6 +153,7 @@ export function TranslatorApp() {
     setError("");
     setSavedPath("");
     setActiveSession("");
+    setActiveSessionTitle("New chat");
     setRediarizeStatus("");
     setTranslationStatus("");
     setReviewStatus("");
@@ -159,7 +182,7 @@ export function TranslatorApp() {
         socket.send(
           JSON.stringify({
             type: "start",
-            session_name: sessionName,
+            session_name: "",
             source_languages: [sourceA, sourceB],
             target_language: targetLanguage,
             expected_speaker_count: expectedSpeakerCount ? Number(expectedSpeakerCount) : null,
@@ -193,6 +216,72 @@ export function TranslatorApp() {
     }
   }
 
+  async function refreshSessions() {
+    try {
+      const result = await fetchSessions();
+      setSessions(result.sessions);
+    } catch {
+      // The main health/language load already exposes backend connection errors.
+    }
+  }
+
+  async function loadSession(name: string) {
+    if (isLive) {
+      return;
+    }
+    setError("");
+    setLoadingSession(name);
+    try {
+      const detail = await fetchSessionDetail(name);
+      if (!detail.session) {
+        throw new Error("Session not found.");
+      }
+      const sourceLanguages = detail.session.source_languages || [sourceA, sourceB];
+      setActiveSession(detail.session.name);
+      setActiveSessionTitle(detail.session.title || "New chat");
+      setSourceA(sourceLanguages[0] || sourceA);
+      setSourceB(sourceLanguages[1] || sourceB);
+      setTargetLanguage(detail.session.target_language || targetLanguage);
+      setContext(detail.session.context || DEFAULT_CONTEXT);
+      setExpectedSpeakerCount(
+        detail.session.expected_speaker_count ? String(detail.session.expected_speaker_count) : ""
+      );
+      setExpectedSpeakerNames((detail.session.expected_speaker_names || []).join(", "));
+      setPhrases(detail.phrases || []);
+      setTokenCount(detail.session.tokens?.length || detail.phrases?.length || 0);
+      setSavedPath(detail.session.artifact?.path || "");
+      setRediarizeStatus("");
+      setTranslationStatus("");
+      setReviewStatus("");
+      setSpeakerDrafts({});
+      setSelectedSpeaker(null);
+      shouldFollowFeedRef.current = true;
+      setStatus("stopped");
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not load session.");
+    } finally {
+      setLoadingSession("");
+    }
+  }
+
+  function newSession() {
+    if (isLive) {
+      return;
+    }
+    setSavedPath("");
+    setActiveSession("");
+    setActiveSessionTitle("");
+    setRediarizeStatus("");
+    setTranslationStatus("");
+    setReviewStatus("");
+    setSpeakerDrafts({});
+    setSelectedSpeaker(null);
+    setPhrases([]);
+    setTokenCount(0);
+    shouldFollowFeedRef.current = true;
+    setStatus("idle");
+  }
+
   function handleServerEvent(message: TranscriptEvent) {
     if (message.type === "status") {
       setStatus(message.status === "listening" ? "listening" : "stopped");
@@ -200,6 +289,7 @@ export function TranslatorApp() {
     }
     if (message.type === "session") {
       setActiveSession(message.session.name);
+      setActiveSessionTitle(message.session.title || "New chat");
       setTokenCount(message.session.token_count);
       return;
     }
@@ -209,9 +299,12 @@ export function TranslatorApp() {
       return;
     }
     if (message.type === "saved") {
+      setActiveSession(message.session);
+      setActiveSessionTitle(message.title || "New chat");
       setSavedPath(message.path);
       setPhrases(message.phrases);
       setTokenCount(message.token_count);
+      refreshSessions();
       return;
     }
     if (message.type === "error") {
@@ -223,15 +316,22 @@ export function TranslatorApp() {
 
   function stop() {
     setStatus("stopping");
+    recorderRef.current?.stop();
+    recorderRef.current = null;
     try {
       wsRef.current?.send(JSON.stringify({ type: "stop" }));
     } catch {
       // The close path below handles already-closed sockets.
     }
     window.setTimeout(() => {
-      cleanup();
-      setStatus("stopped");
-    }, 350);
+      setStatus((current) => {
+        if (current === "stopping") {
+          cleanup();
+          return "stopped";
+        }
+        return current;
+      });
+    }, 45_000);
   }
 
   async function improveSpeakersAndTranslations() {
@@ -342,51 +442,93 @@ export function TranslatorApp() {
       </header>
 
       <section className="workspace">
-        <aside className="controlPanel" aria-label="Session controls">
-          <div className="pairStrip" aria-label="Active language pair">
-            <span>日本語</span>
-            <strong aria-hidden="true">↔</strong>
-            <span>English</span>
-          </div>
+        <SessionSidebar
+          activeSession={activeSession}
+          activeSessionTitle={activeSessionTitle}
+          expanded={sessionsExpanded}
+          groups={visibleSessionGroups}
+          hasMore={sessions.length > countGroupedSessions(visibleSessionGroups)}
+          loadingSession={loadingSession}
+          onLoad={loadSession}
+          onNew={newSession}
+          onToggleExpanded={() => setSessionsExpanded((current) => !current)}
+          total={sessions.length}
+        />
 
-          <div className="fieldGroup">
-            <label>
-              Session
-              <input
-                value={sessionName}
-                onChange={(event) => setSessionName(event.target.value)}
-                placeholder="family-dinner"
-                disabled={isLive}
-              />
-            </label>
-            <p className="hint">Blank creates a timestamped web session. Saved transcripts stay under output/.</p>
+        <section className="transcriptPanel" aria-label="Live transcript">
+          <div className="transcriptHeader">
+            <div>
+              <p className="panelKicker">conversation</p>
+              <h2>Live transcript</h2>
+            </div>
+            <span className="tokenCount">{tokenCount} final tokens</span>
           </div>
-
-          <div className="fieldGroup">
-            <label>
-              Expected speakers
-              <input
-                value={expectedSpeakerCount}
-                onChange={(event) => setExpectedSpeakerCount(event.target.value)}
-                placeholder="6"
-                inputMode="numeric"
-                disabled={isLive}
-              />
-            </label>
-            <label>
-              Speaker names
-              <input
-                value={expectedSpeakerNames}
-                onChange={(event) => setExpectedSpeakerNames(event.target.value)}
-                placeholder="Aiko, Jan, Maria"
-                disabled={isLive}
-              />
-            </label>
-            <p className="hint">Optional. Used later for fast label/merge review; it does not force Soniox to merge speakers.</p>
+          <div className="languageRail" aria-label="Transcript languages">
+            {[sourceA, sourceB].map((code) => {
+              const language = languageMap.get(code);
+              return (
+                <span key={code}>
+                  {language?.flag} {language?.name ?? code.toUpperCase()}
+                </span>
+              );
+            })}
           </div>
+          <section className="startPanel" aria-label="Start conversation">
+            <div className="startPanelHeader">
+              <div>
+                <p className="panelKicker">new conversation</p>
+                <h3>{activeSessionTitle || "Start a session"}</h3>
+              </div>
+              <div className="actions compactActions">
+                <button className="primaryButton" onClick={start} disabled={!canStart || sourceA === sourceB}>
+                  Listen
+                </button>
+                <button className="secondaryButton" onClick={stop} disabled={!isLive}>
+                  Stop
+                </button>
+              </div>
+            </div>
 
-          <div className="fieldGroup">
-            <div className="fieldRow">
+            <div className="startFields">
+              <label>
+                Expected speakers
+                <input
+                  value={expectedSpeakerCount}
+                  onChange={(event) => setExpectedSpeakerCount(event.target.value)}
+                  placeholder="6"
+                  inputMode="numeric"
+                  disabled={isLive}
+                />
+              </label>
+              <label>
+                Speaker names
+                <input
+                  value={expectedSpeakerNames}
+                  onChange={(event) => setExpectedSpeakerNames(event.target.value)}
+                  placeholder="Aiko, Jan, Maria"
+                  disabled={isLive}
+                />
+              </label>
+              <label>
+                Translation focus
+                <select
+                  value={targetLanguage}
+                  onChange={(event) => setTargetLanguage(event.target.value)}
+                  disabled={isLive}
+                >
+                  {[sourceA, sourceB].map((code) => {
+                    const language = languageMap.get(code);
+                    return (
+                      <option key={code} value={code}>
+                        {language?.flag ?? ""} {language?.name ?? code.toUpperCase()}
+                      </option>
+                    );
+                  })}
+                </select>
+              </label>
+            </div>
+
+            <div className="startFields languageFields">
               <label>
                 Language A
                 <select value={sourceA} onChange={(event) => setSourceA(event.target.value)} disabled={isLive}>
@@ -407,79 +549,30 @@ export function TranslatorApp() {
                   ))}
                 </select>
               </label>
+              <label className="contextField">
+                Context hint
+                <textarea value={context} onChange={(event) => setContext(event.target.value)} disabled={isLive} />
+              </label>
             </div>
-            <label>
-              Translation focus
-              <select
-                value={targetLanguage}
-                onChange={(event) => setTargetLanguage(event.target.value)}
-                disabled={isLive}
-              >
-                {[sourceA, sourceB].map((code) => {
-                  const language = languageMap.get(code);
-                  return (
-                    <option key={code} value={code}>
-                      {language?.flag ?? ""} {language?.name ?? code.toUpperCase()}
-                    </option>
-                  );
-                })}
-              </select>
-            </label>
-          </div>
 
-          <label>
-            Context hint
-            <textarea value={context} onChange={(event) => setContext(event.target.value)} disabled={isLive} />
-          </label>
-
-          <div className="actions">
-            <button className="primaryButton" onClick={start} disabled={!canStart || sourceA === sourceB}>
-              Listen
-            </button>
-            <button className="secondaryButton" onClick={stop} disabled={!isLive}>
-              Stop
-            </button>
-          </div>
-
-          <div className="statusBox">
-            <strong>{activeSession || "No active session"}</strong>
-            <span>{sourceA.toUpperCase()} ↔ {sourceB.toUpperCase()} · focus {targetLanguage.toUpperCase()}</span>
-            <span>Browser audio is converted to 16 kHz mono PCM before streaming.</span>
-            {savedPath ? <span>Saved: {savedPath}</span> : null}
-            {rediarizeStatus ? <span>{rediarizeStatus}</span> : null}
-            {translationStatus ? <span>{translationStatus}</span> : null}
-            {reviewStatus ? <span>{reviewStatus}</span> : null}
-          </div>
-
-          <button
-            className="primaryButton fullWidthButton"
-            onClick={improveSpeakersAndTranslations}
-            disabled={!activeSession || isLive || postProcessing}
-          >
-            {improvingAll ? "Improving transcript..." : "Improve transcript"}
-          </button>
-
-          {error ? <div className="errorBox">{error}</div> : null}
-        </aside>
-
-        <section className="transcriptPanel" aria-label="Live transcript">
-          <div className="transcriptHeader">
-            <div>
-              <p className="panelKicker">conversation</p>
-              <h2>Live transcript</h2>
+            <div className="statusBox inlineStatus">
+              <strong>{activeSessionTitle || "No active session"}</strong>
+              <span>{sourceA.toUpperCase()} ↔ {sourceB.toUpperCase()} · focus {targetLanguage.toUpperCase()}</span>
+              {savedPath ? <span>Saved: {savedPath}</span> : null}
+              {rediarizeStatus ? <span>{rediarizeStatus}</span> : null}
+              {translationStatus ? <span>{translationStatus}</span> : null}
+              {reviewStatus ? <span>{reviewStatus}</span> : null}
             </div>
-            <span className="tokenCount">{tokenCount} final tokens</span>
-          </div>
-          <div className="languageRail" aria-label="Transcript languages">
-            {[sourceA, sourceB].map((code) => {
-              const language = languageMap.get(code);
-              return (
-                <span key={code}>
-                  {language?.flag} {language?.name ?? code.toUpperCase()}
-                </span>
-              );
-            })}
-          </div>
+
+            <button
+              className="secondaryButton fullWidthButton"
+              onClick={improveSpeakersAndTranslations}
+              disabled={!activeSession || isLive || postProcessing}
+            >
+              {improvingAll ? "Improving transcript..." : "Improve transcript"}
+            </button>
+            {error ? <div className="errorBox">{error}</div> : null}
+          </section>
           {speakerSummaries.length > 0 ? (
             <SpeakerReviewPanel
               drafts={speakerDrafts}
@@ -514,6 +607,86 @@ export function TranslatorApp() {
         </section>
       </section>
     </main>
+  );
+}
+
+function SessionSidebar({
+  activeSession,
+  activeSessionTitle,
+  expanded,
+  groups,
+  hasMore,
+  loadingSession,
+  onLoad,
+  onNew,
+  onToggleExpanded,
+  total
+}: {
+  activeSession: string;
+  activeSessionTitle: string;
+  expanded: boolean;
+  groups: SessionGroup[];
+  hasMore: boolean;
+  loadingSession: string;
+  onLoad: (name: string) => void;
+  onNew: () => void;
+  onToggleExpanded: () => void;
+  total: number;
+}) {
+  return (
+    <aside className="sessionPanel" aria-label="Sessions">
+      <div className="sessionPanelHeader">
+        <div>
+          <p className="panelKicker">sessions</p>
+          <h2>History</h2>
+        </div>
+        <button className="secondaryButton compactButton" onClick={onNew} type="button">
+          New
+        </button>
+      </div>
+
+      <div className="sessionList">
+        {activeSession && !groups.some((group) => group.sessions.some((session) => session.name === activeSession)) ? (
+          <section className="sessionGroup">
+            <h3>Current</h3>
+            <button className="sessionButton active" disabled type="button">
+              <strong>{activeSessionTitle || "New chat"}</strong>
+              <span>recording</span>
+            </button>
+          </section>
+        ) : null}
+        {groups.length === 0 && !activeSession ? (
+          <p className="hint">Past conversations will appear here after recording.</p>
+        ) : (
+          groups.map((group) => (
+            <section className="sessionGroup" key={group.label}>
+              <h3>{group.label}</h3>
+              {group.sessions.map((session) => (
+                <button
+                  className={`sessionButton ${activeSession === session.name ? "active" : ""}`}
+                  disabled={Boolean(loadingSession)}
+                  key={session.name}
+                  onClick={() => onLoad(session.name)}
+                  type="button"
+                >
+                  <strong>{session.title || session.name}</strong>
+                  <span>
+                    {session.token_count} tokens
+                    {loadingSession === session.name ? " · loading" : ""}
+                  </span>
+                </button>
+              ))}
+            </section>
+          ))
+        )}
+      </div>
+
+      {hasMore || expanded ? (
+        <button className="filterButton fullWidthButton" onClick={onToggleExpanded} type="button">
+          {expanded ? "Show fewer" : `Show all ${total}`}
+        </button>
+      ) : null}
+    </aside>
   );
 }
 
@@ -746,4 +919,45 @@ function speakerColor(id: string): string {
     hash = (hash * 31 + char.charCodeAt(0)) % 9973;
   }
   return SPEAKER_COLORS[hash % SPEAKER_COLORS.length];
+}
+
+function groupSessions(sessions: SessionSummary[]): SessionGroup[] {
+  const now = Date.now();
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const groups = new Map<string, SessionSummary[]>();
+
+  for (const session of sessions) {
+    const updated = session.updated ? new Date(session.updated).getTime() : 0;
+    const label = updated >= todayStart.getTime()
+      ? "Today"
+      : now - updated <= 7 * 24 * 60 * 60 * 1000
+        ? "Last week"
+        : "Older";
+    groups.set(label, [...(groups.get(label) || []), session]);
+  }
+
+  return ["Today", "Last week", "Older"]
+    .map((label) => ({ label, sessions: groups.get(label) || [] }))
+    .filter((group) => group.sessions.length > 0);
+}
+
+function limitSessionGroups(groups: SessionGroup[], limit: number): SessionGroup[] {
+  let remaining = limit;
+  const visible: SessionGroup[] = [];
+  for (const group of groups) {
+    if (remaining <= 0) {
+      break;
+    }
+    const sessions = group.sessions.slice(0, remaining);
+    if (sessions.length > 0) {
+      visible.push({ label: group.label, sessions });
+      remaining -= sessions.length;
+    }
+  }
+  return visible;
+}
+
+function countGroupedSessions(groups: SessionGroup[]): number {
+  return groups.reduce((count, group) => count + group.sessions.length, 0);
 }

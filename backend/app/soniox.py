@@ -9,7 +9,7 @@ from typing import Any, Awaitable, Callable
 
 import websockets
 
-from .sessions import DEFAULT_CONTEXT, build_phrases, make_session, process_soniox_tokens
+from .sessions import DEFAULT_CONTEXT, build_phrases, make_session, process_soniox_tokens, summarize_finished_session
 
 
 SONIOX_WEBSOCKET_URL = "wss://stt-rt.soniox.com/transcribe-websocket"
@@ -77,6 +77,7 @@ async def run_transcription_bridge(
         "type": "session",
         "session": {
             "name": session.name,
+            "title": "New chat",
             "source_languages": session.source_languages,
             "target_language": session.target_language,
             "expected_speaker_count": session.expected_speaker_count,
@@ -160,16 +161,20 @@ async def run_transcription_bridge(
         if session.final_tokens:
             try:
                 path = session.save_segment()
-                await send_event(saved_transcript_event(session, path))
+                summary = summarize_finished_session(session)
+                await send_event(saved_transcript_event(session, path, summary))
             except OSError as exc:
                 await send_event({"type": "error", "message": f"Failed to save session: {exc}"})
         await send_event({"type": "status", "status": "stopped"})
 
 
-def saved_transcript_event(session, path) -> dict[str, Any]:
+def saved_transcript_event(session, path, summary: dict[str, str] | None = None) -> dict[str, Any]:
     return {
         "type": "saved",
+        "session": session.name,
         "path": str(path),
+        "title": summary.get("title") if summary else "New chat",
+        "summary": summary.get("summary") if summary else None,
         "phrases": build_phrases(session, []),
         "token_count": len(session.final_tokens),
     }
