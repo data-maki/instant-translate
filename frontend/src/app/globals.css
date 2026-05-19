@@ -65,13 +65,29 @@ button {
 
 .topBar {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr auto auto;
   gap: 20px;
   align-items: center;
   padding: 20px clamp(14px, 3vw, 34px) 16px;
   border-bottom: 1px solid var(--line);
   background: rgba(251, 250, 246, 0.86);
   backdrop-filter: blur(16px);
+}
+
+.topLink {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 36px;
+  padding: 0 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.88);
+  color: var(--foreground);
+  font-size: 0.82rem;
+  font-weight: 800;
+  text-decoration: none;
+  box-shadow: 0 8px 20px rgba(44, 48, 39, 0.08);
 }
 
 .menuButton {
@@ -164,6 +180,9 @@ h1 {
   font-size: clamp(1.45rem, 3.3vw, 2.4rem);
   line-height: 1.08;
   font-weight: 850;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .subhead {
@@ -433,10 +452,11 @@ textarea:focus {
 }
 
 .transcriptPanel.setupMode .startPanel {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  align-content: start;
   flex: 1 1 auto;
   min-height: 0;
+  overflow-y: auto;
 }
 
 .transcriptPanel.setupMode .feed {
@@ -589,13 +609,23 @@ textarea:focus {
   gap: 8px;
 }
 
+.quickStartFields {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(170px, 220px);
+  gap: 10px;
+  align-items: end;
+}
+
 .speakerCountPicker {
-  grid-column: 1 / -1;
   display: flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
   min-width: 0;
+}
+
+.quickStartFields .speakerCountPicker {
+  grid-column: auto;
 }
 
 .setupFieldLabel {
@@ -707,6 +737,7 @@ textarea:focus {
 
 .audienceMore {
   justify-self: start;
+  min-height: 34px;
 }
 
 .compactSelect {
@@ -719,110 +750,363 @@ textarea:focus {
   min-height: 0;
 }
 
-.transcriptPanel.setupMode .contextFields {
-  flex: 1 1 auto;
-  height: 100%;
-}
-
 .contextField textarea {
   min-height: 44px;
   max-height: 90px;
 }
 
-.transcriptPanel.setupMode .contextField {
-  grid-template-rows: auto minmax(0, 1fr);
-  height: 100%;
-  min-height: 0;
-}
-
-.transcriptPanel.setupMode .contextField textarea {
-  height: 100%;
-  min-height: 0;
-  max-height: none;
-  resize: none;
+.advancedSetup .contextField textarea {
+  min-height: 76px;
+  max-height: 150px;
+  resize: vertical;
 }
 
 .profileFields {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
-.contextPreview {
+.gpsField {
   display: grid;
-  gap: 9px;
+  align-content: end;
+  gap: 6px;
+}
+
+.gpsField .secondaryButton {
+  width: 100%;
+}
+
+.advancedSetup {
+  display: grid;
+  gap: 10px;
   padding: 10px;
   border: 1px solid rgba(44, 48, 39, 0.1);
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.62);
+  background: rgba(255, 255, 255, 0.58);
 }
 
-.contextPreviewHeader {
+.advancedSetup summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.82rem;
+  font-weight: 850;
+}
+
+.advancedSetup[open] {
+  gap: 12px;
+}
+
+.advancedSetup[open] summary {
+  margin-bottom: 10px;
+}
+
+.profileSummary {
   display: flex;
-  align-items: start;
+  align-items: center;
   justify-content: space-between;
   gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(44, 48, 39, 0.1);
+  border-radius: 8px;
+  background: rgba(243, 245, 238, 0.62);
 }
 
-.contextPreviewHeader h4 {
-  margin: 0;
+.toneSummary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(49, 95, 69, 0.13);
+  border-radius: 8px;
+  background: rgba(223, 233, 220, 0.38);
+}
+
+.toneSummary strong {
   font-size: 0.9rem;
 }
 
-.contextPreviewHeader span {
+.toneSummary span {
   color: var(--muted);
-  font-size: 0.75rem;
+  font-size: 0.8rem;
+  font-weight: 780;
   white-space: nowrap;
 }
 
-.contextPreviewGrid {
+.profileSummary strong {
+  font-size: 0.88rem;
+}
+
+.profileLink {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+}
+
+.profilePage {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  width: min(980px, calc(100vw - 28px));
+  margin: 0 auto;
+  padding: 28px 0;
+}
+
+.profileHeader,
+.profileEditor {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: var(--shadow);
+}
+
+.profileHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 18px;
+}
+
+.profileHeader h1 {
+  font-size: 1.65rem;
+}
+
+.profileBackLink {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 14px;
+  text-decoration: none;
+}
+
+.profileEditor {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+}
+
+.profileIntro h2 {
+  margin: 0 0 6px;
+  font-size: 1.08rem;
+}
+
+.profileIntro p {
+  max-width: 700px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
+.profileGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.profileGrid textarea {
+  min-height: 112px;
+}
+
+.profileNameBlock {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 12px;
+}
+
+.profileNamePair {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.profileKatakana {
+  display: grid;
+  gap: 8px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.profileKatakanaHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
   gap: 8px;
 }
 
-.previewList {
-  display: grid;
-  align-content: start;
-  gap: 5px;
-  min-width: 0;
+.profileKatakanaLabel {
+  font-size: 0.88rem;
+  font-weight: 600;
 }
 
-.previewList strong {
-  font-size: 0.74rem;
+.profileKatakanaSuggest {
+  padding: 0 12px;
+  font-size: 0.85rem;
+}
+
+.profileKatakanaError {
+  margin: 0;
+  font-size: 0.82rem;
+  color: #9a3b32;
+}
+
+.profileKatakanaOptions {
+  display: grid;
+  gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+}
+
+.profileKatakanaOption {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  text-align: left;
+  font-family: inherit;
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.85);
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+
+.profileKatakanaOption:hover {
+  border-color: rgba(44, 48, 39, 0.35);
+}
+
+.profileKatakanaOption.active {
+  border-color: rgba(44, 48, 39, 0.55);
+  box-shadow: 0 0 0 1px rgba(44, 48, 39, 0.12);
+}
+
+.profileKatakanaOptionNames {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.profileKatakanaPart {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.profileKatakanaPartLabel {
+  font-size: 0.68rem;
   text-transform: uppercase;
+  letter-spacing: 0.04em;
   color: var(--muted);
 }
 
-.previewList ul {
+.profileKatakanaPartValue {
+  font-family: var(--font-jp, inherit), "Hiragino Sans", "Yu Gothic", sans-serif;
+  font-size: 1.02rem;
+}
+
+.profileKatakanaReading {
+  font-size: 0.8rem;
+  line-height: 1.25;
+  color: var(--muted);
+  font-weight: 500;
+  letter-spacing: 0.01em;
+}
+
+.profileKatakanaManualPair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.profileKatakanaLatinHint {
+  margin: 0;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
+.profileKatakanaLatinHint strong {
+  font-weight: 600;
+  color: var(--foreground, inherit);
+}
+
+.profileKatakanaManual {
+  margin: 0;
+}
+
+.profileKatakanaManual input {
+  font-family: var(--font-jp, inherit), "Hiragino Sans", "Yu Gothic", sans-serif;
+}
+
+.profileActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  align-items: center;
+}
+
+.profileActions .hint {
+  margin-right: auto;
+}
+
+@keyframes profileSaveHintPop {
+  from {
+    transform: translateY(1px);
+    opacity: 0.75;
+  }
+
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.profileSaveHint.profileSaveHint--ack {
+  color: #1b6b3f;
+  font-weight: 700;
+  animation: profileSaveHintPop 0.4s ease-out;
+}
+
+@keyframes profileSaveBtnPulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(49, 95, 69, 0.45);
+  }
+
+  70% {
+    box-shadow: 0 0 0 7px rgba(49, 95, 69, 0);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgba(49, 95, 69, 0);
+  }
+}
+
+.profileActions .primaryButton--savedAck {
+  animation: profileSaveBtnPulse 0.75s ease-out;
+}
+
+.contextExampleRow {
   display: flex;
   flex-wrap: wrap;
-  gap: 5px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
+  gap: 6px;
 }
 
-.previewList li,
-.previewList span {
-  min-width: 0;
-  padding: 4px 6px;
-  border-radius: 6px;
-  background: rgba(242, 239, 232, 0.8);
-  color: var(--ink);
-  font-size: 0.77rem;
-  overflow-wrap: anywhere;
-}
-
-.contextPreviewText {
-  margin: 0;
-  color: var(--muted);
+.contextExampleButton {
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--foreground);
   font-size: 0.78rem;
-  line-height: 1.35;
+  font-weight: 780;
 }
 
 .startPanelFooter {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+  margin-top: 2px;
 }
 
 .startPanelFooter .primaryButton,
@@ -1064,7 +1348,7 @@ textarea:focus {
     position: sticky;
     top: 0;
     z-index: 7;
-    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
     gap: 10px;
     padding: 10px 12px;
   }
@@ -1094,9 +1378,12 @@ textarea:focus {
 
   .connectionPill {
     justify-self: end;
+    justify-content: center;
+    width: 34px;
     min-height: 34px;
-    padding: 0 10px;
-    font-size: 0.76rem;
+    padding: 0;
+    gap: 0;
+    font-size: 0;
   }
 
   .workspace {
@@ -1158,9 +1445,20 @@ textarea:focus {
     padding: 14px;
   }
 
+  .quickStartFields {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .audiencePicker {
+    grid-column: auto;
+  }
+
+  .audienceOption {
+    min-height: 36px;
+  }
+
   .startPanelFooter {
-    position: sticky;
-    bottom: 0;
     margin: 0 -14px -14px;
     padding: 10px 14px 14px;
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.72), rgba(255, 255, 255, 0.96));
@@ -1189,10 +1487,22 @@ textarea:focus {
   .audienceOptions,
   .contextFields,
   .profileFields,
-  .contextPreviewGrid,
+  .profileGrid,
   .phraseLines,
   .languageRail,
   .speakerRow {
+    grid-template-columns: 1fr;
+  }
+
+  .profileNamePair {
+    grid-template-columns: 1fr;
+  }
+
+  .profileKatakanaManualPair {
+    grid-template-columns: 1fr;
+  }
+
+  .profileKatakanaOptionNames {
     grid-template-columns: 1fr;
   }
 
@@ -1229,6 +1539,11 @@ textarea:focus {
     gap: 6px;
   }
 
+  .toneSummary {
+    align-items: start;
+    flex-direction: column;
+  }
+
   .audienceOptions {
     gap: 5px;
   }
@@ -1238,11 +1553,7 @@ textarea:focus {
   }
 
   .contextField textarea {
-    min-height: 118px;
-  }
-
-  .transcriptPanel.setupMode .contextField textarea {
-    min-height: 130px;
+    min-height: 92px;
   }
 
   .phrase {
@@ -1268,5 +1579,11 @@ textarea:focus {
 
   .feed {
     padding: 12px;
+  }
+
+  .profileHeader,
+  .profileActions {
+    align-items: stretch;
+    flex-direction: column;
   }
 }

@@ -24,7 +24,7 @@ from .phrase_upgrade import (
     deepl_translate_url as _deepl_translate_url,
     translate_with_deepl as _translate_with_deepl,
 )
-from .sessions import DEFAULT_CONTEXT, build_phrases, make_session, read_session_state, list_sessions, sanitize_session_name, session_display_title, session_duration_seconds
+from .sessions import DEFAULT_CONTEXT, build_phrases, extract_openai_text, make_session, read_session_state, list_sessions, sanitize_session_name, session_display_title, session_duration_seconds
 from .soniox import NUM_CHANNELS, SAMPLE_RATE, run_transcription_bridge
 from cli.live_transcriber.async_diarize import AsyncDiarizeError, redo_diarization
 
@@ -153,6 +153,138 @@ def translate_context(payload: dict[str, Any]) -> dict[str, str]:
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     return {"target_translation": target_translation}
+
+
+def _openai_name_katakana_options(api_key: str, first_name: str, last_name: str) -> list[dict[str, str]]:
+    import requests
+
+    def _clip_reading(text: str, max_len: int = 48) -> str:
+        t = text.strip()
+        if len(t) <= max_len:
+            return t
+        return t[: max_len - 1].rstrip() + "…"
+
+    display = f"{first_name.strip()} {last_name.strip()}".strip()
+    prompt = {
+        "task": (
+            "Suggest Japanese katakana spellings for this person's name as used on reservations, "
+            "name tags, and introductions in Japan. Prefer common exophone renderings. "
+            "Split katakana into given name (first) and family name (last) as separate strings. "
+            "If only one English name part is provided, leave the unused katakana field as an empty string. "
+            "For each option you MUST also return first_reading_en and last_reading_en: very short Latin spellings "
+            "of how each katakana chunk sounds to an English speaker (like comparing Jan vs Yan vs Jaan for the "
+            "same given name). No full sentences, no parentheses, no Japanese in these two fields—only a few "
+            "Latin letters/words each (max about 24 characters per field). Return JSON only."
+        ),
+        "name": {"first_name": first_name.strip(), "last_name": last_name.strip(), "full_display": display},
+        "output_schema": {
+            "options": [
+                {
+                    "first_katakana": "katakana for given/first name or empty",
+                    "last_katakana": "katakana for family/last name or empty",
+                    "first_reading_en": "how the first katakana sounds in Latin letters, very short",
+                    "last_reading_en": "how the last katakana sounds in Latin letters, very short",
+                }
+            ]
+        },
+    }
+    model = os.environ.get("OPENAI_NAME_KATAKANA_MODEL", "gpt-4o-mini")
+    response = requests.post(
+        "https://api.openai.com/v1/responses",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json={
+            "model": model,
+            "input": json.dumps(prompt, ensure_ascii=False),
+            "text": {"format": {"type": "json_object"}},
+            "max_output_tokens": 360,
+        },
+        timeout=45,
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f"OpenAI name katakana request failed: {response.status_code} {response.text[:240]}")
+    raw_text = extract_openai_text(response.json())
+    payload = json.loads(raw_text)
+    options = payload.get("options")
+    if not isinstance(options, list):
+        raise RuntimeError("OpenAI response missing options array")
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for item in options:
+        if isinstance(item, str):
+            clean = item.strip()
+            if not clean:
+                continue
+            if "・" in clean:
+                a, _, b = clean.partition("・")
+                row = {
+                    "first_katakana": a.strip(),
+                    "last_katakana": b.strip(),
+                    "first_reading_en": _clip_reading(first_name.strip()),
+                    "last_reading_en": _clip_reading(last_name.strip()),
+                }
+            else:
+                row = {
+                    "first_katakana": clean,
+                    "last_katakana": "",
+                    "first_reading_en": _clip_reading(first_name.strip()),
+                    "last_reading_en": "",
+                }
+            key = (
+                row["first_katakana"],
+                row["last_katakana"],
+                row["first_reading_en"],
+                row["last_reading_en"],
+            )
+            if key not in seen and (row["first_katakana"] or row["last_katakana"]):
+                seen.add(key)
+                out.append(row)
+        elif isinstance(item, dict):
+            fk = str(item.get("first_katakana") or item.get("given_katakana") or "").strip()
+            lk = str(item.get("last_katakana") or item.get("family_katakana") or "").strip()
+            f_read = str(item.get("first_reading_en") or item.get("first_sound_en") or "").strip()
+            l_read = str(item.get("last_reading_en") or item.get("last_sound_en") or "").strip()
+            if not f_read and fk:
+                f_read = first_name.strip()
+            if not l_read and lk:
+                l_read = last_name.strip()
+            f_read = _clip_reading(f_read)
+            l_read = _clip_reading(l_read)
+            if not fk and not lk:
+                continue
+            key = (fk, lk, f_read, l_read)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(
+                {
+                    "first_katakana": fk,
+                    "last_katakana": lk,
+                    "first_reading_en": f_read,
+                    "last_reading_en": l_read,
+                }
+            )
+        if len(out) >= 8:
+            break
+    return out
+
+
+@app.post("/context/name-katakana")
+def name_katakana_context(payload: dict[str, Any]) -> dict[str, Any]:
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Missing OPENAI_API_KEY.")
+
+    first_name = str(payload.get("first_name") or "").strip()
+    last_name = str(payload.get("last_name") or "").strip()
+    if not first_name and not last_name:
+        raise HTTPException(status_code=400, detail="Expected first_name and/or last_name.")
+
+    try:
+        options = _openai_name_katakana_options(api_key, first_name, last_name)
+    except (RuntimeError, json.JSONDecodeError, KeyError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return {"options": options}
 
 
 @app.get("/languages")

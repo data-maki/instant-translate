@@ -264,3 +264,54 @@ export async function translatePhrase(payload: {
   }
   return response.json();
 }
+
+export type NameKatakanaOption = {
+  first_katakana: string;
+  last_katakana: string;
+  /** Short Latin spelling of how the first katakana sounds (e.g. Jan vs Yan). */
+  first_reading_en: string;
+  /** Short Latin spelling of how the last katakana sounds. */
+  last_reading_en: string;
+};
+
+export type NameKatakanaResult = {
+  options: NameKatakanaOption[];
+};
+
+export async function fetchNameKatakanaOptions(payload: {
+  first_name: string;
+  last_name: string;
+}): Promise<NameKatakanaResult> {
+  const response = await fetch(`${apiBaseUrl()}/context/name-katakana`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `Could not load katakana suggestions (${response.status})`);
+  }
+  const raw = (await response.json()) as { options?: unknown };
+  const rows = Array.isArray(raw.options) ? raw.options : [];
+  const options: NameKatakanaOption[] = [];
+  for (const row of rows) {
+    if (!row || typeof row !== "object") {
+      continue;
+    }
+    const r = row as Record<string, unknown>;
+    const first_katakana = String(r.first_katakana ?? r.given_katakana ?? "").trim();
+    const last_katakana = String(r.last_katakana ?? r.family_katakana ?? "").trim();
+    const first_reading_en = String(r.first_reading_en ?? r.first_sound_en ?? "").trim();
+    const last_reading_en = String(r.last_reading_en ?? r.last_sound_en ?? "").trim();
+    if (!first_katakana && !last_katakana) {
+      continue;
+    }
+    options.push({
+      first_katakana,
+      last_katakana,
+      first_reading_en,
+      last_reading_en
+    });
+  }
+  return { options };
+}

@@ -258,6 +258,67 @@ def test_translate_context_runs_deepl_without_qwen(monkeypatch):
     assert captured["json"]["formality"] == "more"
 
 
+def test_name_katakana_requires_openai_key(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    response = TestClient(app).post("/context/name-katakana", json={"first_name": "John", "last_name": "Smith"})
+    assert response.status_code == 400
+    assert "OPENAI_API_KEY" in response.json()["detail"]
+
+
+def test_name_katakana_requires_non_empty_name(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    response = TestClient(app).post("/context/name-katakana", json={"first_name": "", "last_name": "  "})
+    assert response.status_code == 400
+
+
+def test_name_katakana_returns_options(monkeypatch):
+    import requests
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    class FakeOpenAIResponse:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            payload = {
+                "options": [
+                    {
+                        "first_katakana": "ジョン",
+                        "last_katakana": "スミス",
+                        "first_reading_en": "John",
+                        "last_reading_en": "Smith",
+                    },
+                    {
+                        "first_katakana": "ジョン",
+                        "last_katakana": "スミス",
+                        "first_reading_en": "Jon",
+                        "last_reading_en": "Smith",
+                    },
+                    {
+                        "first_katakana": "ジョン",
+                        "last_katakana": "スミス",
+                        "first_reading_en": "John",
+                        "last_reading_en": "Smith",
+                    },
+                ]
+            }
+            return {"output_text": json.dumps(payload)}
+
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: FakeOpenAIResponse())
+
+    response = TestClient(app).post(
+        "/context/name-katakana",
+        json={"first_name": "John", "last_name": "Smith"},
+    )
+    assert response.status_code == 200
+    data = response.json()["options"]
+    assert len(data) == 2
+    readings = {(row["first_reading_en"], row["last_reading_en"]) for row in data}
+    assert ("John", "Smith") in readings
+    assert ("Jon", "Smith") in readings
+
+
 def test_validate_language_pair_defaults_to_two_way_english_japanese():
     sources, target = validate_language_pair([], "")
     assert sources == ["en", "ja"]

@@ -1,11 +1,11 @@
 "use client";
 
 import type { CSSProperties } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { useMemo, useRef, useState } from "react";
 import {
   adaptPhrase,
   fetchPlacesContext,
-  fetchLanguages,
   fetchSessionDetail,
   fetchSessions,
   Language,
@@ -20,6 +20,12 @@ import {
   websocketUrl
 } from "@/lib/api";
 import { RecorderHandle, startPcmRecorder } from "@/lib/audio";
+import {
+  loadTravelerProfile,
+  profileKatakanaFullDisplay,
+  profileWesternFullName,
+  TravelerProfile
+} from "@/lib/profile";
 
 type AppStatus =
   | "idle"
@@ -48,10 +54,16 @@ type HiddenRegister =
   | "host_guest_respect"
   | "uchi_soto_business";
 
+type SessionIntent = "restaurant" | "train" | "family" | "shopping" | "doctor" | "custom";
+type DeepLFormality = "auto" | "more" | "less" | "default";
+
 const AUDIENCE_PRESETS: {
   id: string;
   emoji: string;
   label: string;
+  intent: SessionIntent;
+  deeplFormality: Exclude<DeepLFormality, "auto">;
+  tone: string;
   register: HiddenRegister;
   behavior: string;
 }[] = [
@@ -59,14 +71,42 @@ const AUDIENCE_PRESETS: {
     id: "tourism-staff",
     emoji: "🛍️",
     label: "Shops & hotels",
+    intent: "shopping",
+    deeplFormality: "more",
+    tone: "Polite customer Japanese",
     register: "polite_neutral",
     behavior:
       "Speak as a customer: polite, simple requests with desu/masu. No need to mirror service keigo; keep it practical for shops, restaurants, hotels, and travel."
   },
   {
+    id: "restaurant-staff",
+    emoji: "🍜",
+    label: "Restaurant staff",
+    intent: "restaurant",
+    deeplFormality: "more",
+    tone: "Polite customer Japanese",
+    register: "polite_neutral",
+    behavior:
+      "Speak as a restaurant customer: polite, clear, and practical. Use simple desu/masu requests and make allergies or payment requests explicit."
+  },
+  {
+    id: "station-staff",
+    emoji: "🚉",
+    label: "Station staff",
+    intent: "train",
+    deeplFormality: "more",
+    tone: "Polite practical Japanese",
+    register: "polite_neutral",
+    behavior:
+      "Speak as a traveler asking station or transport staff for help. Use short polite requests and favor clear words for route, platform, ticket gate, and last train."
+  },
+  {
     id: "stranger",
     emoji: "👋",
     label: "New person",
+    intent: "custom",
+    deeplFormality: "more",
+    tone: "Safe polite Japanese",
     register: "polite_neutral",
     behavior:
       "Use safe spoken desu/masu. Avoid plain-form directness, imperatives, and anata. Use simple polite requests like shite moraemasu ka or dekimasu ka."
@@ -75,6 +115,9 @@ const AUDIENCE_PRESETS: {
     id: "older-stranger",
     emoji: "👵",
     label: "Older stranger",
+    intent: "custom",
+    deeplFormality: "more",
+    tone: "Soft polite Japanese",
     register: "polite_neutral_soft",
     behavior:
       "Use desu/masu with extra softness. Prefer cushions like sumimasen, yoroshikereba, and shite itadakemasu ka. Avoid heavy ceremonial keigo unless the situation becomes formal."
@@ -83,6 +126,9 @@ const AUDIENCE_PRESETS: {
     id: "host-guest",
     emoji: "🏠",
     label: "Host or guest",
+    intent: "family",
+    deeplFormality: "more",
+    tone: "Warm respectful Japanese",
     register: "host_guest_respect",
     behavior:
       "Use hospitality-oriented formulas. If hosting, elevate the guest and show care/gratitude. If visiting, sound appreciative and humble."
@@ -91,6 +137,9 @@ const AUDIENCE_PRESETS: {
     id: "public-institution",
     emoji: "🏛️",
     label: "Police & gov",
+    intent: "doctor",
+    deeplFormality: "more",
+    tone: "Precise polite Japanese",
     register: "public_institution_polite",
     behavior:
       "Use polite, precise, complete phrases. Avoid casual vagueness. Good for immigration, banks, hospitals, police, and public counters."
@@ -99,6 +148,9 @@ const AUDIENCE_PRESETS: {
     id: "close-friend",
     emoji: "😊",
     label: "Close friend",
+    intent: "custom",
+    deeplFormality: "less",
+    tone: "Friendly plain Japanese",
     register: "casual_intimate",
     behavior:
       "Use friendly plain form, natural contractions, and light teasing only when the source supports it. Keep it direct and relaxed. Avoid desu/masu, sama, and heavy keigo unless intentionally joking or formal."
@@ -107,6 +159,9 @@ const AUDIENCE_PRESETS: {
     id: "spouse-partner",
     emoji: "💍",
     label: "Spouse / partner",
+    intent: "family",
+    deeplFormality: "less",
+    tone: "Warm intimate Japanese",
     register: "casual_intimate",
     behavior:
       "Use intimate, warm plain form. Sound close and caring rather than buddy-like or customer-service polite. Prefer soft directness, affectionate nuance, and natural household phrasing."
@@ -115,6 +170,9 @@ const AUDIENCE_PRESETS: {
     id: "family",
     emoji: "👪",
     label: "Family / in-laws",
+    intent: "family",
+    deeplFormality: "more",
+    tone: "Warm family Japanese",
     register: "casual_intimate",
     behavior:
       "Use warm family speech. Plain form is natural for close family; add polite softness for in-laws, elders, or family members who are not very close."
@@ -123,6 +181,9 @@ const AUDIENCE_PRESETS: {
     id: "coworker",
     emoji: "💼",
     label: "Coworker",
+    intent: "custom",
+    deeplFormality: "more",
+    tone: "Professional spoken Japanese",
     register: "polite_professional",
     behavior:
       "Use professional spoken Japanese, not full keigo. Prefer onegai dekimasu ka, kakunin shite moraemasu ka, and concise work phrasing."
@@ -131,6 +192,9 @@ const AUDIENCE_PRESETS: {
     id: "boss-professor",
     emoji: "🎓",
     label: "Boss / teacher",
+    intent: "custom",
+    deeplFormality: "more",
+    tone: "Respectful professional Japanese",
     register: "upward_polite_professional",
     behavior:
       "Use desu/masu plus respectful request forms such as go-kakunin itadakemasu ka. Avoid overlong keigo chains; voice should be respectful but still speakable."
@@ -139,6 +203,9 @@ const AUDIENCE_PRESETS: {
     id: "employee-student",
     emoji: "🧭",
     label: "Employee / student",
+    intent: "custom",
+    deeplFormality: "more",
+    tone: "Clear respectful Japanese",
     register: "downward_polite_clear",
     behavior:
       "Use clear, respectful instructions without being deferential. Prefer shite kudasai, onegai shimasu, or shite moraemasu ka. Avoid barking or overly humble forms."
@@ -147,6 +214,9 @@ const AUDIENCE_PRESETS: {
     id: "client-customer",
     emoji: "🤝",
     label: "Client / customer",
+    intent: "custom",
+    deeplFormality: "more",
+    tone: "Formal business Japanese",
     register: "external_formal_business",
     behavior:
       "Use respectful language for the listener and humble framing for self/company. Prefer osoreirimasu ga and itadakemasu ka. Voice should be formal but less ornate than email."
@@ -155,6 +225,9 @@ const AUDIENCE_PRESETS: {
     id: "investor-partner",
     emoji: "📈",
     label: "Investor / partner",
+    intent: "custom",
+    deeplFormality: "more",
+    tone: "Polished professional Japanese",
     register: "polished_professional",
     behavior:
       "Use polished, concise professional Japanese. Be respectful and competent, not servile. Prefer go-iken o itadakemasu ka and clear business phrasing."
@@ -163,6 +236,9 @@ const AUDIENCE_PRESETS: {
     id: "other-company",
     emoji: "🏢",
     label: "External company",
+    intent: "custom",
+    deeplFormality: "more",
+    tone: "Uchi/soto business Japanese",
     register: "uchi_soto_business",
     behavior:
       "Apply uchi/soto for external business. Humble your own company/team, elevate their side, use heisha/onsha, avoid san for your own boss, and use sama for people on their side."
@@ -171,18 +247,20 @@ const AUDIENCE_PRESETS: {
 
 const PRIMARY_AUDIENCE_PRESET_COUNT = 5;
 const SPEAKER_COUNT_OPTIONS = ["2", "3", "4", "5", "6"];
-type SessionIntent = "restaurant" | "train" | "family" | "shopping" | "doctor" | "custom";
+const NOTE_EXAMPLES = [
+  "Reservation is under Ana",
+  "I need an elevator",
+  "I want to avoid meat broth",
+  "I am trying to politely say no"
+];
 
-type TravelerProfile = {
-  allergies: string;
-  spice_level: string;
-  names: string;
-  places: string;
-  terms: string;
-  translation_preferences: string;
+type SessionPlaceContext = {
   location_hint: string;
   location_context: string;
   poi_type: string;
+  places: string;
+  terms: string;
+  translation_preferences: string;
 };
 
 type ContextGeneralEntry = {
@@ -205,12 +283,6 @@ type SonioxStructuredContext = {
 type ContextBundle = {
   soniox: SonioxStructuredContext;
   rewriteTone: Record<string, unknown>;
-  preview: {
-    general: string[];
-    terms: string[];
-    translationTerms: string[];
-    text: string;
-  };
 };
 
 type PhraseAdaptation = {
@@ -224,29 +296,15 @@ type ProviderSignals = {
   translations: string[];
 };
 
-type DeepLFormality = "auto" | "more" | "less" | "default";
-
-const PROFILE_STORAGE_KEY = "mil-decoder-profile-v1";
 const DEEPL_FORMALITY_STORAGE_KEY = "mil-decoder-deepl-formality-v1";
-const DEFAULT_PROFILE: TravelerProfile = {
-  allergies: "",
-  spice_level: "",
-  names: "",
-  places: "",
-  terms: "",
-  translation_preferences: "",
+const DEFAULT_SESSION_PLACE_CONTEXT: SessionPlaceContext = {
   location_hint: "",
   location_context: "",
-  poi_type: ""
+  poi_type: "",
+  places: "",
+  terms: "",
+  translation_preferences: ""
 };
-const SESSION_INTENTS: { id: SessionIntent; label: string }[] = [
-  { id: "restaurant", label: "Restaurant" },
-  { id: "train", label: "Train" },
-  { id: "family", label: "Family" },
-  { id: "shopping", label: "Shopping" },
-  { id: "doctor", label: "Doctor" },
-  { id: "custom", label: "Custom" }
-];
 const GENERIC_TERMS = new Set(["restaurant", "train", "food", "today", "tomorrow", "hotel", "shop", "station"]);
 
 type SpeakerDraft = {
@@ -277,11 +335,25 @@ const SPEAKER_COLORS = [
   "#9a6a1f"
 ];
 
-export function TranslatorApp() {
-  const [languages, setLanguages] = useState<Language[]>([]);
-  const [sourceALanguages, setSourceALanguages] = useState(["ja"]);
-  const [sourceB, setSourceB] = useState("en");
-  const [expectedSpeakerCount, setExpectedSpeakerCount] = useState("6");
+export type TranslatorAppProps = {
+  initialLanguages?: Language[];
+  initialLoadError?: string;
+  initialSessions?: SessionSummary[];
+  initialSourceLanguages?: string[];
+  initialTargetLanguage?: string;
+};
+
+export function TranslatorApp({
+  initialLanguages = [],
+  initialLoadError = "",
+  initialSessions = [],
+  initialSourceLanguages = ["ja"],
+  initialTargetLanguage = "en"
+}: TranslatorAppProps) {
+  const [languages] = useState<Language[]>(initialLanguages);
+  const [sourceALanguages, setSourceALanguages] = useState(initialSourceLanguages);
+  const [sourceB, setSourceB] = useState(initialTargetLanguage);
+  const [expectedSpeakerCount, setExpectedSpeakerCount] = useState("2");
   const [audiencePreset, setAudiencePreset] = useState(DEFAULT_AUDIENCE_PRESET);
   const [audienceExpanded, setAudienceExpanded] = useState(false);
   const [deeplFormality, setDeepLFormality] = useState<DeepLFormality>(() => {
@@ -290,33 +362,24 @@ export function TranslatorApp() {
     return isDeepLFormality(saved) ? saved : "auto";
   });
   const [context, setContext] = useState("");
-  const [sessionIntent, setSessionIntent] = useState<SessionIntent>("restaurant");
-  const [travelerProfile, setTravelerProfile] = useState<TravelerProfile>(() => {
-    if (typeof window === "undefined") return DEFAULT_PROFILE;
-    const raw = window.localStorage.getItem(PROFILE_STORAGE_KEY);
-    if (!raw) return DEFAULT_PROFILE;
-    try {
-      return { ...DEFAULT_PROFILE, ...(JSON.parse(raw) as Partial<TravelerProfile>) };
-    } catch {
-      return DEFAULT_PROFILE;
-    }
-  });
+  const [travelerProfile] = useState<TravelerProfile>(() => loadTravelerProfile());
+  const [sessionPlaceContext, setSessionPlaceContext] = useState<SessionPlaceContext>(DEFAULT_SESSION_PLACE_CONTEXT);
   const [geoStatus, setGeoStatus] = useState("");
+  const selectedPreset = getAudiencePreset(audiencePreset);
+  const sessionIntent = selectedPreset.intent;
   const contextBundle = useMemo(
-    () => buildContextBundle(context, audiencePreset, deeplFormality, sessionIntent, travelerProfile),
-    [context, audiencePreset, deeplFormality, sessionIntent, travelerProfile]
+    () => buildContextBundle(context, audiencePreset, deeplFormality, travelerProfile, sessionPlaceContext),
+    [context, audiencePreset, deeplFormality, travelerProfile, sessionPlaceContext]
   );
-  const [status, setStatus] = useState<AppStatus>("checking");
-  const [error, setError] = useState("");
+  const [status, setStatus] = useState<AppStatus>(initialLoadError ? "error" : "idle");
+  const [error, setError] = useState(initialLoadError);
   const [phrases, setPhrases] = useState<Phrase[]>([]);
   const [adaptations, setAdaptations] = useState<Record<string, PhraseAdaptation>>({});
-  const [providerSignals, setProviderSignals] = useState<ProviderSignals>({ transcripts: [], translations: [] });
   const [tokenCount, setTokenCount] = useState(0);
   const [savedPath, setSavedPath] = useState("");
   const [activeSession, setActiveSession] = useState("");
   const [activeSessionTitle, setActiveSessionTitle] = useState("");
   const [activeDurationSeconds, setActiveDurationSeconds] = useState<number | null>(null);
-  const [sessionStartedAt, setSessionStartedAt] = useState<number | null>(null);
   const [rediarizeStatus, setRediarizeStatus] = useState("");
   const [rediarizing, setRediarizing] = useState(false);
   const [translationStatus, setTranslationStatus] = useState("");
@@ -326,7 +389,7 @@ export function TranslatorApp() {
   const [selectedSpeaker, setSelectedSpeaker] = useState<string | null>(null);
   const [reviewStatus, setReviewStatus] = useState("");
   const [savingReview, setSavingReview] = useState(false);
-  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [sessions, setSessions] = useState<SessionSummary[]>(initialSessions);
   const [sessionsExpanded, setSessionsExpanded] = useState(false);
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [loadingSession, setLoadingSession] = useState("");
@@ -336,7 +399,10 @@ export function TranslatorApp() {
   const feedRef = useRef<HTMLDivElement | null>(null);
   const shouldFollowFeedRef = useRef(true);
   const adaptationRequestsRef = useRef<Set<string>>(new Set());
+  const adaptationsRef = useRef<Record<string, PhraseAdaptation>>({});
   const providerSignalsRef = useRef<ProviderSignals>({ transcripts: [], translations: [] });
+  const durationTimerRef = useRef<number | null>(null);
+  const stopFallbackTimerRef = useRef<number | null>(null);
 
   const sourceA = sourceALanguages[0] || (sourceB === "en" ? "ja" : "en");
   const canStart = status === "idle" || status === "stopped" || status === "error";
@@ -345,57 +411,6 @@ export function TranslatorApp() {
   const statusLabel = status === "requesting microphone" ? "mic access" : status;
   const hasLanguagePair = sourceALanguages.length > 0 && !sourceALanguages.includes(sourceB);
   const hasSessionStatus = Boolean(activeSession || savedPath || rediarizeStatus || translationStatus || reviewStatus);
-
-  useEffect(() => {
-    fetchLanguages()
-      .then((data) => {
-        setLanguages(data.languages);
-        setStatus("idle");
-      })
-      .catch((err: unknown) => {
-        setError(err instanceof Error ? err.message : "Could not load backend languages.");
-        setStatus("error");
-      });
-  }, []);
-
-  useEffect(() => {
-    refreshSessions();
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(travelerProfile));
-  }, [travelerProfile]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    window.localStorage.setItem(DEEPL_FORMALITY_STORAGE_KEY, deeplFormality);
-  }, [deeplFormality]);
-
-  useEffect(() => {
-    providerSignalsRef.current = providerSignals;
-  }, [providerSignals]);
-
-  useEffect(() => {
-    const feed = feedRef.current;
-    if (!feed || !shouldFollowFeedRef.current) {
-      return;
-    }
-    feed.scrollTo({
-      top: feed.scrollHeight,
-      behavior: "smooth"
-    });
-  }, [phrases, selectedSpeaker]);
-
-  useEffect(() => {
-    if (!isLive || !sessionStartedAt) {
-      return;
-    }
-    const timer = window.setInterval(() => {
-      setActiveDurationSeconds(Math.max(1, Math.floor((Date.now() - sessionStartedAt) / 1000)));
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, [isLive, sessionStartedAt]);
 
   const languageMap = useMemo(() => {
     return new Map(languages.map((language) => [language.code, language]));
@@ -431,10 +446,93 @@ export function TranslatorApp() {
       : compacted;
   }, [phrases, selectedSpeaker]);
 
-  useEffect(() => {
-    for (const phrase of displayedPhrases) {
+  function setAdaptationsSynced(
+    next:
+      | Record<string, PhraseAdaptation>
+      | ((current: Record<string, PhraseAdaptation>) => Record<string, PhraseAdaptation>)
+  ) {
+    setAdaptations((current) => {
+      const resolved = typeof next === "function" ? next(current) : next;
+      adaptationsRef.current = resolved;
+      return resolved;
+    });
+  }
+
+  function setProviderSignalsSynced(next: ProviderSignals | ((current: ProviderSignals) => ProviderSignals)) {
+    const current = providerSignalsRef.current;
+    providerSignalsRef.current = typeof next === "function" ? next(current) : next;
+  }
+
+  function clearProviderSignals() {
+    setProviderSignalsSynced({ transcripts: [], translations: [] });
+  }
+
+  function resetAdaptations() {
+    setAdaptationsSynced({});
+    adaptationRequestsRef.current.clear();
+  }
+
+  function scrollFeedToBottomSoon() {
+    if (typeof window === "undefined") return;
+    window.requestAnimationFrame(() => {
+      const feed = feedRef.current;
+      if (!feed || !shouldFollowFeedRef.current) {
+        return;
+      }
+      feed.scrollTo({
+        top: feed.scrollHeight,
+        behavior: "smooth"
+      });
+    });
+  }
+
+  function setPhrasesAndFollow(next: Phrase[]) {
+    setPhrases(next);
+    scrollFeedToBottomSoon();
+    requestAdaptationsFor(next);
+  }
+
+  function startDurationTimer(startedAt: number) {
+    stopDurationTimer();
+    durationTimerRef.current = window.setInterval(() => {
+      setActiveDurationSeconds(Math.max(1, Math.floor((Date.now() - startedAt) / 1000)));
+    }, 1000);
+  }
+
+  function stopDurationTimer() {
+    if (durationTimerRef.current) {
+      clearInterval(durationTimerRef.current);
+      durationTimerRef.current = null;
+    }
+  }
+
+  function changeDeepLFormality(value: DeepLFormality) {
+    setDeepLFormality(value);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(DEEPL_FORMALITY_STORAGE_KEY, value);
+    }
+  }
+
+  function selectSpeaker(speakerId: string | null) {
+    setSelectedSpeaker(speakerId);
+    scrollFeedToBottomSoon();
+  }
+
+  function requestAdaptationsFor(phrasesToInspect: Phrase[]) {
+    const compacted = compactPhrases(phrasesToInspect);
+    const phrasesForRewrite = selectedSpeaker
+      ? compacted.filter((phrase) => speakerKey(phrase.speaker) === selectedSpeaker)
+      : compacted;
+
+    for (const phrase of phrasesForRewrite) {
       const key = adaptationKey(phrase);
-      if (!key || adaptations[key] || adaptationRequestsRef.current.has(key) || phrase.source_lang !== "en" || !phrase.is_final) {
+      if (
+        !key ||
+        adaptationsRef.current[key] ||
+        adaptationRequestsRef.current.has(key) ||
+        phrase.source_lang !== "en" ||
+        !phrase.is_final
+      ) {
         continue;
       }
       const sourceText = phrase.texts.en?.trim();
@@ -445,7 +543,7 @@ export function TranslatorApp() {
       adaptationRequestsRef.current.add(key);
       const baseRewriteContext = {
         tone: contextBundle.rewriteTone,
-        recent_dialogue: recentDialogueForRewrite(displayedPhrases, adaptations, key)
+        recent_dialogue: recentDialogueForRewrite(phrasesForRewrite, adaptationsRef.current, key)
       };
       translatePhrase({
         source_language: "en",
@@ -455,7 +553,7 @@ export function TranslatorApp() {
         rewrite_context: baseRewriteContext
       })
         .then((result) => {
-          setAdaptations((current) => ({
+          setAdaptationsSynced((current) => ({
             ...current,
             [key]: {
               source_rewrite: current[key]?.source_rewrite || "",
@@ -469,7 +567,7 @@ export function TranslatorApp() {
         });
       window.setTimeout(() => {
         const signals = providerSignalsRef.current;
-        setAdaptations((current) => ({
+        setAdaptationsSynced((current) => ({
           ...current,
           [key]: {
             source_rewrite: current[key]?.source_rewrite || "",
@@ -492,13 +590,13 @@ export function TranslatorApp() {
           }
         })
           .then((result) => {
-            setAdaptations((current) => ({
+            setAdaptationsSynced((current) => ({
               ...current,
               [key]: { ...result, status: "ready" }
             }));
           })
           .catch(() => {
-            setAdaptations((current) => ({
+            setAdaptationsSynced((current) => ({
               ...current,
               [key]: {
                 source_rewrite: current[key]?.source_rewrite || "",
@@ -509,7 +607,7 @@ export function TranslatorApp() {
           });
       }, 350);
     }
-  }, [adaptations, contextBundle.rewriteTone, displayedPhrases]);
+  }
 
   async function start() {
     setError("");
@@ -520,15 +618,13 @@ export function TranslatorApp() {
     setTranslationStatus("");
     setReviewStatus("");
     setSpeakerDrafts({});
-    setSelectedSpeaker(null);
+    selectSpeaker(null);
     setPhrases([]);
-    setAdaptations({});
-    setProviderSignals({ transcripts: [], translations: [] });
-    providerSignalsRef.current = { transcripts: [], translations: [] };
-    adaptationRequestsRef.current.clear();
+    resetAdaptations();
+    clearProviderSignals();
     setTokenCount(0);
     setActiveDurationSeconds(0);
-    setSessionStartedAt(Date.now());
+    startDurationTimer(Date.now());
     shouldFollowFeedRef.current = true;
     setStatus("requesting microphone");
 
@@ -615,20 +711,18 @@ export function TranslatorApp() {
       setExpectedSpeakerCount(
         detail.session.expected_speaker_count ? String(detail.session.expected_speaker_count) : "6"
       );
-      setPhrases(detail.phrases || []);
-      setAdaptations({});
-      setProviderSignals({ transcripts: [], translations: [] });
-      providerSignalsRef.current = { transcripts: [], translations: [] };
-      adaptationRequestsRef.current.clear();
+      selectSpeaker(null);
+      resetAdaptations();
+      setPhrasesAndFollow(detail.phrases || []);
+      clearProviderSignals();
       setTokenCount(detail.session.tokens?.length || detail.phrases?.length || 0);
       setActiveDurationSeconds(detail.session.duration_seconds ?? durationFromPhrases(detail.phrases || []));
-      setSessionStartedAt(null);
+      stopDurationTimer();
       setSavedPath(detail.session.artifact?.path || "");
       setRediarizeStatus("");
       setTranslationStatus("");
       setReviewStatus("");
       setSpeakerDrafts({});
-      setSelectedSpeaker(null);
       shouldFollowFeedRef.current = true;
       setStatus("stopped");
       setSessionsOpen(false);
@@ -650,17 +744,16 @@ export function TranslatorApp() {
     setTranslationStatus("");
     setReviewStatus("");
     setSpeakerDrafts({});
-    setSelectedSpeaker(null);
+    selectSpeaker(null);
     setPhrases([]);
-    setAdaptations({});
-    setProviderSignals({ transcripts: [], translations: [] });
-    providerSignalsRef.current = { transcripts: [], translations: [] };
-    adaptationRequestsRef.current.clear();
+    resetAdaptations();
+    clearProviderSignals();
     setTokenCount(0);
     setActiveDurationSeconds(null);
-    setSessionStartedAt(null);
-    setExpectedSpeakerCount("6");
+    stopDurationTimer();
+    setExpectedSpeakerCount("2");
     setContext("");
+    setSessionPlaceContext(DEFAULT_SESSION_PLACE_CONTEXT);
     setGeoStatus("");
     shouldFollowFeedRef.current = true;
     setStatus("idle");
@@ -677,16 +770,16 @@ export function TranslatorApp() {
       async (position) => {
         const lat = position.coords.latitude.toFixed(5);
         const lng = position.coords.longitude.toFixed(5);
-        setTravelerProfile((current) => ({ ...current, location_hint: `${lat}, ${lng}` }));
+        setSessionPlaceContext((current) => ({ ...current, location_hint: `${lat}, ${lng}` }));
         setGeoStatus("Location added. Loading nearby places...");
         try {
           const placesContext = await fetchPlacesContext({
             lat: position.coords.latitude,
             lng: position.coords.longitude,
             intent: sessionIntent,
-            poi_type: travelerProfile.poi_type
+            poi_type: sessionPlaceContext.poi_type
           });
-          setTravelerProfile((current) => ({
+          setSessionPlaceContext((current) => ({
             ...current,
             location_hint: `${lat}, ${lng}`,
             location_context: mergeLineText(current.location_context, placesContext.general),
@@ -734,6 +827,10 @@ export function TranslatorApp() {
     setAudiencePreset(presetId);
   }
 
+  function appendContextExample(example: string) {
+    setContext((current) => mergeLineText(current, [example]));
+  }
+
   function handleServerEvent(message: TranscriptEvent) {
     if (message.type === "status") {
       setStatus(message.status === "listening" ? "listening" : "stopped");
@@ -746,19 +843,19 @@ export function TranslatorApp() {
       return;
     }
     if (message.type === "transcript") {
-      setPhrases(message.phrases);
+      setPhrasesAndFollow(message.phrases);
       setTokenCount(message.final_token_count);
       return;
     }
     if (message.type === "provider_update") {
       if (message.kind === "transcript" && message.text) {
-        setProviderSignals((current) => ({
+        setProviderSignalsSynced((current) => ({
           ...current,
           transcripts: dedupeTail([...current.transcripts, message.text], 12)
         }));
       }
       if (message.kind === "translation" && message.text) {
-        setProviderSignals((current) => ({
+        setProviderSignalsSynced((current) => ({
           ...current,
           translations: dedupeTail([...current.translations, message.text], 12)
         }));
@@ -769,12 +866,11 @@ export function TranslatorApp() {
       setActiveSession(message.session);
       setActiveSessionTitle(message.title || "New chat");
       setSavedPath(message.path);
-      setPhrases(message.phrases);
-      setProviderSignals({ transcripts: [], translations: [] });
-      providerSignalsRef.current = { transcripts: [], translations: [] };
+      setPhrasesAndFollow(message.phrases);
+      clearProviderSignals();
       setTokenCount(message.token_count);
       setActiveDurationSeconds(durationFromPhrases(message.phrases));
-      setSessionStartedAt(null);
+      stopDurationTimer();
       refreshSessions();
       return;
     }
@@ -794,7 +890,10 @@ export function TranslatorApp() {
     } catch {
       // The close path below handles already-closed sockets.
     }
-    window.setTimeout(() => {
+    if (stopFallbackTimerRef.current) {
+      clearTimeout(stopFallbackTimerRef.current);
+    }
+    stopFallbackTimerRef.current = window.setTimeout(() => {
       setStatus((current) => {
         if (current === "stopping") {
           cleanup();
@@ -817,9 +916,8 @@ export function TranslatorApp() {
     setTranslationStatus("");
     try {
       const speakerResult = await rediarizeSession(activeSession);
-      setPhrases(speakerResult.phrases);
-      setAdaptations({});
-      adaptationRequestsRef.current.clear();
+      resetAdaptations();
+      setPhrasesAndFollow(speakerResult.phrases);
       setTokenCount(speakerResult.token_count);
       setSavedPath(speakerResult.path);
       setRediarizeStatus(`Improved: ${speakerResult.speaker_count} speakers`);
@@ -828,9 +926,8 @@ export function TranslatorApp() {
       setTranslating(true);
       setTranslationStatus("Improving translations...");
       const translationResult = await retranslateSession(activeSession);
-      setPhrases(translationResult.phrases);
-      setAdaptations({});
-      adaptationRequestsRef.current.clear();
+      resetAdaptations();
+      setPhrasesAndFollow(translationResult.phrases);
       setTokenCount(translationResult.token_count);
       setSavedPath(translationResult.path);
       setTranslationStatus(`Improved: ${translationResult.translation_count} translations`);
@@ -858,13 +955,12 @@ export function TranslatorApp() {
         label: speakerDrafts[speaker.id]?.label.trim() || undefined
       }));
       const result = await saveSpeakerReview(activeSession, rows);
-      setPhrases(result.phrases);
-      setAdaptations({});
-      adaptationRequestsRef.current.clear();
+      selectSpeaker(null);
+      resetAdaptations();
+      setPhrasesAndFollow(result.phrases);
       setTokenCount(result.token_count);
       setSavedPath(result.path);
       setReviewStatus(`Saved ${result.speaker_count} speaker${result.speaker_count === 1 ? "" : "s"}`);
-      setSelectedSpeaker(null);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not save speaker labels.");
       setReviewStatus("");
@@ -885,6 +981,11 @@ export function TranslatorApp() {
   }
 
   function cleanup() {
+    stopDurationTimer();
+    if (stopFallbackTimerRef.current) {
+      clearTimeout(stopFallbackTimerRef.current);
+      stopFallbackTimerRef.current = null;
+    }
     recorderRef.current?.stop();
     recorderRef.current = null;
     if (wsRef.current && wsRef.current.readyState < WebSocket.CLOSING) {
@@ -926,6 +1027,7 @@ export function TranslatorApp() {
           <span className={`dot ${status === "listening" ? "live" : ""}`} aria-hidden="true" />
           {statusLabel}
         </div>
+        <Link className="topLink" href="/profile">Profile</Link>
       </header>
 
       <section className="workspace">
@@ -978,12 +1080,7 @@ export function TranslatorApp() {
               </div>
             </div>
 
-            <div className="startFields">
-              <SpeakerCountPicker
-                disabled={isLive}
-                onChange={setExpectedSpeakerCount}
-                value={expectedSpeakerCount}
-              />
+            <div className="quickStartFields">
               <AudiencePicker
                 disabled={isLive}
                 expanded={audienceExpanded}
@@ -991,82 +1088,20 @@ export function TranslatorApp() {
                 onToggleExpanded={() => setAudienceExpanded((current) => !current)}
                 value={audiencePreset}
               />
-              <DeepLFormalityPicker disabled={isLive} onChange={setDeepLFormality} value={deeplFormality} />
-            </div>
-
-            <div className="startFields contextFields">
-              <label className="contextField">
-                Context hint
-                <textarea value={context} onChange={(event) => setContext(event.target.value)} disabled={isLive} />
-              </label>
-            </div>
-            <div className="startFields profileFields">
-              <label className="contextField">
-                Session type
-                <select
-                  value={sessionIntent}
-                  onChange={(event) => setSessionIntent(event.target.value as SessionIntent)}
-                  disabled={isLive}
-                >
-                  {SESSION_INTENTS.map((intent) => (
-                    <option key={intent.id} value={intent.id}>{intent.label}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="contextField">
-                Allergies & restrictions
-                <input value={travelerProfile.allergies} onChange={(event) => setTravelerProfile((cur) => ({ ...cur, allergies: event.target.value }))} disabled={isLive} />
-              </label>
-              <label className="contextField">
-                Spice level
-                <input value={travelerProfile.spice_level} onChange={(event) => setTravelerProfile((cur) => ({ ...cur, spice_level: event.target.value }))} disabled={isLive} />
-              </label>
-              <label className="contextField">
-                Important names
-                <input value={travelerProfile.names} onChange={(event) => setTravelerProfile((cur) => ({ ...cur, names: event.target.value }))} disabled={isLive} />
-              </label>
-              <label className="contextField">
-                Places & itinerary
-                <input value={travelerProfile.places} onChange={(event) => setTravelerProfile((cur) => ({ ...cur, places: event.target.value }))} disabled={isLive} />
-              </label>
-              <label className="contextField">
-                Key terms
-                <input value={travelerProfile.terms} onChange={(event) => setTravelerProfile((cur) => ({ ...cur, terms: event.target.value }))} disabled={isLive} />
-              </label>
-              <label className="contextField">
-                Translation preferences
-                <input value={travelerProfile.translation_preferences} onChange={(event) => setTravelerProfile((cur) => ({ ...cur, translation_preferences: event.target.value }))} disabled={isLive} />
-              </label>
-              <label className="contextField">
-                Location hint
-                <input value={travelerProfile.location_hint} onChange={(event) => setTravelerProfile((cur) => ({ ...cur, location_hint: event.target.value }))} disabled={isLive} placeholder="Shinjuku Station, Tokyo or lat,lng" />
-              </label>
-              <label className="contextField">
-                POI type
-                <input value={travelerProfile.poi_type} onChange={(event) => setTravelerProfile((cur) => ({ ...cur, poi_type: event.target.value }))} disabled={isLive} placeholder="train station / restaurant / hotel / shrine" />
-              </label>
-            </div>
-            <div className="startPanelFooter">
-              <button className="secondaryButton" onClick={injectCurrentLocation} disabled={isLive} type="button">
-                Use current GPS
-              </button>
-              {geoStatus ? <span className="hint">{geoStatus}</span> : null}
-            </div>
-
-            <ContextPreview bundle={contextBundle} />
-
-            {hasSessionStatus ? (
-              <div className="statusBox inlineStatus">
-                {activeSessionTitle ? <strong>{activeSessionTitle}</strong> : null}
-                {savedPath ? <span>Saved: {savedPath}</span> : null}
-                {rediarizeStatus ? <span>{rediarizeStatus}</span> : null}
-                {translationStatus ? <span>{translationStatus}</span> : null}
-                {reviewStatus ? <span>{reviewStatus}</span> : null}
+              <SpeakerCountPicker
+                disabled={isLive}
+                onChange={setExpectedSpeakerCount}
+                value={expectedSpeakerCount}
+              />
+              <div className="gpsField">
+                <button className="secondaryButton" onClick={injectCurrentLocation} disabled={isLive} type="button">
+                  Use current location
+                </button>
+                {geoStatus ? <span className="hint">{geoStatus}</span> : null}
               </div>
-            ) : null}
-
-            {error ? <div className="errorBox">{error}</div> : null}
-
+            </div>
+            <ToneSummary deeplFormality={deeplFormality} preset={selectedPreset} />
+            <ProfileSummary profile={travelerProfile} />
             <div className="startPanelFooter">
               {hasFinishedSession ? (
                 <button className="secondaryButton" onClick={improveSpeakersAndTranslations} disabled={postProcessing}>
@@ -1083,6 +1118,49 @@ export function TranslatorApp() {
                 </button>
               )}
             </div>
+            <details className="advancedSetup">
+              <summary>Tone override and optional note</summary>
+              <div className="startFields">
+                <DeepLFormalityPicker disabled={isLive} onChange={changeDeepLFormality} value={deeplFormality} />
+              </div>
+              <div className="startFields contextFields">
+                <label className="contextField">
+                  Useful detail for this conversation
+                  <textarea
+                    value={context}
+                    onChange={(event) => setContext(event.target.value)}
+                    disabled={isLive}
+                    placeholder="Only add something special, like a reservation name, a thing you are buying, a medical concern, or a phrase you want to say gently."
+                  />
+                </label>
+                <div className="contextExampleRow" aria-label="Context examples">
+                  {NOTE_EXAMPLES.map((example) => (
+                    <button
+                      className="contextExampleButton"
+                      disabled={isLive}
+                      key={example}
+                      onClick={() => appendContextExample(example)}
+                      type="button"
+                    >
+                      {example}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </details>
+            
+
+            {hasSessionStatus ? (
+              <div className="statusBox inlineStatus">
+                {activeSessionTitle ? <strong>{activeSessionTitle}</strong> : null}
+                {savedPath ? <span>Saved: {savedPath}</span> : null}
+                {rediarizeStatus ? <span>{rediarizeStatus}</span> : null}
+                {translationStatus ? <span>{translationStatus}</span> : null}
+                {reviewStatus ? <span>{reviewStatus}</span> : null}
+              </div>
+            ) : null}
+
+            {error ? <div className="errorBox">{error}</div> : null}
           </section>
           {speakerSummaries.length > 0 ? (
             <SpeakerReviewPanel
@@ -1090,7 +1168,7 @@ export function TranslatorApp() {
               expectedNames={[]}
               liveMode={isLive}
               onSave={saveReview}
-              onSelect={setSelectedSpeaker}
+              onSelect={selectSpeaker}
               onUpdate={updateSpeakerDraft}
               saving={savingReview}
               selectedSpeaker={selectedSpeaker}
@@ -1270,39 +1348,37 @@ function LanguagePicker({
   );
 }
 
-function ContextPreview({ bundle }: { bundle: ContextBundle }) {
-  const { general, terms, translationTerms, text } = bundle.preview;
+function ProfileSummary({ profile }: { profile: TravelerProfile }) {
+  const signals = [
+    profileWesternFullName(profile) ? "name" : "",
+    profile.age ? "age" : "",
+    profile.hotel ? "hotel" : "",
+    profile.travel_party ? "party" : "",
+    profile.allergies ? "diet" : "",
+    profile.spice_level ? "spice" : "",
+    profile.mobility ? "mobility" : ""
+  ].filter(Boolean);
   return (
-    <section className="contextPreview" aria-label="Context for this conversation">
-      <div className="contextPreviewHeader">
-        <div>
-          <p className="panelKicker">context</p>
-          <h4>For this conversation</h4>
-        </div>
-        <span>{general.length + terms.length + translationTerms.length} signals</span>
+    <section className="profileSummary" aria-label="Traveler profile">
+      <div>
+        <p className="panelKicker">profile</p>
+        <strong>{signals.length ? `${signals.length} reusable preference${signals.length === 1 ? "" : "s"} loaded` : "No reusable preferences yet"}</strong>
       </div>
-      <div className="contextPreviewGrid">
-        <PreviewList label="Using" items={general} empty="Travel conversation" />
-        <PreviewList label="Terms" items={terms.slice(0, 12)} empty="Add names, foods, places, or product words" />
-        <PreviewList label="Translations" items={translationTerms.slice(0, 6)} empty="Add preferences like check -> お会計" />
-      </div>
-      {text ? <p className="contextPreviewText">{text}</p> : null}
+      <Link className="filterButton profileLink" href="/profile">Edit profile</Link>
     </section>
   );
 }
 
-function PreviewList({ label, items, empty }: { label: string; items: string[]; empty: string }) {
+function ToneSummary({ deeplFormality, preset }: { deeplFormality: DeepLFormality; preset: typeof AUDIENCE_PRESETS[number] }) {
+  const effective = effectiveDeepLFormality(deeplFormality, preset);
   return (
-    <div className="previewList">
-      <strong>{label}</strong>
-      {items.length ? (
-        <ul>
-          {items.map((item) => <li key={item}>{item}</li>)}
-        </ul>
-      ) : (
-        <span>{empty}</span>
-      )}
-    </div>
+    <section className="toneSummary" aria-label="Japanese tone">
+      <div>
+        <p className="panelKicker">Tone</p>
+        <strong>{preset.tone}</strong>
+      </div>
+      <span>DeepL: {formalityLabel(effective)}</span>
+    </section>
   );
 }
 
@@ -1354,7 +1430,7 @@ function AudiencePicker({
 
   return (
     <fieldset className="audiencePicker">
-      <legend>Speaking to</legend>
+      <legend>Who are you speaking to?</legend>
       <div className="audienceOptions">
         {primary.map((preset) => (
           <label className="audienceOption" key={preset.id}>
@@ -1409,9 +1485,9 @@ function DeepLFormalityPicker({
 }) {
   return (
     <label className="contextField compactSelect">
-      DeepL Japanese tone
+      DeepL tone override
       <select disabled={disabled} onChange={(event) => onChange(event.target.value as DeepLFormality)} value={value}>
-        <option value="auto">Auto from speaker</option>
+        <option value="auto">Auto from situation</option>
         <option value="more">Polite</option>
         <option value="less">Plain</option>
         <option value="default">DeepL default</option>
@@ -1753,35 +1829,57 @@ function buildContextBundle(
   baseContext: string,
   presetId: string,
   deeplFormality: DeepLFormality,
-  intent: SessionIntent,
-  profile: TravelerProfile
+  profile: TravelerProfile,
+  placeContext: SessionPlaceContext
 ): ContextBundle {
   const now = new Date();
   const hour = now.getHours();
   const timeContext = hour < 5 ? "late night" : hour < 11 ? "morning" : hour < 17 ? "afternoon" : "evening";
-  const inferredPoi = profile.poi_type.trim() || inferPoiType(intent);
-  const preset = AUDIENCE_PRESETS.find((item) => item.id === presetId) || AUDIENCE_PRESETS[0];
-  const locationEntries = locationGeneralEntries(profile.location_context);
+  const preset = getAudiencePreset(presetId);
+  const intent = preset.intent;
+  const effectiveFormality = effectiveDeepLFormality(deeplFormality, preset);
+  const inferredPoi = placeContext.poi_type.trim() || inferPoiType(intent);
+  const locationEntries = locationGeneralEntries(placeContext.location_context);
   const general = compactGeneral([
     { key: "domain", value: "Travel conversation in Japan" },
     { key: "session_intent", value: intent },
     { key: "setting", value: inferredPoi },
     { key: "local_time", value: timeContext },
     { key: "date", value: now.toISOString().slice(0, 10) },
-    profile.location_hint ? { key: "location", value: profile.location_hint } : null,
+    placeContext.location_hint ? { key: "location", value: placeContext.location_hint } : null,
+    profileWesternFullName(profile) ? { key: "traveler_name", value: profileWesternFullName(profile) } : null,
+    profile.first_name_katakana.trim()
+      ? { key: "traveler_first_name_katakana", value: profile.first_name_katakana.trim() }
+      : null,
+    profile.last_name_katakana.trim()
+      ? { key: "traveler_last_name_katakana", value: profile.last_name_katakana.trim() }
+      : null,
+    profileKatakanaFullDisplay(profile)
+      ? { key: "traveler_name_katakana", value: profileKatakanaFullDisplay(profile) }
+      : null,
+    profile.age ? { key: "traveler_age", value: profile.age } : null,
+    profile.hotel ? { key: "hotel", value: profile.hotel } : null,
+    profile.travel_party ? { key: "travel_party", value: profile.travel_party } : null,
     profile.allergies ? { key: "dietary_restrictions", value: profile.allergies } : null,
     profile.spice_level ? { key: "spice_preference", value: profile.spice_level } : null,
+    profile.mobility ? { key: "mobility_or_luggage", value: profile.mobility } : null,
     ...locationEntries
   ]);
   const terms = rankedTerms([
-    ...splitListText(profile.names),
-    ...splitListText(profile.places),
-    ...splitListText(profile.terms),
+    ...splitListText(profileWesternFullName(profile)),
+    ...splitListText(profile.first_name_katakana),
+    ...splitListText(profile.last_name_katakana),
+    ...splitListText(profileKatakanaFullDisplay(profile)),
+    ...splitListText(profile.hotel),
+    ...splitListText(profile.travel_party),
     ...splitListText(profile.allergies),
+    ...splitListText(profile.mobility),
+    ...splitListText(placeContext.places),
+    ...splitListText(placeContext.terms),
     ...baseTermsForIntent(intent, inferredPoi)
   ]);
   const translationTerms = dedupeTranslationTerms([
-    ...parseTranslationTerms(profile.translation_preferences),
+    ...parseTranslationTerms(placeContext.translation_preferences),
     ...baseTranslationTermsForIntent(intent, inferredPoi)
   ]).slice(0, 20);
   const text = [
@@ -1800,17 +1898,23 @@ function buildContextBundle(
       audience: preset.label,
       register: preset.register,
       behavior: preset.behavior,
-      deepl_formality: deeplFormality,
+      deepl_formality: effectiveFormality,
       session_intent: intent,
       setting: inferredPoi,
+      traveler_profile: {
+        name: profileWesternFullName(profile),
+        given_name_katakana: profile.first_name_katakana.trim() || undefined,
+        family_name_katakana: profile.last_name_katakana.trim() || undefined,
+        name_katakana: profileKatakanaFullDisplay(profile) || undefined,
+        age: profile.age,
+        hotel: profile.hotel,
+        travel_party: profile.travel_party,
+        dietary_restrictions: profile.allergies,
+        spice_preference: profile.spice_level,
+        mobility_or_luggage: profile.mobility
+      },
       user_notes: stripProfileBlock(stripRegisterBlock(baseContext)).trim(),
       rule: "Rewrite for spoken Japanese tone and relationship. Keep it concise. Preserve meaning, but do not translate literally."
-    },
-    preview: {
-      general: general.map((item) => `${humanizeKey(item.key)}: ${item.value}`),
-      terms,
-      translationTerms: translationTerms.map((item) => `${item.source} -> ${item.target}`),
-      text: stripProfileBlock(stripRegisterBlock(baseContext)).trim()
     }
   };
 }
@@ -1831,8 +1935,8 @@ function mergeLineText(current: string, additions: string[]): string {
   return Array.from(new Set(values)).join("\n");
 }
 
-function splitListText(value: string): string[] {
-  return value.split(/[,;\n]/).map((item) => item.trim()).filter(Boolean);
+function splitListText(value?: string): string[] {
+  return (value || "").split(/[,;\n]/).map((item) => item.trim()).filter(Boolean);
 }
 
 function compactGeneral(entries: Array<ContextGeneralEntry | null>): ContextGeneralEntry[] {
@@ -1876,8 +1980,8 @@ function rankedTerms(values: string[]): string[] {
   return terms.slice(0, 40);
 }
 
-function parseTranslationTerms(value: string): ContextTranslationTerm[] {
-  return value.split(/[;\n]/).map((raw) => {
+function parseTranslationTerms(value?: string): ContextTranslationTerm[] {
+  return (value || "").split(/[;\n]/).map((raw) => {
     const [source, target] = raw.split(/\s*(?:->|=>|→)\s*/);
     return source && target ? { source: source.trim(), target: target.trim() } : null;
   }).filter((item): item is ContextTranslationTerm => Boolean(item));
@@ -1931,8 +2035,21 @@ function baseTranslationTermsForIntent(intent: SessionIntent, poi: string): Cont
   return [];
 }
 
-function humanizeKey(key: string): string {
-  return key.replaceAll("_", " ");
+function getAudiencePreset(presetId: string): typeof AUDIENCE_PRESETS[number] {
+  return AUDIENCE_PRESETS.find((item) => item.id === presetId) || AUDIENCE_PRESETS[0];
+}
+
+function effectiveDeepLFormality(
+  value: DeepLFormality,
+  preset: typeof AUDIENCE_PRESETS[number]
+): Exclude<DeepLFormality, "auto"> {
+  return value === "auto" ? preset.deeplFormality : value;
+}
+
+function formalityLabel(value: Exclude<DeepLFormality, "auto">): string {
+  if (value === "more") return "polite";
+  if (value === "less") return "plain";
+  return "default";
 }
 
 function inferPoiType(intent: SessionIntent): string {
