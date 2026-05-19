@@ -116,7 +116,7 @@ The end-of-meeting speaker review panel lets you quickly filter by detected spea
 
 ## Supported Languages
 
-🇸🇦 Arabic, 🪨 Basque, 🇧🇦 Bosnian, 🇧🇬 Bulgarian, 🐈 Catalan, 🇨🇳 Chinese, 🇭🇷 Croatian, 🇨🇿 Czech, 🇩🇰 Danish, 🇳🇱 Dutch, 🇺🇸 English, 🇪🇪 Estonian, 🇫🇮 Finnish, 🇫🇷 French, 🐟 Galician, 🇩🇪 German, 🇬🇷 Greek, 🇮🇳 Gujarati, 🇮🇱 Hebrew, 🇮🇳 Hindi, 🇭🇺 Hungarian, 🇮🇩 Indonesian, 🇮🇹 Italian, 🇯🇵 Japanese, 🇰🇷 Korean, 🇱🇻 Latvian, 🇱🇹 Lithuanian, 🇲🇰 Macedonian, 🇲🇾 Malay, 🇮🇳 Malayalam, 🇮🇳 Marathi, 🇳🇴 Norwegian, 🇮🇷 Persian, 🇵🇱 Polish, 🇵🇹 Portuguese, 🇮🇳 Punjabi, 🇷🇴 Romanian, 🇷🇺 Russian, 🇷🇸 Serbian, 🇸🇰 Slovak, 🇸🇮 Slovenian, 🇪🇸 Spanish, 🇸🇪 Swedish, 🇵🇭 Tagalog, 🇮🇳 Tamil, 🇮🇳 Telugu, 🇹🇭 Thai, 🇹🇷 Turkish, 🇺🇦 Ukrainian, 🇵🇰 Urdu, 🇻🇳 Vietnamese
+🇸🇦 Arabic, 🪨 Basque, 🇧🇦 Bosnian, 🇧🇬 Bulgarian, 🐈 Catalan, 🇨🇳 Chinese, 🇭🇷 Croatian, 🇨🇿 Czech, 🇩🇰 Danish, 🇳🇱 Dutch, 🇬🇧 English, 🇪🇪 Estonian, 🇫🇮 Finnish, 🇫🇷 French, 🐟 Galician, 🇩🇪 German, 🇬🇷 Greek, 🇮🇳 Gujarati, 🇮🇱 Hebrew, 🇮🇳 Hindi, 🇭🇺 Hungarian, 🇮🇩 Indonesian, 🇮🇹 Italian, 🇯🇵 Japanese, 🇰🇷 Korean, 🇱🇻 Latvian, 🇱🇹 Lithuanian, 🇲🇰 Macedonian, 🇲🇾 Malay, 🇮🇳 Malayalam, 🇮🇳 Marathi, 🇳🇴 Norwegian, 🇮🇷 Persian, 🇵🇱 Polish, 🇵🇹 Portuguese, 🇮🇳 Punjabi, 🇷🇴 Romanian, 🇷🇺 Russian, 🇷🇸 Serbian, 🇸🇰 Slovak, 🇸🇮 Slovenian, 🇪🇸 Spanish, 🇸🇪 Swedish, 🇵🇭 Tagalog, 🇮🇳 Tamil, 🇮🇳 Telugu, 🇹🇭 Thai, 🇹🇷 Turkish, 🇺🇦 Ukrainian, 🇵🇰 Urdu, 🇻🇳 Vietnamese
 
 ---
 

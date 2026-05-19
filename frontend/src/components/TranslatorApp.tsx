@@ -6,13 +6,17 @@ import Image from "next/image";
 import { useMemo, useRef, useState } from "react";
 import {
   adaptPhrase,
+  deleteSession as deleteSavedSession,
   fetchPlacesContext,
   fetchSessionDetail,
   fetchSessions,
   Language,
   Phrase,
   rediarizeSession,
+  renameSession as renameSavedSession,
   retranslateSession,
+  saveSessionAdaptation,
+  SessionDetail,
   SessionSummary,
   translatePhrase,
   TranscriptEvent,
@@ -55,7 +59,6 @@ type LeftLanguageSelection = "all" | string;
 
 const AUDIENCE_PRESETS: {
   id: string;
-  emoji: string;
   label: string;
   intent: SessionIntent;
   deeplFormality: Exclude<DeepLFormality, "auto">;
@@ -65,8 +68,7 @@ const AUDIENCE_PRESETS: {
 }[] = [
   {
     id: "service-staff",
-    emoji: "🛍️",
-    label: "Staff & services",
+    label: "staff",
     intent: "shopping",
     deeplFormality: "more",
     tone: "Polite customer speech",
@@ -76,8 +78,7 @@ const AUDIENCE_PRESETS: {
   },
   {
     id: "polite-stranger",
-    emoji: "👋",
-    label: "Strangers & elders",
+    label: "strangers",
     intent: "custom",
     deeplFormality: "more",
     tone: "Soft polite speech",
@@ -87,8 +88,7 @@ const AUDIENCE_PRESETS: {
   },
   {
     id: "close-people",
-    emoji: "😊",
-    label: "Friends & family",
+    label: "friends",
     intent: "family",
     deeplFormality: "less",
     tone: "Warm casual speech",
@@ -98,8 +98,7 @@ const AUDIENCE_PRESETS: {
   },
   {
     id: "work-school",
-    emoji: "💼",
-    label: "Work & school",
+    label: "work",
     intent: "custom",
     deeplFormality: "more",
     tone: "Professional spoken speech",
@@ -109,8 +108,7 @@ const AUDIENCE_PRESETS: {
   },
   {
     id: "official-care",
-    emoji: "🏛️",
-    label: "Official & care",
+    label: "official",
     intent: "doctor",
     deeplFormality: "more",
     tone: "Precise polite speech",
@@ -171,6 +169,7 @@ type ProviderSignals = {
 };
 
 const DEEPL_FORMALITY_STORAGE_KEY = "mil-decoder-deepl-formality-v1";
+const DISPLAY_GROUP_PAUSE_SECONDS = 10;
 const DEFAULT_SESSION_PLACE_CONTEXT: SessionPlaceContext = {
   location_hint: "",
   location_context: "",
@@ -280,6 +279,8 @@ export function TranslatorApp({
   const shouldFollowFeedRef = useRef(true);
   const adaptationRequestsRef = useRef<Set<string>>(new Set());
   const adaptationsRef = useRef<Record<string, PhraseAdaptation>>({});
+  const activeSessionRef = useRef("");
+  const sessionDetailCacheRef = useRef<Record<string, SessionDetail>>({});
   const providerSignalsRef = useRef<ProviderSignals>({ transcripts: [], translations: [] });
   const durationTimerRef = useRef<number | null>(null);
   const stopFallbackTimerRef = useRef<number | null>(null);
@@ -323,16 +324,17 @@ export function TranslatorApp({
     }
     return limitSessionGroups(sessionGroups, 8);
   }, [sessionGroups, sessionsExpanded]);
-  const displayedPhrases = useMemo(() => {
-    return compactPhrases(phrases);
-  }, [phrases]);
   const visiblePhrases = useMemo(() => {
-    const languageFiltered = displayedPhrases.filter((phrase) => phraseMatchesLeftLanguage(phrase, leftLanguageSelection));
     if (transcriptLatencyMode === "fast") {
-      return languageFiltered;
+      return phrases;
     }
-    return languageFiltered.filter((phrase) => phraseReadyForSlowMode(phrase, adaptations, activeLeftLanguage));
-  }, [activeLeftLanguage, adaptations, displayedPhrases, leftLanguageSelection, transcriptLatencyMode]);
+    return phrases.filter((phrase) =>
+      phraseReadyForSlowMode(phrase, adaptations, activeLeftLanguage, leftLanguageSelection, sourceB)
+    );
+  }, [activeLeftLanguage, adaptations, leftLanguageSelection, phrases, sourceB, transcriptLatencyMode]);
+  const visiblePhraseGroups = useMemo(() => {
+    return groupDisplayPhrases(visiblePhrases);
+  }, [visiblePhrases]);
 
   function setAdaptationsSynced(
     next:
@@ -343,6 +345,21 @@ export function TranslatorApp({
       const resolved = typeof next === "function" ? next(current) : next;
       adaptationsRef.current = resolved;
       return resolved;
+    });
+  }
+
+  function setActiveSessionSynced(next: string) {
+    activeSessionRef.current = next;
+    setActiveSession(next);
+  }
+
+  function persistAdaptation(key: string, adaptation: PhraseAdaptation) {
+    const sessionName = activeSessionRef.current;
+    if (!sessionName || !key || adaptation.status !== "ready") {
+      return;
+    }
+    void saveSessionAdaptation({ sessionName, key, adaptation }).catch(() => {
+      // Persistence failure should not block live conversation rendering.
     });
   }
 
@@ -374,10 +391,12 @@ export function TranslatorApp({
     });
   }
 
-  function setPhrasesAndFollow(next: Phrase[]) {
+  function setPhrasesAndFollow(next: Phrase[], options: { requestAdaptations?: boolean } = {}) {
     setPhrases(next);
     scrollFeedToBottomSoon();
-    requestAdaptationsFor(next);
+    if (options.requestAdaptations !== false) {
+      requestAdaptationsFor(next);
+    }
   }
 
   function startDurationTimer(startedAt: number) {
@@ -402,21 +421,80 @@ export function TranslatorApp({
   }
 
   function requestAdaptationsFor(phrasesToInspect: Phrase[], targetLanguage = activeLeftLanguage) {
-    const phrasesForRewrite = compactPhrases(phrasesToInspect);
+    const phrasesForRewrite = phrasesToInspect;
 
     for (const phrase of phrasesForRewrite) {
+      const sourceLang = phrase.source_lang || firstNonEnglishTextLanguage(phrase);
+      const sourceText = sourceLang ? phrase.texts[sourceLang]?.trim() : "";
+      if (!sourceLang || !sourceText || !phrase.is_final) {
+        continue;
+      }
+      const neededTargets = dedupeList([sourceB, targetLanguage]).filter((target) => target && target !== sourceLang);
+      for (const target of neededTargets) {
+        if (sourceLang === ENGLISH_LANGUAGE && target === targetLanguage && target !== ENGLISH_LANGUAGE) {
+          continue;
+        }
+        if (phrase.texts[target]?.trim()) {
+          continue;
+        }
+        const translationKey = adaptationKey(phrase, target);
+        if (!translationKey || adaptationsRef.current[translationKey] || adaptationRequestsRef.current.has(translationKey)) {
+          continue;
+        }
+        adaptationRequestsRef.current.add(translationKey);
+        setAdaptationsSynced((current) => ({
+          ...current,
+          [translationKey]: {
+            source_rewrite: "",
+            target_translation: current[translationKey]?.target_translation || "",
+            status: "loading"
+          }
+        }));
+        translatePhrase({
+          source_language: sourceLang,
+          target_language: target,
+          source_text: sourceText,
+          draft_translation: "",
+          rewrite_context: {
+            tone: contextBundle.rewriteTone,
+            recent_dialogue: recentDialogueForRewrite(phrasesForRewrite, adaptationsRef.current, translationKey, target)
+          }
+        })
+          .then((result) => {
+            const nextAdaptation = {
+              source_rewrite: adaptationsRef.current[translationKey]?.source_rewrite || "",
+              target_translation: result.target_translation,
+              status: "ready" as const
+            };
+            persistAdaptation(translationKey, nextAdaptation);
+            setAdaptationsSynced((current) => ({
+              ...current,
+              [translationKey]: nextAdaptation
+            }));
+          })
+          .catch(() => {
+            setAdaptationsSynced((current) => ({
+              ...current,
+              [translationKey]: {
+                source_rewrite: current[translationKey]?.source_rewrite || "",
+                target_translation: current[translationKey]?.target_translation || "",
+                status: "error"
+              }
+            }));
+          });
+      }
+
       const key = adaptationKey(phrase, targetLanguage);
       if (
         !key ||
         adaptationsRef.current[key] ||
         adaptationRequestsRef.current.has(key) ||
-        phrase.source_lang !== ENGLISH_LANGUAGE ||
+        sourceLang !== ENGLISH_LANGUAGE ||
         targetLanguage === ENGLISH_LANGUAGE ||
         !phrase.is_final
       ) {
         continue;
       }
-      const sourceText = phrase.texts.en?.trim();
       const draftTranslation = phrase.texts[targetLanguage]?.trim();
       if (!sourceText) {
         continue;
@@ -434,13 +512,15 @@ export function TranslatorApp({
         rewrite_context: baseRewriteContext
       })
         .then((result) => {
+          const nextAdaptation = {
+            source_rewrite: adaptationsRef.current[key]?.source_rewrite || "",
+            target_translation: result.target_translation,
+            status: "ready" as const
+          };
+          persistAdaptation(key, nextAdaptation);
           setAdaptationsSynced((current) => ({
             ...current,
-            [key]: {
-              source_rewrite: current[key]?.source_rewrite || "",
-              target_translation: result.target_translation,
-              status: current[key]?.status || "loading"
-            }
+            [key]: nextAdaptation
           }));
         })
         .catch(() => {
@@ -471,9 +551,11 @@ export function TranslatorApp({
           }
         })
           .then((result) => {
+            const nextAdaptation = { ...result, status: "ready" as const };
+            persistAdaptation(key, nextAdaptation);
             setAdaptationsSynced((current) => ({
               ...current,
-              [key]: { ...result, status: "ready" }
+              [key]: nextAdaptation
             }));
           })
           .catch(() => {
@@ -493,7 +575,7 @@ export function TranslatorApp({
   async function start() {
     setError("");
     setSavedPath("");
-    setActiveSession("");
+    setActiveSessionSynced("");
     setActiveSessionTitle("New chat");
     setRediarizeStatus("");
     setTranslationStatus("");
@@ -578,14 +660,15 @@ export function TranslatorApp({
     setError("");
     setLoadingSession(name);
     try {
-      const detail = await fetchSessionDetail(name);
+      const detail = sessionDetailCacheRef.current[name] || await fetchSessionDetail(name);
+      sessionDetailCacheRef.current[name] = detail;
       if (!detail.session) {
         throw new Error("Session not found.");
       }
       const sourceLanguages = detail.session.source_languages || [sourceA, sourceB];
       const loadedTarget = detail.session.target_language || sourceLanguages[1] || sourceB;
       const loadedSources = sourceLanguages.filter((code) => code && code !== loadedTarget);
-      setActiveSession(detail.session.name);
+      setActiveSessionSynced(detail.session.name);
       setActiveSessionTitle(detail.session.title || "New chat");
       setSourceALanguages(loadedSources.length > 0 ? loadedSources : [sourceA]);
       setSourceB(loadedTarget);
@@ -593,8 +676,9 @@ export function TranslatorApp({
       setExpectedSpeakerCount(
         detail.session.expected_speaker_count ? String(detail.session.expected_speaker_count) : "6"
       );
-      resetAdaptations();
-      setPhrasesAndFollow(detail.phrases || []);
+      adaptationRequestsRef.current.clear();
+      setAdaptationsSynced(detail.adaptations || {});
+      setPhrasesAndFollow(detail.phrases || [], { requestAdaptations: false });
       clearProviderSignals();
       setTokenCount(detail.session.tokens?.length || detail.phrases?.length || 0);
       setActiveDurationSeconds(detail.session.duration_seconds ?? durationFromPhrases(detail.phrases || []));
@@ -616,12 +700,51 @@ export function TranslatorApp({
     }
   }
 
+  async function renameSessionTitle(name: string, title: string) {
+    const cleanTitle = title.trim();
+    if (!cleanTitle) {
+      return;
+    }
+    try {
+      const result = await renameSavedSession(name, cleanTitle);
+      setSessions((current) =>
+        current.map((session) => (session.name === result.name ? { ...session, title: result.title } : session))
+      );
+      if (activeSession === result.name) {
+        setActiveSessionTitle(result.title);
+      }
+      const cached = sessionDetailCacheRef.current[result.name];
+      if (cached?.session) {
+        cached.session.title = result.title;
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not rename chat.");
+    }
+  }
+
+  async function deleteSessionByName(name: string) {
+    if (isLive && activeSession === name) {
+      setError("Stop the current session before deleting it.");
+      return;
+    }
+    try {
+      const result = await deleteSavedSession(name);
+      delete sessionDetailCacheRef.current[result.name];
+      setSessions((current) => current.filter((session) => session.name !== result.name));
+      if (activeSession === result.name) {
+        newSession();
+      }
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : "Could not delete chat.");
+    }
+  }
+
   function newSession() {
     if (isLive) {
       return;
     }
     setSavedPath("");
-    setActiveSession("");
+    setActiveSessionSynced("");
     setActiveSessionTitle("");
     setRediarizeStatus("");
     setTranslationStatus("");
@@ -745,7 +868,7 @@ export function TranslatorApp({
       return;
     }
     if (message.type === "session") {
-      setActiveSession(message.session.name);
+      setActiveSessionSynced(message.session.name);
       setActiveSessionTitle(message.session.title || "New chat");
       setTokenCount(message.session.token_count);
       return;
@@ -771,7 +894,7 @@ export function TranslatorApp({
       return;
     }
     if (message.type === "saved") {
-      setActiveSession(message.session);
+      setActiveSessionSynced(message.session);
       setActiveSessionTitle(message.title || "New chat");
       setSavedPath(message.path);
       setPhrasesAndFollow(message.phrases);
@@ -919,7 +1042,6 @@ export function TranslatorApp({
           type="button"
         />
         <SessionSidebar
-          activeDurationSeconds={activeDurationSeconds}
           activeSession={activeSession}
           activeSessionTitle={activeSessionTitle}
           expanded={sessionsExpanded}
@@ -928,8 +1050,10 @@ export function TranslatorApp({
           isOpen={sessionsOpen}
           loadingSession={loadingSession}
           onClose={() => setSessionsOpen(false)}
+          onDelete={deleteSessionByName}
           onLoad={loadSession}
           onNew={newSession}
+          onRename={renameSessionTitle}
           onToggleSettings={() => setSettingsMockOpen((current) => !current)}
           onToggleExpanded={() => setSessionsExpanded((current) => !current)}
           settingsMockOpen={settingsMockOpen}
@@ -1012,22 +1136,24 @@ export function TranslatorApp({
           <div className="feed" onScroll={handleFeedScroll} ref={feedRef}>
             {phrases.length === 0 ? (
               <div className="emptyState" aria-hidden="true" />
-            ) : visiblePhrases.length === 0 ? (
+            ) : visiblePhraseGroups.length === 0 ? (
               <div className="emptyState">
                 <strong>Waiting for corrections...</strong>
               </div>
             ) : (
-              visiblePhrases.map((phrase) => (
+              visiblePhraseGroups.map((phraseGroup) => (
                 <PhraseCard
-                  key={phrase.id}
-                  adaptation={adaptations[adaptationKey(phrase, activeLeftLanguage)]}
+                  key={phraseGroup[0]?.id || ""}
+                  adaptations={adaptations}
                   activeLeftLanguage={activeLeftLanguage}
                   editingSpeaker={editingSpeaker}
+                  leftLanguageSelection={leftLanguageSelection}
                   languageMap={languageMap}
                   onEditSpeaker={openSpeakerEditor}
-                  phrase={phrase}
+                  phrases={phraseGroup}
                   speakerDrafts={speakerDrafts}
                   showEnhancedEnglish={showEnhancedEnglish}
+                  targetLanguage={sourceB}
                 />
               ))
             )}
@@ -1084,7 +1210,7 @@ function ChatDisplayToggle({
           title="Show all detected languages"
           type="button"
         >
-          All
+          🌐
         </button>
         {leftLanguageOptions.map((language) => (
           <button
@@ -1095,7 +1221,7 @@ function ChatDisplayToggle({
             title={language.name}
             type="button"
           >
-            {language.flag} {language.code.toUpperCase()}
+            {language.flag}
           </button>
         ))}
       </div>
@@ -1170,15 +1296,6 @@ function ComposerBar({
         onSubmit();
       }}
     >
-      <button
-        aria-label={isLive ? "Stop transcription" : "Start transcription"}
-        className={`transportButton ${isLive ? "recording" : ""}`}
-        disabled={!isLive && !canStart}
-        onClick={isLive ? onStop : onStart}
-        type="button"
-      >
-        {isLive ? "■" : "▶"}
-      </button>
       <input
         aria-label="Type a phrase"
         className="composerInput"
@@ -1188,6 +1305,15 @@ function ComposerBar({
       />
       <button className="sendButton" disabled={!text.trim()} type="submit">
         Send
+      </button>
+      <button
+        aria-label={isLive ? "Stop transcription" : "Start transcription"}
+        className={`transportButton ${isLive ? "recording" : ""}`}
+        disabled={!isLive && !canStart}
+        onClick={isLive ? onStop : onStart}
+        type="button"
+      >
+        {isLive ? "■" : "▶"}
       </button>
     </form>
   );
@@ -1284,7 +1410,6 @@ function ConversationOnboarding({
 }
 
 function SessionSidebar({
-  activeDurationSeconds,
   activeSession,
   activeSessionTitle,
   expanded,
@@ -1293,14 +1418,15 @@ function SessionSidebar({
   isOpen,
   loadingSession,
   onClose,
+  onDelete,
   onLoad,
   onNew,
+  onRename,
   onToggleSettings,
   onToggleExpanded,
   settingsMockOpen,
   total
 }: {
-  activeDurationSeconds: number | null;
   activeSession: string;
   activeSessionTitle: string;
   expanded: boolean;
@@ -1309,13 +1435,37 @@ function SessionSidebar({
   isOpen: boolean;
   loadingSession: string;
   onClose: () => void;
+  onDelete: (name: string) => Promise<void>;
   onLoad: (name: string) => void;
   onNew: () => void;
+  onRename: (name: string, title: string) => Promise<void>;
   onToggleSettings: () => void;
   onToggleExpanded: () => void;
   settingsMockOpen: boolean;
   total: number;
 }) {
+  const [openMenuSession, setOpenMenuSession] = useState("");
+  const [renamingSession, setRenamingSession] = useState("");
+  const [renameDraft, setRenameDraft] = useState("");
+
+  async function saveRename(session: SessionSummary) {
+    await onRename(session.name, renameDraft);
+    setOpenMenuSession("");
+    setRenamingSession("");
+    setRenameDraft("");
+  }
+
+  async function eraseSession(session: SessionSummary) {
+    const title = session.title || session.name;
+    if (!window.confirm(`Delete "${title}"? This cannot be undone.`)) {
+      return;
+    }
+    await onDelete(session.name);
+    setOpenMenuSession("");
+    setRenamingSession("");
+    setRenameDraft("");
+  }
+
   return (
     <aside className={`sessionPanel ${isOpen ? "open" : ""}`} aria-label="Sessions">
       <div className="sessionPanelHeader">
@@ -1324,9 +1474,6 @@ function SessionSidebar({
           <strong>cottonoha</strong>
         </div>
         <div className="sessionHeaderActions">
-          <button className="secondaryButton compactButton" onClick={onNew} type="button">
-            New
-          </button>
           <button aria-label="Close sessions" className="drawerCloseButton" onClick={onClose} type="button">
             ×
           </button>
@@ -1334,14 +1481,17 @@ function SessionSidebar({
       </div>
 
       <div className="sessionList">
+        <button aria-label="Start a new chat" className="sessionButton newChatButton" onClick={onNew} type="button">
+          <NewChatIcon />
+          <span className="sessionTitle">New chat</span>
+        </button>
         <p className="sessionSectionLabel">History</p>
         {activeSession && !groups.some((group) => group.sessions.some((session) => session.name === activeSession)) ? (
           <section className="sessionGroup">
             <h3>Current</h3>
-            <button className="sessionButton active" disabled type="button">
+            <div className="sessionButton active currentSessionRow">
               <span className="sessionTitle">{activeSessionTitle || "New chat"}</span>
-              <span className="sessionMeta">{formatDuration(activeDurationSeconds)}</span>
-            </button>
+            </div>
           </section>
         ) : null}
         {groups.length === 0 && !activeSession ? (
@@ -1350,21 +1500,89 @@ function SessionSidebar({
           groups.map((group) => (
             <section className="sessionGroup" key={group.label}>
               <h3>{group.label}</h3>
-              {group.sessions.map((session) => (
-                <button
-                  className={`sessionButton ${activeSession === session.name ? "active" : ""}`}
-                  disabled={Boolean(loadingSession)}
-                  key={session.name}
-                  onClick={() => onLoad(session.name)}
-                  type="button"
-                >
-                  <span className="sessionTitle">{session.title || session.name}</span>
-                  <span className="sessionMeta">
-                    {formatDuration(session.duration_seconds)}
-                    {loadingSession === session.name ? " · loading" : ""}
-                  </span>
-                </button>
-              ))}
+              {group.sessions.map((session) => {
+                const menuOpen = openMenuSession === session.name;
+                const isRenaming = renamingSession === session.name;
+                return (
+                  <div className="sessionRow" key={session.name}>
+                    <button
+                      className={`sessionButton sessionOpenButton ${activeSession === session.name ? "active" : ""}`}
+                      disabled={Boolean(loadingSession)}
+                      onClick={() => onLoad(session.name)}
+                      type="button"
+                    >
+                      <span className="sessionTitle">{session.title || session.name}</span>
+                      {loadingSession === session.name ? <span className="sessionMeta">loading</span> : null}
+                    </button>
+                    <button
+                      aria-expanded={menuOpen}
+                      aria-label={`Chat options for ${session.title || session.name}`}
+                      className="sessionMenuButton"
+                      onClick={() => {
+                        const nextOpen = menuOpen ? "" : session.name;
+                        setOpenMenuSession(nextOpen);
+                        setRenamingSession("");
+                        setRenameDraft(session.title || session.name);
+                      }}
+                      type="button"
+                    >
+                      <span aria-hidden="true">•••</span>
+                    </button>
+                    {menuOpen ? (
+                      <div className="sessionMenu" role="menu">
+                        <div className="sessionMenuMeta">Duration {formatDuration(session.duration_seconds)}</div>
+                        {isRenaming ? (
+                          <form
+                            className="sessionRenameForm"
+                            onSubmit={(event) => {
+                              event.preventDefault();
+                              void saveRename(session);
+                            }}
+                          >
+                            <input
+                              aria-label="Chat name"
+                              autoFocus
+                              onChange={(event) => setRenameDraft(event.target.value)}
+                              value={renameDraft}
+                            />
+                            <div className="sessionMenuActions">
+                              <button className="sessionMenuAction" type="submit">
+                                Save
+                              </button>
+                              <button
+                                className="sessionMenuAction"
+                                onClick={() => {
+                                  setRenamingSession("");
+                                  setRenameDraft(session.title || session.name);
+                                }}
+                                type="button"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          </form>
+                        ) : (
+                          <div className="sessionMenuActions">
+                            <button
+                              className="sessionMenuAction"
+                              onClick={() => {
+                                setRenamingSession(session.name);
+                                setRenameDraft(session.title || session.name);
+                              }}
+                              type="button"
+                            >
+                              Rename
+                            </button>
+                            <button className="sessionMenuAction danger" onClick={() => void eraseSession(session)} type="button">
+                              Delete
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    ) : null}
+                  </div>
+                );
+              })}
             </section>
           ))
         )}
@@ -1385,12 +1603,12 @@ function SessionSidebar({
         ) : null}
         <div className="sidebarBottomActions">
           <button className="sidebarIconButton" onClick={onToggleSettings} type="button">
-            <span aria-hidden="true">⚙️</span>
-            <span>Settings</span>
+            <SettingsIcon />
+            <span>settings</span>
           </button>
           <Link className="sidebarIconButton" href="/profile">
-            <span aria-hidden="true">👤</span>
-            <span>Profile</span>
+            <ProfileIcon />
+            <span>profile</span>
           </Link>
         </div>
       </div>
@@ -1525,9 +1743,6 @@ function AudiencePicker({
               onChange={() => onChange(preset.id)}
               type="radio"
             />
-            <span className="audienceEmoji" aria-hidden="true">
-              {preset.emoji}
-            </span>
             <span className="audienceName">{preset.label}</span>
           </label>
         ))}
@@ -1566,25 +1781,57 @@ function BrandMark({ compact = false }: { compact?: boolean }) {
   );
 }
 
+function SettingsIcon() {
+  return (
+    <svg aria-hidden="true" className="sidebarIcon" viewBox="0 0 16 16">
+      <path d="M8 2v12M2 8h12M4 4l8 8M12 4l-8 8" />
+      <circle cx="8" cy="8" r="2.5" />
+    </svg>
+  );
+}
+
+function ProfileIcon() {
+  return (
+    <svg aria-hidden="true" className="sidebarIcon" viewBox="0 0 16 16">
+      <circle cx="8" cy="5" r="3" />
+      <path d="M3 14c.8-2.8 2.4-4 5-4s4.2 1.2 5 4" />
+    </svg>
+  );
+}
+
+function NewChatIcon() {
+  return (
+    <svg aria-hidden="true" className="newChatIcon" viewBox="0 0 18 18">
+      <path d="M7.5 3H4.25A1.75 1.75 0 0 0 2.5 4.75v9A1.75 1.75 0 0 0 4.25 15.5h9a1.75 1.75 0 0 0 1.75-1.75V10.5" />
+      <path d="M8 10.25 13.9 4.35a1.2 1.2 0 0 1 1.7 1.7L9.7 11.95l-2.25.55L8 10.25Z" />
+    </svg>
+  );
+}
+
 function PhraseCard({
   activeLeftLanguage,
-  adaptation,
+  adaptations,
   editingSpeaker,
+  leftLanguageSelection,
   languageMap,
   onEditSpeaker,
-  phrase,
+  phrases,
   speakerDrafts,
-  showEnhancedEnglish
+  showEnhancedEnglish,
+  targetLanguage
 }: {
   activeLeftLanguage: string;
-  adaptation?: PhraseAdaptation;
+  adaptations: Record<string, PhraseAdaptation>;
   editingSpeaker: string | null;
+  leftLanguageSelection: LeftLanguageSelection;
   languageMap: Map<string, Language>;
   onEditSpeaker: (speakerId: string, label: string) => void;
-  phrase: Phrase;
+  phrases: Phrase[];
   speakerDrafts: Record<string, SpeakerDraft>;
   showEnhancedEnglish: boolean;
+  targetLanguage: string;
 }) {
+  const phrase = phrases[0]!;
   const color = speakerColor(speakerKey(phrase.speaker));
   const style = { "--speaker-color": color } as CSSProperties;
   const speakerId = speakerKey(phrase.speaker);
@@ -1592,29 +1839,38 @@ function PhraseCard({
   const speakerInitials = speakerDrafts[speakerId]?.initials?.trim() || initialsFromSpeakerName(speakerLabel, speakerId);
   const isEditingSpeaker = Boolean(speakerId && editingSpeaker === speakerId);
   const sourceLang = phrase.source_lang || firstNonEnglishTextLanguage(phrase) || activeLeftLanguage;
-  const isEnglishSource = sourceLang === ENGLISH_LANGUAGE;
-  const englishText = phrase.texts.en || "";
-  const leftLanguage = isEnglishSource ? activeLeftLanguage : sourceLang;
-  const leftText = isEnglishSource
-    ? adaptation?.target_translation || phrase.texts[leftLanguage] || firstNonEnglishText(phrase) || ""
-    : phrase.texts[sourceLang] || phrase.texts[leftLanguage] || "";
-  const hasEnhancedEnglish = Boolean(adaptation?.source_rewrite?.trim());
-  const shownEnglish = showEnhancedEnglish && hasEnhancedEnglish ? adaptation?.source_rewrite || englishText : englishText;
+  const isTargetSource = sourceLang === targetLanguage;
+  const leftLanguage = isTargetSource
+    ? activeLeftLanguage
+    : leftLanguageSelection === "all"
+      ? sourceLang
+      : activeLeftLanguage;
+  const leftText = joinDisplayLines(phrases.map((item) => phraseLeftText(item, leftLanguage, targetLanguage, adaptations)));
+  const targetText = joinDisplayLines(phrases.map((item) => phraseTargetText(item, targetLanguage, adaptations)));
+  const hasEnhancedEnglish = phrases.some((item) => Boolean(adaptations[adaptationKey(item, activeLeftLanguage)]?.source_rewrite?.trim()));
+  const shownTargetText = joinDisplayLines(
+    phrases.map((item) => phraseShownTargetText(item, targetLanguage, activeLeftLanguage, adaptations, showEnhancedEnglish))
+  );
   const leftLabel = languageLabel(languageMap, leftLanguage);
+  const targetLabel = languageLabel(languageMap, targetLanguage);
+  const leftRomaji = leftLanguage === "ja" && sourceLang === "ja"
+    ? joinDisplayLines(phrases.map((item) => item.romaji_ja || ""))
+    : "";
+  const loading = phrases.some((item) => adaptations[adaptationKey(item, activeLeftLanguage)]?.status === "loading");
 
   return (
-    <article className={`phrase ${isEnglishSource ? "fromEnglish" : "fromOther"}`} style={style}>
+    <article className={`phrase ${isTargetSource ? "fromEnglish" : "fromOther"}`} style={style}>
       <div className="conversationLanes">
         <div className="languageLane leftLanguageLane">
-          {isEnglishSource ? (
-            <TranslationLine code={leftLanguage} enhanced={Boolean(adaptation?.target_translation)} label={leftLabel} text={leftText} />
+          {isTargetSource ? (
+            <TranslationLine code={leftLanguage} enhanced={hasEnhancedEnglish} label={leftLabel} text={leftText} />
           ) : (
             <BubbleWithSpeaker
-              code={sourceLang}
+              code={leftLanguage}
               editingSpeaker={isEditingSpeaker}
               label={leftLabel}
               onEditSpeaker={onEditSpeaker}
-              romaji={sourceLang === "ja" ? phrase.romaji_ja || "" : ""}
+              romaji={leftRomaji}
               speakerId={speakerId}
               speakerInitials={speakerInitials}
               speakerLabel={speakerLabel}
@@ -1623,21 +1879,21 @@ function PhraseCard({
           )}
         </div>
         <div className="languageLane englishLane">
-          {isEnglishSource ? (
+          {isTargetSource ? (
             <BubbleWithSpeaker
-              code={ENGLISH_LANGUAGE}
+              code={targetLanguage}
               editingSpeaker={isEditingSpeaker}
               enhanced={showEnhancedEnglish && hasEnhancedEnglish}
-              loading={adaptation?.status === "loading"}
-              label="English"
+              loading={loading}
+              label={targetLabel}
               onEditSpeaker={onEditSpeaker}
               speakerId={speakerId}
               speakerInitials={speakerInitials}
               speakerLabel={speakerLabel}
-              text={shownEnglish}
+              text={shownTargetText || targetText}
             />
           ) : (
-            <TranslationLine code={ENGLISH_LANGUAGE} label="English" text={shownEnglish} />
+            <TranslationLine code={targetLanguage} enhanced={phrases.some((item) => Boolean(adaptations[adaptationKey(item, targetLanguage)]?.target_translation))} label={targetLabel} text={targetText} />
           )}
         </div>
       </div>
@@ -1674,9 +1930,7 @@ function BubbleWithSpeaker({
     <div className={`bubbleWithSpeaker ${editingSpeaker ? "editingSpeaker" : ""}`}>
       <SpeakerTag
         initials={speakerInitials}
-        label={speakerLabel}
         onOpen={() => onEditSpeaker(speakerId, speakerLabel)}
-        speakerId={speakerId}
       />
       <div className="speechBubbleHighlight">
         <SpeechBubble code={code} enhanced={enhanced} label={label} loading={loading} romaji={romaji} text={text} />
@@ -1687,19 +1941,14 @@ function BubbleWithSpeaker({
 
 function SpeakerTag({
   initials,
-  label,
-  onOpen,
-  speakerId
+  onOpen
 }: {
   initials: string;
-  label: string;
   onOpen: () => void;
-  speakerId: string;
 }) {
   return (
-    <button className="speakerTag" onClick={onOpen} title={`Edit ${label || fallbackSpeakerLabel(speakerId)}`} type="button">
+    <button aria-label={`Edit speaker ${initials}`} className="speakerTag" onClick={onOpen} title={`Edit speaker ${initials}`} type="button">
       <span className="speakerTagInitials">{initials}</span>
-      <span className="speakerTagLabel">{shortSpeakerLabel(label, speakerId)}</span>
     </button>
   );
 }
@@ -1774,13 +2023,97 @@ function SpeechBubble({
   romaji?: string;
   text: string;
 }) {
+  const pairedJapanese = code === "ja" && romaji ? pairJapaneseRomaji(text, romaji) : [];
   return (
     <div className={`speechBubble ${code === "ja" ? "japanese" : ""} ${enhanced ? "aiEnhanced" : ""}`} dir="auto" lang={code} title={label}>
-      <span className="lineText">{text || "..."}</span>
+      {pairedJapanese.length ? (
+        <span className="lineText japaneseLines">
+          {pairedJapanese.map((line, index) => (
+            <span className="japaneseLine" key={`${line.text}-${index}`}>
+              <span className="japaneseOriginal">{line.text || "..."}</span>
+              {line.romaji ? <span className="inlineRomaji">({line.romaji})</span> : null}
+            </span>
+          ))}
+        </span>
+      ) : (
+        <span className="lineText">{text || "..."}</span>
+      )}
       {loading ? <span className="romaji">Adapting...</span> : null}
-      {romaji ? <span className="romaji">{romaji}</span> : null}
+      {romaji && !pairedJapanese.length ? <span className="romaji">{romaji}</span> : null}
     </div>
   );
+}
+
+function pairJapaneseRomaji(text: string, romaji: string): Array<{ text: string; romaji: string }> {
+  const textLines = splitDisplayLines(text);
+  const romajiLines = splitDisplayLines(romaji);
+  const count = Math.max(textLines.length, romajiLines.length);
+  const pairs: Array<{ text: string; romaji: string }> = [];
+  for (let index = 0; index < count; index += 1) {
+    pairs.push({
+      text: textLines[index] || "",
+      romaji: romajiLines[index] || ""
+    });
+  }
+  return pairs;
+}
+
+function splitDisplayLines(value: string): string[] {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function joinDisplayLines(values: Array<string | undefined | null>): string {
+  return values.map((value) => (value || "").trim()).filter(Boolean).join("\n");
+}
+
+function phraseLeftText(
+  phrase: Phrase,
+  leftLanguage: string,
+  targetLanguage: string,
+  adaptations: Record<string, PhraseAdaptation>
+): string {
+  const sourceLang = phrase.source_lang || firstNonEnglishTextLanguage(phrase) || leftLanguage;
+  if (sourceLang === targetLanguage) {
+    const adaptation = adaptations[adaptationKey(phrase, leftLanguage)];
+    return adaptation?.target_translation || phrase.texts[leftLanguage] || firstNonEnglishText(phrase) || "";
+  }
+  if (sourceLang === leftLanguage) {
+    return phrase.texts[sourceLang] || phrase.texts[leftLanguage] || "";
+  }
+  const adaptation = adaptations[adaptationKey(phrase, leftLanguage)];
+  return adaptation?.target_translation || phrase.texts[leftLanguage] || "";
+}
+
+function phraseTargetText(
+  phrase: Phrase,
+  targetLanguage: string,
+  adaptations: Record<string, PhraseAdaptation>
+): string {
+  const sourceLang = phrase.source_lang || firstNonEnglishTextLanguage(phrase) || targetLanguage;
+  if (sourceLang === targetLanguage) {
+    return phrase.texts[targetLanguage] || "";
+  }
+  const adaptation = adaptations[adaptationKey(phrase, targetLanguage)];
+  return phrase.texts[targetLanguage] || adaptation?.target_translation || "";
+}
+
+function phraseShownTargetText(
+  phrase: Phrase,
+  targetLanguage: string,
+  leftLanguage: string,
+  adaptations: Record<string, PhraseAdaptation>,
+  showEnhancedEnglish: boolean
+): string {
+  const sourceLang = phrase.source_lang || firstNonEnglishTextLanguage(phrase) || targetLanguage;
+  if (sourceLang !== targetLanguage) {
+    return phraseTargetText(phrase, targetLanguage, adaptations);
+  }
+  const adaptation = adaptations[adaptationKey(phrase, leftLanguage)];
+  const original = phrase.texts[targetLanguage] || "";
+  return showEnhancedEnglish && adaptation?.source_rewrite ? adaptation.source_rewrite : original;
 }
 
 function TranslationLine({ code, enhanced = false, label, text }: { code: string; enhanced?: boolean; label: string; text: string }) {
@@ -1789,42 +2122,6 @@ function TranslationLine({ code, enhanced = false, label, text }: { code: string
       <span className="lineText">{text || "..."}</span>
     </div>
   );
-}
-
-function compactPhrases(phrases: Phrase[]): Phrase[] {
-  const compact: Phrase[] = [];
-  for (const phrase of phrases) {
-    const previous = compact.at(-1);
-    if (
-      previous
-      && speakerKey(previous.speaker) === speakerKey(phrase.speaker)
-      && previous.source_lang === phrase.source_lang
-    ) {
-      compact[compact.length - 1] = mergePhrase(previous, phrase);
-    } else {
-      compact.push(phrase);
-    }
-  }
-  return compact;
-}
-
-function mergePhrase(previous: Phrase, next: Phrase): Phrase {
-  const texts = { ...previous.texts };
-  for (const [language, text] of Object.entries(next.texts)) {
-    if (!text.trim()) {
-      continue;
-    }
-    texts[language] = texts[language]?.trim()
-      ? `${texts[language].trim()}\n${text.trim()}`
-      : text;
-  }
-  return {
-    ...next,
-    id: `${previous.id}-${next.id}`,
-    texts,
-    romaji_ja: [previous.romaji_ja, next.romaji_ja].filter(Boolean).join("\n") || null,
-    is_final: previous.is_final && next.is_final
-  };
 }
 
 function speakerKey(speaker: number | string | null): string {
@@ -1859,15 +2156,6 @@ function fallbackSpeakerLabel(id: string): string {
   return id;
 }
 
-function shortSpeakerLabel(label: string, speakerId: string): string {
-  const clean = label.trim();
-  const numeric = Number(speakerId);
-  if (!clean || clean.startsWith("Speaker ")) {
-    return Number.isFinite(numeric) ? String(numeric) : clean || "S";
-  }
-  return clean;
-}
-
 function speakerEditableName(label: string, speakerId: string): string {
   const clean = label.trim();
   if (!clean || clean === fallbackSpeakerLabel(speakerId) || clean.startsWith("Speaker ")) {
@@ -1880,7 +2168,7 @@ function initialsFromSpeakerName(name: string, speakerId: string): string {
   const clean = name.trim();
   const numeric = Number(speakerId);
   if (!clean || clean.startsWith("Speaker ")) {
-    return Number.isFinite(numeric) ? String(numeric) : "S";
+    return Number.isFinite(numeric) ? `S${numeric}` : "S";
   }
   if (speakerId === "typed" && clean === "You") {
     return "Me";
@@ -1963,14 +2251,6 @@ function resolveLeftLanguageSelection(
   return options[0]?.code || "ja";
 }
 
-function phraseMatchesLeftLanguage(phrase: Phrase, selection: LeftLanguageSelection): boolean {
-  if (selection === "all" || phrase.source_lang === ENGLISH_LANGUAGE) {
-    return true;
-  }
-  const sourceLanguage = phrase.source_lang || firstNonEnglishTextLanguage(phrase);
-  return sourceLanguage === selection || Boolean(phrase.texts[selection]);
-}
-
 function firstNonEnglishTextLanguage(phrase: Phrase): string {
   return Object.keys(phrase.texts).find((code) => code !== ENGLISH_LANGUAGE) || "";
 }
@@ -1981,25 +2261,86 @@ function firstNonEnglishText(phrase: Phrase): string {
 }
 
 function adaptationKey(phrase: Phrase, targetLanguage = ""): string {
-  const source = phrase.source_lang ? phrase.texts[phrase.source_lang]?.trim() : "";
+  const sourceLanguage = phrase.source_lang || firstNonEnglishTextLanguage(phrase);
+  const source = sourceLanguage ? phrase.texts[sourceLanguage]?.trim() : "";
   if (!source) {
     return "";
   }
-  return phrase.source_lang === ENGLISH_LANGUAGE && targetLanguage
-    ? `${phrase.id}:${targetLanguage}:${source}`
-    : `${phrase.id}:${source}`;
+  return targetLanguage ? `${phrase.id}:${targetLanguage}:${source}` : `${phrase.id}:${source}`;
 }
 
-function phraseReadyForSlowMode(phrase: Phrase, adaptations: Record<string, PhraseAdaptation>, targetLanguage: string): boolean {
-  if (phrase.source_lang !== ENGLISH_LANGUAGE) {
+function phraseReadyForSlowMode(
+  phrase: Phrase,
+  adaptations: Record<string, PhraseAdaptation>,
+  leftTargetLanguage: string,
+  leftSelection: LeftLanguageSelection,
+  rightTargetLanguage: string
+): boolean {
+  const sourceLanguage = phrase.source_lang || firstNonEnglishTextLanguage(phrase);
+  if (!sourceLanguage) {
     return true;
   }
-  const key = adaptationKey(phrase, targetLanguage);
-  if (!key) {
+  const requiredTargets = dedupeList([
+    sourceLanguage === rightTargetLanguage ? leftTargetLanguage : rightTargetLanguage,
+    leftSelection === "all" || sourceLanguage === leftTargetLanguage ? "" : leftTargetLanguage
+  ]).filter((target) => target && target !== sourceLanguage && !phrase.texts[target]?.trim());
+  for (const target of requiredTargets) {
+    const adaptation = adaptations[adaptationKey(phrase, target)];
+    if (adaptation?.status !== "ready" && adaptation?.status !== "error") {
+      return false;
+    }
+  }
+  return true;
+}
+
+function groupDisplayPhrases(phrases: Phrase[]): Phrase[][] {
+  const groups: Phrase[][] = [];
+  for (const phrase of phrases) {
+    const current = groups[groups.length - 1];
+    const previous = current?.[current.length - 1];
+    if (current && previous && shouldShareDisplayBubble(previous, phrase)) {
+      current.push(phrase);
+    } else {
+      groups.push([phrase]);
+    }
+  }
+  return groups;
+}
+
+function shouldShareDisplayBubble(previous: Phrase, next: Phrase): boolean {
+  if (speakerKey(previous.speaker) !== speakerKey(next.speaker)) {
     return false;
   }
-  const adaptation = adaptations[key];
-  return adaptation?.status === "ready" || adaptation?.status === "error";
+  if (displaySourceLanguage(previous) !== displaySourceLanguage(next)) {
+    return false;
+  }
+  const previousSeconds = phraseSeconds(previous);
+  const nextSeconds = phraseSeconds(next);
+  if (previousSeconds === null || nextSeconds === null) {
+    return true;
+  }
+  return Math.max(0, nextSeconds - previousSeconds) <= DISPLAY_GROUP_PAUSE_SECONDS;
+}
+
+function displaySourceLanguage(phrase: Phrase): string {
+  return phrase.source_lang || firstNonEnglishTextLanguage(phrase) || "";
+}
+
+function phraseSeconds(phrase: Phrase): number | null {
+  if (typeof phrase.time === "number") {
+    return phrase.time > 10_000 ? phrase.time / 1000 : phrase.time;
+  }
+  if (typeof phrase.time === "string") {
+    const value = Number.parseFloat(phrase.time);
+    if (Number.isFinite(value)) {
+      return value > 10_000 ? value / 1000 : value;
+    }
+  }
+  return null;
+}
+
+function dedupeList(values: string[]): string[] {
+  return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
 }
 
 function recentDialogueForRewrite(
@@ -2126,6 +2467,8 @@ function buildContextBundle(
     ...splitListText(profile.travel_party),
     ...splitListText(profile.allergies),
     ...splitListText(profile.mobility),
+    ...splitListText(profile.saved_places),
+    ...splitListText(profile.nearby_places),
     ...splitListText(placeContext.places),
     ...splitListText(placeContext.terms),
     ...baseTermsForIntent(intent, inferredPoi)

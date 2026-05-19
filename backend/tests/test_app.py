@@ -479,6 +479,55 @@ def test_list_sessions_sorts_by_updated_newest_first(tmp_path, monkeypatch):
     assert [session["name"] for session in list_sessions()] == ["new", "middle", "old"]
 
 
+def test_session_rename_and_delete_endpoints(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.shared.REPO_ROOT", tmp_path)
+    session = make_session("rename me", ["ja", "en"], "en")
+    session.final_tokens = [{"text": "hello", "speaker": 1, "language": "en", "is_final": True}]
+    session.save_state()
+    session_dir = tmp_path / "output" / "rename-me"
+    (session_dir / "session_summary.json").write_text(
+        json.dumps({"title": "Auto title", "summary": "A short summary."}),
+        encoding="utf-8",
+    )
+
+    client = TestClient(app)
+    renamed = client.patch("/sessions/rename-me", json={"title": "Manual title"})
+
+    assert renamed.status_code == 200
+    assert renamed.json()["title"] == "Manual title"
+    assert client.get("/sessions/rename-me").json()["session"]["title"] == "Manual title"
+
+    deleted = client.delete("/sessions/rename-me")
+
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] is True
+    assert not session_dir.exists()
+
+
+def test_session_adaptations_are_persisted_and_loaded(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.shared.REPO_ROOT", tmp_path)
+    session = make_session("adapted chat", ["en", "ja"], "ja")
+    session.final_tokens = [{"text": "check", "speaker": 1, "language": "en", "is_final": True}]
+    session.save_state()
+
+    client = TestClient(app)
+    saved = client.post(
+        "/sessions/adapted-chat/adaptations",
+        json={
+            "key": "0-1-en:ja:check",
+            "adaptation": {
+                "source_rewrite": "I'd like the bill, please.",
+                "target_translation": "お会計をお願いします。",
+                "status": "ready",
+            },
+        },
+    )
+
+    assert saved.status_code == 200
+    detail = client.get("/sessions/adapted-chat").json()
+    assert detail["adaptations"]["0-1-en:ja:check"]["target_translation"] == "お会計をお願いします。"
+
+
 def test_translation_update_stats_are_persisted(tmp_path, monkeypatch):
     monkeypatch.setattr("app.shared.REPO_ROOT", tmp_path)
     session = make_session("translation metrics", ["ja", "en"], "en")

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRef, useState } from "react";
-import { fetchNameKatakanaOptions, type NameKatakanaOption } from "@/lib/api";
+import { fetchNameKatakanaOptions, importGoogleMapsList, type NameKatakanaOption } from "@/lib/api";
 import {
   DEFAULT_PROFILE,
   loadTravelerProfile,
@@ -59,6 +59,9 @@ export function ProfileApp() {
   const [katakanaOptions, setKatakanaOptions] = useState<NameKatakanaOption[]>([]);
   const [katakanaLoading, setKatakanaLoading] = useState(false);
   const [katakanaError, setKatakanaError] = useState<string | null>(null);
+  const [mapsListUrl, setMapsListUrl] = useState("");
+  const [mapsImportStatus, setMapsImportStatus] = useState("");
+  const [mapsImporting, setMapsImporting] = useState(false);
 
   function clearSaveAck() {
     if (saveAckTimer.current) {
@@ -147,6 +150,34 @@ export function ProfileApp() {
       setKatakanaError(e instanceof Error ? e.message : "Could not load suggestions.");
     } finally {
       setKatakanaLoading(false);
+    }
+  }
+
+  async function importSavedPlaces() {
+    const url = mapsListUrl.trim();
+    if (!url) {
+      setMapsImportStatus("Paste a shared Google Maps list link first.");
+      return;
+    }
+    setMapsImporting(true);
+    setMapsImportStatus("Importing shared list...");
+    try {
+      const result = await importGoogleMapsList({ url });
+      const placeLines = result.places.map((place) => {
+        const details = [place.address].filter(Boolean).join(" · ");
+        return details ? `${place.name} — ${details}` : place.name;
+      });
+      const nextPlaces = mergeLines(profile.saved_places, placeLines);
+      const next = { ...profile, saved_places: nextPlaces };
+      setProfile(next);
+      saveTravelerProfile(next);
+      clearSaveAck();
+      setSaveStatus("Saved in this browser");
+      setMapsImportStatus(`Imported ${result.places.length} places${result.title ? ` from ${result.title}` : ""}.`);
+    } catch (error) {
+      setMapsImportStatus(error instanceof Error ? error.message : "Could not import that list.");
+    } finally {
+      setMapsImporting(false);
     }
   }
 
@@ -286,6 +317,38 @@ export function ProfileApp() {
               )}
             </label>
           ))}
+
+          <section className="profilePlacesBlock" aria-label="Saved Google Maps places">
+            <div className="profilePlacesHeader">
+              <div>
+                <h3>Saved places</h3>
+                <p>Paste a shared Google Maps list link. Imported names become reusable travel context.</p>
+              </div>
+            </div>
+            <div className="profileMapsImport">
+              <label className="contextField">
+                Google Maps list link
+                <input
+                  onChange={(event) => setMapsListUrl(event.target.value)}
+                  placeholder="https://maps.app.goo.gl/..."
+                  value={mapsListUrl}
+                  inputMode="url"
+                />
+              </label>
+              <button className="secondaryButton" disabled={mapsImporting || !mapsListUrl.trim()} onClick={() => void importSavedPlaces()} type="button">
+                {mapsImporting ? "Importing..." : "Import list"}
+              </button>
+            </div>
+            {mapsImportStatus ? <p className="hint">{mapsImportStatus}</p> : null}
+            <label className="contextField">
+              Places to remember
+              <textarea
+                onChange={(event) => updateProfile("saved_places", event.target.value)}
+                placeholder="Kiyomizu-dera, Kyoto Station, favorite ramen shop..."
+                value={profile.saved_places}
+              />
+            </label>
+          </section>
         </div>
 
         <div className="profileActions">
@@ -310,4 +373,18 @@ export function ProfileApp() {
       </section>
     </main>
   );
+}
+
+function mergeLines(current: string, additions: string[]): string {
+  const seen = new Set<string>();
+  const lines = [...current.split(/\r?\n/), ...additions]
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => {
+      const key = line.toLowerCase();
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  return lines.join("\n");
 }

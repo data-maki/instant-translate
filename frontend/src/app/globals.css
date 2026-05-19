@@ -255,12 +255,130 @@ button {
 
 .sessionButton:hover,
 .sessionButton.active {
-  border-color: rgba(188, 0, 45, 0.18);
-  background: rgba(243, 224, 221, 0.5);
+  border-color: rgba(44, 48, 39, 0.12);
+  background: rgba(255, 255, 255, 0.68);
 }
 
 .sessionButton:disabled {
   cursor: default;
+}
+
+.sessionRow {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  gap: 2px;
+  align-items: center;
+}
+
+.sessionOpenButton {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.currentSessionRow {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.sessionMenuButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.7rem;
+  letter-spacing: -0.08em;
+}
+
+.sessionMenuButton:hover,
+.sessionMenuButton[aria-expanded="true"] {
+  border-color: rgba(44, 48, 39, 0.12);
+  background: rgba(255, 255, 255, 0.68);
+  color: var(--foreground);
+}
+
+.sessionMenu {
+  position: absolute;
+  z-index: 20;
+  top: 31px;
+  right: 0;
+  display: grid;
+  gap: 8px;
+  width: min(210px, calc(100vw - 40px));
+  padding: 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 250, 240, 0.98);
+  box-shadow: var(--shadow);
+}
+
+.sessionMenuMeta {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 560;
+}
+
+.sessionMenuActions {
+  display: grid;
+  gap: 4px;
+}
+
+.sessionMenuAction {
+  min-height: 28px;
+  justify-content: start;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--foreground);
+  font-size: 0.74rem;
+  font-weight: 650;
+}
+
+.sessionMenuAction:hover {
+  border-color: rgba(44, 48, 39, 0.12);
+  background: rgba(255, 255, 255, 0.74);
+}
+
+.sessionMenuAction.danger {
+  color: var(--accent);
+}
+
+.sessionRenameForm {
+  display: grid;
+  gap: 7px;
+}
+
+.sessionRenameForm input {
+  min-height: 32px;
+  padding: 0 8px;
+  font-size: 0.76rem;
+}
+
+.newChatButton {
+  grid-template-columns: auto minmax(0, 1fr);
+  min-height: 34px;
+  margin-bottom: 2px;
+  border-color: rgba(44, 48, 39, 0.12);
+  background: rgba(255, 255, 255, 0.55);
+}
+
+.newChatButton .sessionTitle {
+  font-weight: 650;
+}
+
+.newChatIcon {
+  width: 15px;
+  height: 15px;
+  color: var(--foreground);
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.5;
 }
 
 .sessionTitle {
@@ -391,9 +509,9 @@ textarea:focus {
   display: grid;
   gap: 3px;
   padding: 9px;
-  border: 1px dashed rgba(188, 0, 45, 0.28);
+  border: 1px dashed rgba(44, 48, 39, 0.2);
   border-radius: 8px;
-  background: rgba(243, 224, 221, 0.42);
+  background: rgba(255, 255, 255, 0.52);
   color: var(--muted);
   font-size: 0.72rem;
   line-height: 1.3;
@@ -675,8 +793,8 @@ textarea:focus {
 }
 
 .speakerCountOption.active {
-  border-color: rgba(188, 0, 45, 0.42);
-  background: rgba(243, 224, 221, 0.7);
+  border-color: rgba(44, 48, 39, 0.26);
+  background: rgba(255, 255, 255, 0.9);
 }
 
 .speakerCountOption:focus-visible {
@@ -730,8 +848,8 @@ textarea:focus {
 }
 
 .audienceOption:has(input:checked) {
-  border-color: rgba(188, 0, 45, 0.42);
-  background: rgba(243, 224, 221, 0.7);
+  border-color: rgba(44, 48, 39, 0.28);
+  background: rgba(255, 255, 255, 0.9);
 }
 
 .audienceOption:has(input:focus-visible) {
@@ -745,10 +863,6 @@ textarea:focus {
   min-height: 1px;
   opacity: 0;
   pointer-events: none;
-}
-
-.audienceEmoji {
-  flex: 0 0 auto;
 }
 
 .audienceName {
@@ -932,6 +1046,41 @@ textarea:focus {
   grid-column: 1 / -1;
   display: grid;
   gap: 12px;
+}
+
+.profilePlacesBlock {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.56);
+}
+
+.profilePlacesHeader h3 {
+  margin: 0 0 4px;
+  font-size: 1rem;
+}
+
+.profilePlacesHeader p {
+  max-width: 680px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.profileMapsImport {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.profileMapsImport .secondaryButton {
+  min-width: 120px;
+  padding: 0 14px;
 }
 
 .profileNamePair {
@@ -1169,25 +1318,25 @@ textarea:focus {
 
 .englishModeToggle button,
 .leftLanguageToggle button {
-  width: 34px;
+  width: auto;
+  min-width: 42px;
   min-height: 28px;
+  padding: 0 9px;
   border: 0;
   border-radius: 0;
   background: transparent;
   color: var(--muted);
-  font-size: 0.86rem;
-}
-
-.leftLanguageToggle button {
-  width: auto;
-  padding: 0 9px;
   font-size: 0.72rem;
   font-weight: 720;
 }
 
+.leftLanguageToggle button {
+  min-width: 36px;
+}
+
 .englishModeToggle button.active,
 .leftLanguageToggle button.active {
-  background: rgba(243, 224, 221, 0.82);
+  background: rgba(33, 29, 24, 0.08);
   color: var(--foreground);
 }
 
@@ -1240,8 +1389,8 @@ textarea:focus {
 
 .filterButton.active,
 .speakerRow.selected {
-  border-color: rgba(188, 0, 45, 0.44);
-  box-shadow: 0 0 0 3px rgba(188, 0, 45, 0.1);
+  border-color: rgba(44, 48, 39, 0.28);
+  box-shadow: 0 0 0 3px rgba(44, 48, 39, 0.06);
 }
 
 .speakerRows {
@@ -1275,9 +1424,9 @@ textarea:focus {
   gap: 3px;
   min-height: 44px;
   padding: 7px 9px;
-  border: 1px solid rgba(188, 0, 45, 0.18);
+  border: 1px solid rgba(44, 48, 39, 0.12);
   border-radius: 8px;
-  background: rgba(243, 224, 221, 0.55);
+  background: rgba(255, 255, 255, 0.62);
   color: var(--foreground);
   text-align: left;
 }
@@ -1314,7 +1463,7 @@ textarea:focus {
 
 .composerBar {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 8px;
   align-items: center;
   padding: 10px 18px 14px;
@@ -1325,10 +1474,10 @@ textarea:focus {
 .transportButton {
   width: 38px;
   height: 38px;
-  border: 1px solid rgba(188, 0, 45, 0.18);
+  border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--panel);
-  color: var(--accent);
+  color: var(--foreground);
   font-size: 0.82rem;
   font-weight: 900;
 }
@@ -1348,7 +1497,7 @@ textarea:focus {
 .sendButton {
   min-height: 38px;
   padding: 0 13px;
-  border: 1px solid rgba(188, 0, 45, 0.18);
+  border: 1px solid rgba(188, 0, 45, 0.16);
   border-radius: 999px;
   background: var(--accent);
   color: #fff;
@@ -1382,13 +1531,13 @@ textarea:focus {
 .phrase {
   --speaker-color: var(--accent);
   display: block;
-  width: min(100%, 980px);
+  width: min(100%, 1060px);
   margin: 0 0 10px;
 }
 
 .conversationLanes {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
   gap: 18px;
   align-items: start;
 }
@@ -1408,7 +1557,7 @@ textarea:focus {
 
 .speechBubble,
 .translationLine {
-  max-width: min(100%, 420px);
+  max-width: min(100%, 100%);
   overflow-wrap: anywhere;
   white-space: pre-wrap;
 }
@@ -1417,10 +1566,14 @@ textarea:focus {
   display: grid;
   gap: 4px;
   padding: 10px 12px;
-  border: 1px solid rgba(188, 0, 45, 0.16);
+  border: 1px solid rgba(80, 57, 35, 0.14);
   border-radius: 10px;
   background: rgba(255, 250, 240, 0.94);
   box-shadow: 0 8px 18px rgba(80, 57, 35, 0.055);
+}
+
+.bubbleWithSpeaker .speechBubble {
+  border-color: color-mix(in srgb, var(--speaker-color) 22%, var(--line));
 }
 
 .bubbleWithSpeaker {
@@ -1448,7 +1601,6 @@ textarea:focus {
 .speakerTag {
   display: grid;
   justify-items: center;
-  gap: 3px;
   width: 34px;
   min-height: 34px;
   overflow: hidden;
@@ -1472,24 +1624,12 @@ textarea:focus {
   text-transform: uppercase;
 }
 
-.speakerTagLabel {
-  max-width: 42px;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 0.58rem;
-  font-weight: 760;
-  line-height: 1.1;
-  text-align: center;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .speechBubbleHighlight {
   display: grid;
   max-width: min(100%, 430px);
   padding-left: 5px;
   border-radius: 12px;
-  background: color-mix(in srgb, var(--speaker-color) 58%, transparent);
+  background: color-mix(in srgb, var(--speaker-color) 16%, transparent);
 }
 
 .fromEnglish .englishLane .speechBubbleHighlight {
@@ -1499,7 +1639,7 @@ textarea:focus {
 
 .fromOther .leftLanguageLane .speechBubble,
 .fromEnglish .englishLane .speechBubble {
-  border-color: rgba(188, 0, 45, 0.26);
+  border-color: rgba(80, 57, 35, 0.18);
 }
 
 .fromEnglish .englishLane .speechBubble {
@@ -1555,20 +1695,36 @@ textarea:focus {
   line-height: 1.35;
 }
 
+.japaneseLines {
+  display: grid;
+  gap: 2px;
+}
+
+.japaneseLine {
+  display: block;
+}
+
+.inlineRomaji {
+  margin-left: 0.35em;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
 .japanese .lineText {
   font-family: var(--font-geist-sans), "Hiragino Sans", "Yu Gothic", "Noto Sans JP", sans-serif;
   font-size: 1.02rem;
 }
 
 .aiEnhanced {
-  box-shadow: inset 0 0 0 1px rgba(188, 0, 45, 0.08);
+  box-shadow: inset 0 0 0 1px rgba(44, 48, 39, 0.08);
 }
 
 .speechBubble.aiEnhanced::after,
 .translationLine.aiEnhanced::after {
-  content: "✨";
+  content: "AI";
   justify-self: end;
-  color: rgba(188, 0, 45, 0.52);
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
   font-size: 0.68rem;
   line-height: 1;
 }
@@ -1578,6 +1734,16 @@ textarea:focus {
   font-size: 0.72rem;
   line-height: 1.25;
   white-space: pre-wrap;
+}
+
+.sidebarIcon {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: square;
+  stroke-linejoin: miter;
 }
 
 @media (max-width: 860px) {
@@ -1718,6 +1884,10 @@ textarea:focus {
     grid-template-columns: 1fr;
   }
 
+  .profileMapsImport {
+    grid-template-columns: 1fr;
+  }
+
   .languageRail {
     gap: 4px;
   }
@@ -1751,13 +1921,11 @@ textarea:focus {
   }
 
   .composerBar {
-    grid-template-columns: auto minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr) auto auto;
     padding: 9px 10px 10px;
   }
 
   .sendButton {
-    grid-column: 2;
-    justify-self: end;
     min-height: 30px;
   }
 

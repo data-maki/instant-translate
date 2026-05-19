@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
+import html
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any
 
@@ -91,6 +95,17 @@ def places_context(payload: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     return _places_context(places, intent, poi_type)
+
+
+@app.post("/context/maps-list")
+def maps_list_context(payload: dict[str, Any]) -> dict[str, Any]:
+    url = str(payload.get("url") or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="Expected a Google Maps shared list URL.")
+    try:
+        return _fetch_google_maps_list(url)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @app.post("/context/rewrite")
@@ -391,6 +406,112 @@ def _place_name(place: dict[str, Any]) -> str:
     return ""
 
 
+def _fetch_google_maps_list(url: str) -> dict[str, Any]:
+    html_text = _http_text(url, timeout=10)
+    match = re.search(r'href="([^"]*/maps/preview/entitylist/getlist[^"]+)"', html_text)
+    if not match:
+        raise RuntimeError("Could not find a public Google Maps list payload in that link.")
+    payload_url = urllib.parse.urljoin("https://www.google.com", html.unescape(match.group(1)))
+    raw = _http_text(payload_url, timeout=10)
+    start = raw.find("[")
+    if start < 0:
+        raise RuntimeError("Google Maps list payload was empty.")
+    try:
+        data = json.loads(raw[start:])
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Could not parse Google Maps list payload.") from exc
+    places = _extract_google_maps_list_places(data)
+    if not places:
+        raise RuntimeError("No places were found in that Google Maps list.")
+    return {
+        "title": _extract_google_maps_list_title(data),
+        "source_url": url,
+        "places": places[:500],
+    }
+
+
+def _http_text(url: str, timeout: int = 8) -> str:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "text/html,application/json,*/*",
+            "User-Agent": "Mozilla/5.0 cottonoha/1.0",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            charset = response.headers.get_content_charset() or "utf-8"
+            return response.read().decode(charset, errors="replace")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Google Maps list request failed ({exc.code}): {detail[:240]}") from exc
+    except OSError as exc:
+        raise RuntimeError(f"Google Maps list request failed: {exc}") from exc
+
+
+def _extract_google_maps_list_title(data: Any) -> str:
+    if isinstance(data, list) and len(data) > 4 and isinstance(data[4], str):
+        title = data[4].strip()
+        if title:
+            return title
+    if isinstance(data, list):
+        for item in data:
+            title = _extract_google_maps_list_title(item)
+            if title:
+                return title
+    return ""
+
+
+def _extract_google_maps_list_places(data: Any) -> list[dict[str, Any]]:
+    places: list[dict[str, Any]] = []
+
+    def visit(node: Any) -> None:
+        if isinstance(node, list):
+            place = _google_maps_list_place_from_node(node)
+            if place:
+                places.append(place)
+                return
+            for item in node:
+                visit(item)
+
+    visit(data)
+    seen: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for place in places:
+        key = str(place.get("place_id") or place.get("name") or "").strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(place)
+    return deduped
+
+
+def _google_maps_list_place_from_node(node: list[Any]) -> dict[str, Any] | None:
+    if len(node) < 3 or not isinstance(node[1], list) or not isinstance(node[2], str):
+        return None
+    name = node[2].strip()
+    if not name or name.startswith("http"):
+        return None
+    detail = node[1]
+    address = ""
+    if len(detail) > 4 and isinstance(detail[4], str):
+        address = detail[4].strip()
+    elif len(detail) > 2 and isinstance(detail[2], str):
+        address = detail[2].strip()
+    lat = lng = None
+    if len(detail) > 5 and isinstance(detail[5], list) and len(detail[5]) > 3:
+        lat = detail[5][2] if isinstance(detail[5][2], (int, float)) else None
+        lng = detail[5][3] if isinstance(detail[5][3], (int, float)) else None
+    place_id = str(detail[7]).strip() if len(detail) > 7 and isinstance(detail[7], str) else ""
+    return {
+        "name": name,
+        "address": address,
+        "lat": lat,
+        "lng": lng,
+        "place_id": place_id,
+    }
+
+
 def _base_terms_for_place_signal(intent: str, poi_type: str) -> list[str]:
     signal = f"{intent} {poi_type}"
     if "train" in signal or "station" in signal:
@@ -461,8 +582,75 @@ def session_detail(session_name: str) -> dict[str, Any]:
         enriched_state["artifact"] = latest_artifact
     return {
         "session": enriched_state,
+        "adaptations": _read_session_adaptations(session_dir),
         "phrases": build_phrases(session, []),
     }
+
+
+@app.post("/sessions/{session_name}/adaptations")
+def save_session_adaptation(session_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    state = read_session_state(session_name)
+    if not state:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    key = str(payload.get("key") or "").strip()
+    adaptation = payload.get("adaptation") if isinstance(payload.get("adaptation"), dict) else {}
+    if not key:
+        raise HTTPException(status_code=400, detail="Expected key.")
+
+    safe_name = sanitize_session_name(session_name)
+    session_dir = shared.REPO_ROOT / "output" / safe_name
+    adaptations = _read_session_adaptations(session_dir)
+    adaptations[key] = {
+        "source_rewrite": str(adaptation.get("source_rewrite") or ""),
+        "target_translation": str(adaptation.get("target_translation") or ""),
+        "status": str(adaptation.get("status") or "ready"),
+    }
+    _write_session_adaptations(session_dir, adaptations)
+    return {"session": safe_name, "key": key, "adaptation": adaptations[key]}
+
+
+@app.patch("/sessions/{session_name}")
+def rename_session(session_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    state = read_session_state(session_name)
+    if not state:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    title = str(payload.get("title") or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Expected title.")
+
+    safe_name = sanitize_session_name(session_name)
+    session_dir = shared.REPO_ROOT / "output" / safe_name
+    state["title"] = title[:48]
+    state_path = session_dir / "session_state.json"
+    state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    summary_path = session_dir / "session_summary.json"
+    if summary_path.exists():
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            if isinstance(summary, dict):
+                summary["title"] = state["title"]
+                summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    return {"name": safe_name, "title": state["title"]}
+
+
+@app.delete("/sessions/{session_name}")
+def delete_session(session_name: str) -> dict[str, Any]:
+    state = read_session_state(session_name)
+    if not state:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    safe_name = sanitize_session_name(session_name)
+    session_dir = shared.REPO_ROOT / "output" / safe_name
+    if not session_dir.exists() or not session_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Session not found.")
+    shutil.rmtree(session_dir)
+    return {"name": safe_name, "deleted": True}
 
 
 @app.post("/sessions/{session_name}/rediarize")
@@ -644,6 +832,22 @@ def _latest_tokens_for_session(session_dir, state: dict[str, Any]) -> list[dict[
         if isinstance(data.get("tokens"), list):
             return data["tokens"]
     return list(state.get("tokens") or [])
+
+
+def _read_session_adaptations(session_dir) -> dict[str, Any]:
+    path = session_dir / "phrase_adaptations.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_session_adaptations(session_dir, adaptations: dict[str, Any]) -> None:
+    path = session_dir / "phrase_adaptations.json"
+    path.write_text(json.dumps(adaptations, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _latest_transcript_artifact(session_dir) -> dict[str, str] | None:

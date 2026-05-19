@@ -11,6 +11,13 @@ export type TravelerProfile = {
   allergies: string;
   spice_level: string;
   mobility: string;
+  current_city: string;
+  current_location_label: string;
+  location_lat: string;
+  location_lng: string;
+  location_updated_at: string;
+  nearby_places: string;
+  saved_places: string;
 };
 
 /** Western-order full name for prompts and legacy context keys. */
@@ -40,7 +47,14 @@ export const DEFAULT_PROFILE: TravelerProfile = {
   travel_party: "",
   allergies: "",
   spice_level: "",
-  mobility: ""
+  mobility: "",
+  current_city: "",
+  current_location_label: "",
+  location_lat: "",
+  location_lng: "",
+  location_updated_at: "",
+  nearby_places: "",
+  saved_places: ""
 };
 
 function migrateLegacyTravelerName(saved: Record<string, unknown>): Pick<TravelerProfile, "first_name" | "last_name"> {
@@ -93,7 +107,14 @@ export function loadTravelerProfile(): TravelerProfile {
       travel_party: String(saved.travel_party ?? saved.names ?? "").trim(),
       allergies: String(saved.allergies ?? "").trim(),
       spice_level: String(saved.spice_level ?? "").trim(),
-      mobility: String(saved.mobility ?? "").trim()
+      mobility: String(saved.mobility ?? "").trim(),
+      current_city: String(saved.current_city ?? "").trim(),
+      current_location_label: String(saved.current_location_label ?? "").trim(),
+      location_lat: String(saved.location_lat ?? "").trim(),
+      location_lng: String(saved.location_lng ?? "").trim(),
+      location_updated_at: String(saved.location_updated_at ?? "").trim(),
+      nearby_places: String(saved.nearby_places ?? "").trim(),
+      saved_places: String(saved.saved_places ?? "").trim()
     };
   } catch {
     return DEFAULT_PROFILE;

@@ -14,7 +14,7 @@ SONIOX_LANGUAGES = {
     "cs": {"name": "Czech", "flag": "🇨🇿"},
     "da": {"name": "Danish", "flag": "🇩🇰"},
     "nl": {"name": "Dutch", "flag": "🇳🇱"},
-    "en": {"name": "English", "flag": "🇺🇸"},
+    "en": {"name": "English", "flag": "🇬🇧"},
     "et": {"name": "Estonian", "flag": "🇪🇪"},
     "fi": {"name": "Finnish", "flag": "🇫🇮"},
     "fr": {"name": "French", "flag": "🇫🇷"},

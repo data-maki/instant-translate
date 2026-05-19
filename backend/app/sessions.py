@@ -94,6 +94,8 @@ def parse_session_time(value: Any) -> float | None:
 
 
 def session_display_title(session_dir: Path, state: dict[str, Any] | None) -> str:
+    if state and state.get("title"):
+        return str(state["title"])[:48]
     summary = read_session_summary(session_dir)
     if summary and summary.get("title"):
         return str(summary["title"])[:48]
