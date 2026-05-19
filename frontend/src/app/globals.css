@@ -404,6 +404,11 @@ textarea:focus {
   background: rgba(243, 245, 238, 0.72);
 }
 
+.speakerReview.liveMode {
+  gap: 8px;
+  padding-block: 9px;
+}
+
 .speakerReviewHeader {
   display: flex;
   align-items: center;
@@ -453,14 +458,21 @@ textarea:focus {
 }
 
 .speakerRow {
+  --speaker-color: var(--green);
   display: grid;
   grid-template-columns: minmax(132px, 0.9fr) minmax(140px, 1fr) minmax(130px, 0.85fr);
   gap: 8px;
   align-items: end;
   padding: 9px;
   border: 1px solid var(--line);
+  border-left: 4px solid var(--speaker-color);
   border-radius: 8px;
   background: var(--panel);
+}
+
+.speakerRow.liveMode {
+  grid-template-columns: minmax(108px, 0.7fr) minmax(160px, 1fr);
+  padding: 7px 9px;
 }
 
 .speakerJump {
@@ -473,6 +485,10 @@ textarea:focus {
   background: rgba(223, 233, 220, 0.55);
   color: var(--foreground);
   text-align: left;
+}
+
+.speakerBadge {
+  cursor: default;
 }
 
 .speakerJump strong {

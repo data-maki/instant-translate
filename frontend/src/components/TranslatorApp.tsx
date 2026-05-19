@@ -484,6 +484,7 @@ export function TranslatorApp() {
             <SpeakerReviewPanel
               drafts={speakerDrafts}
               expectedNames={speakerNames}
+              liveMode={isLive}
               onSave={saveReview}
               onSelect={setSelectedSpeaker}
               onUpdate={updateSpeakerDraft}
@@ -534,6 +535,7 @@ function BrandMark({ compact = false }: { compact?: boolean }) {
 function SpeakerReviewPanel({
   drafts,
   expectedNames,
+  liveMode,
   onSave,
   onSelect,
   onUpdate,
@@ -543,6 +545,7 @@ function SpeakerReviewPanel({
 }: {
   drafts: Record<string, SpeakerDraft>;
   expectedNames: string[];
+  liveMode: boolean;
   onSave: () => void;
   onSelect: (speakerId: string | null) => void;
   onUpdate: (speakerId: string, patch: Partial<SpeakerDraft>) => void;
@@ -553,24 +556,26 @@ function SpeakerReviewPanel({
   const datalistId = "expected-speaker-names";
 
   return (
-    <section className="speakerReview" aria-label="Speaker review">
+    <section className={`speakerReview ${liveMode ? "liveMode" : ""}`} aria-label="Speaker review">
       <div className="speakerReviewHeader">
         <div>
           <p className="panelKicker">speaker review</p>
-          <h3>Label and merge</h3>
+          <h3>{liveMode ? "Name speakers" : "Label and merge"}</h3>
         </div>
-        <div className="speakerReviewActions">
-          <button
-            className={`filterButton ${selectedSpeaker === null ? "active" : ""}`}
-            onClick={() => onSelect(null)}
-            type="button"
-          >
-            All
-          </button>
-          <button className="primaryButton compactButton" disabled={saving} onClick={onSave} type="button">
-            {saving ? "Saving..." : "Save speakers"}
-          </button>
-        </div>
+        {!liveMode ? (
+          <div className="speakerReviewActions">
+            <button
+              className={`filterButton ${selectedSpeaker === null ? "active" : ""}`}
+              onClick={() => onSelect(null)}
+              type="button"
+            >
+              All
+            </button>
+            <button className="primaryButton compactButton" disabled={saving} onClick={onSave} type="button">
+              {saving ? "Saving..." : "Save speakers"}
+            </button>
+          </div>
+        ) : null}
       </div>
 
       {expectedNames.length > 0 ? (
@@ -584,12 +589,24 @@ function SpeakerReviewPanel({
       <div className="speakerRows">
         {speakers.map((speaker) => {
           const draft = drafts[speaker.id] || { mergeInto: speaker.id, label: "" };
+          const style = { "--speaker-color": speakerColor(speaker.id) } as CSSProperties;
           return (
-            <div className={`speakerRow ${selectedSpeaker === speaker.id ? "selected" : ""}`} key={speaker.id}>
-              <button className="speakerJump" onClick={() => onSelect(speaker.id)} type="button">
-                <strong>{draft.label.trim() || speaker.label}</strong>
-                <span>{speaker.count} turn{speaker.count === 1 ? "" : "s"}</span>
-              </button>
+            <div
+              className={`speakerRow ${liveMode ? "liveMode" : ""} ${selectedSpeaker === speaker.id ? "selected" : ""}`}
+              key={speaker.id}
+              style={style}
+            >
+              {liveMode ? (
+                <div className="speakerJump speakerBadge">
+                  <strong>{draft.label.trim() || speaker.label}</strong>
+                  <span>{speaker.count} turn{speaker.count === 1 ? "" : "s"}</span>
+                </div>
+              ) : (
+                <button className="speakerJump" onClick={() => onSelect(speaker.id)} type="button">
+                  <strong>{draft.label.trim() || speaker.label}</strong>
+                  <span>{speaker.count} turn{speaker.count === 1 ? "" : "s"}</span>
+                </button>
+              )}
               <label>
                 Name
                 <input
@@ -599,20 +616,24 @@ function SpeakerReviewPanel({
                   value={draft.label}
                 />
               </label>
-              <label>
-                Merge into
-                <select
-                  onChange={(event) => onUpdate(speaker.id, { mergeInto: event.target.value })}
-                  value={draft.mergeInto}
-                >
-                  {speakers.map((target) => (
-                    <option key={target.id} value={target.id}>
-                      {drafts[target.id]?.label.trim() || target.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <p className="speakerSample">{speaker.sample}</p>
+              {!liveMode ? (
+                <>
+                  <label>
+                    Merge into
+                    <select
+                      onChange={(event) => onUpdate(speaker.id, { mergeInto: event.target.value })}
+                      value={draft.mergeInto}
+                    >
+                      {speakers.map((target) => (
+                        <option key={target.id} value={target.id}>
+                          {drafts[target.id]?.label.trim() || target.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <p className="speakerSample">{speaker.sample}</p>
+                </>
+              ) : null}
             </div>
           );
         })}
