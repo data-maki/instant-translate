@@ -6,12 +6,15 @@ We use both, but for different moments in the workflow.
 
 | Path | Current model | When it runs | What it does |
 |---|---|---|---|
-| Live session | Soniox realtime `stt-rt-v4` | While the browser is recording | Live transcription, language ID, speaker diarization, endpoint detection, and two-way JA/EN translation |
+| Live session | Soniox realtime `stt-rt-v4` | While the browser is recording | Live transcription, language ID, speaker diarization, endpoint detection, and two-way JA/EN draft translation |
+| Live phrase adaptation | Groq `GROQ_REWRITE_MODEL`, default `qwen/qwen3-32b` | After finalized English phrases appear | Rewrites the English utterance into clearer, tone-aware English for Soniox to translate |
 | Improve transcript, speaker step | Soniox async `stt-async-v4` | After a session has saved audio | Re-runs diarization/transcription over the full audio file, then remaps speaker IDs onto the current transcript tokens |
 | Improve transcript, translation step | OpenAI `gpt-4o` | After a session has transcript tokens | Revises the Soniox draft translations while preserving the transcript shape |
 | Comparison record | See `docs/evaluation-decision-record.md` | Documentation only | Historical vendor comparison; not wired into the app runtime |
 
 So the default app is Soniox realtime. The only post-processing UI action is `Improve transcript`; internally it runs the speaker step first and the translation step second.
+
+Current limitation: live Groq/Qwen adaptation is display-only. It runs after Soniox has already translated the microphone audio, so it does not currently improve the live Japanese translation.
 
 ## ASCII Pipeline
 
@@ -40,7 +43,16 @@ So the default app is Soniox realtime. The only post-processing UI action is `Im
         | - session_name
         | - source_languages: [ja, en]
         | - target_language
-        | - context
+        | - context: structured general/terms/text/translation_terms
+        v
+  Audio fanout
+        |
+        +--> Soniox realtime
+        +--> Deepgram realtime transcription
+        +--> OpenAI gpt-realtime-translate to Japanese
+        |
+        | provider_update events keep recent Deepgram/OpenAI candidates
+        | available for the upgrade pass
         v
   Soniox realtime bridge
   backend/app/soniox.py
@@ -53,6 +65,7 @@ So the default app is Soniox realtime. The only post-processing UI action is `Im
         | - enable_speaker_diarization: true
         | - enable_endpoint_detection: true
         | - translation: two_way
+        | - context: structured Soniox context when available
         v
   Soniox realtime API
         |
@@ -78,6 +91,33 @@ So the default app is Soniox realtime. The only post-processing UI action is `Im
         |
         v
   User sees live bilingual phrase cards
+        |
+        | finalized English phrase + Soniox JA
+        | immediately DeepL-translates Soniox EN with selected formality
+        | also waits ~350ms for Deepgram/OpenAI candidates, then upgrades
+        v
+  POST /context/rewrite
+        |
+        v
+  Groq Chat Completions API
+        |
+        | model: GROQ_REWRITE_MODEL, default qwen/qwen3-32b
+        | reasoning_effort: none
+        | output: English source_rewrite only, never Japanese
+        | context: tone profile + last 10 prior exchange turns only
+        v
+  DeepL Translate API
+        |
+        | text: original Soniox English first, then adapted English
+        | context: recent dialogue and Soniox draft translation
+        | formality: explicit session setting or selected from tone/register
+        | glossary_id: DEEPL_GLOSSARY_ID when configured
+        | model_type: latency_optimized
+        v
+  Phrase card shows:
+    - original English
+    - adapted English rewrite
+    - Soniox Japanese draft first, then improved Japanese replacement when ready
 ```
 
 ## Save Path

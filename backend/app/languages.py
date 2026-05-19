@@ -38,18 +38,23 @@ def validate_language_pair(source_languages: list[str], target_language: str) ->
     if invalid:
         raise ValueError(f"Unsupported language code: {', '.join(sorted(set(invalid)))}")
 
-    if clean_target not in clean_sources:
-        other = next((lang for lang in clean_sources if lang != clean_target), clean_sources[0])
-        clean_sources = [other, clean_target]
-    elif len(clean_sources) > 2:
-        other = next((lang for lang in clean_sources if lang != clean_target), clean_sources[0])
-        clean_sources = [other, clean_target]
+    deduped_sources: list[str] = []
+    for lang in clean_sources:
+        if lang not in deduped_sources:
+            deduped_sources.append(lang)
+    clean_sources = deduped_sources
 
-    if len(clean_sources) < 2:
+    if clean_target not in clean_sources:
+        clean_sources.append(clean_target)
+
+    non_target_sources = [lang for lang in clean_sources if lang != clean_target]
+    if not non_target_sources:
         other = "ja" if clean_target == "en" else "en"
         clean_sources = [other, clean_target]
+    else:
+        clean_sources = [*non_target_sources, clean_target]
 
-    if clean_sources[0] == clean_sources[1]:
+    if len(clean_sources) < 2 or len(set(clean_sources)) < 2:
         raise ValueError("Choose two different languages for two-way translation.")
 
-    return clean_sources[:2], clean_target
+    return clean_sources, clean_target

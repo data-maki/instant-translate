@@ -1,3 +1,0 @@
-# Mistakes
-
-No entries yet.

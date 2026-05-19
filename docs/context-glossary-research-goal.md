@@ -2,7 +2,7 @@
 
 This is a research goal, not an implementation plan. The goal is to decide whether better Soniox context construction can measurably improve live transcription and translation quality without bloating the prompt or creating a confusing setup flow for non-technical travelers.
 
-The current app path is:
+Original app path before the structured-context implementation:
 
 ```text
 Browser session setup
@@ -10,8 +10,26 @@ Browser session setup
   -> frontend appends hidden Japanese register block
   -> backend/app/soniox.py sends Soniox realtime context as:
        { "context": { "text": "<combined free text>" } }
-  -> Soniox realtime stt-rt-v4 returns transcript + two-way translation
-  -> Improve transcript can later run Soniox async + GPT-4o revision
+      -> Soniox realtime stt-rt-v4 returns transcript + two-way translation
+      -> Improve transcript can later run Soniox async + GPT-4o revision
+```
+
+Current app path now compiles the setup/profile/location fields into Soniox structured context:
+
+```text
+Browser session setup
+  -> user picks session type and optionally adds profile/location details
+  -> frontend shows a plain-language "For this conversation" preview
+  -> frontend sends context as:
+       {
+         general: [{ key, value }],
+         terms: [...],
+         text: "...",
+         translation_terms: [{ source, target }]
+       }
+  -> backend/app/soniox.py forwards that structured context to stt-rt-v4
+  -> finalized English phrases are sent separately to Groq/Qwen with rewrite context
+  -> phrase cards can show the original English, adapted English rewrite, and Soniox Japanese draft
 ```
 
 Soniox now supports structured context sections: `general`, `text`, `terms`, and `translation_terms`, with an 8,000-token maximum. That means this repo should evaluate context as a constrained ranking problem, not as "stuff everything into one text field."
@@ -371,8 +389,8 @@ The simplest path is best for proving the metric. The best path is where the pro
 
 ## Open Implementation Questions
 
-- Does `stt-rt-v4` in the websocket path accept `context` as the structured object shown in current Soniox docs, or does this repo need separate handling for realtime and async?
-- Should the frontend register block become structured `general` metadata instead of hidden free text?
+- Resolved for the live websocket path: `stt-rt-v4` accepts structured context, and this repo now forwards the structured object.
+- Resolved for the live websocket path: the register preset is now structured `general` metadata plus a short voice-rules text note.
 - How should generated terms be stored: per profile, per trip, per session, or all three?
 - Should automatic location terms require user confirmation before injection?
 - Should translation preferences be directional for two-way translation?

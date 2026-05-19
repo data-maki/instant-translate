@@ -4,6 +4,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import shutil
+import html
+import urllib.error
+import urllib.parse
+import urllib.request
 from typing import Any
 
 from dotenv import load_dotenv
@@ -12,10 +18,22 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .languages import DEFAULT_SOURCE_LANGUAGES, DEFAULT_TARGET_LANGUAGE, list_languages
 from . import shared
-from .sessions import DEFAULT_CONTEXT, build_phrases, make_session, read_session_state, list_sessions, sanitize_session_name, session_display_title, session_duration_seconds
+from .phrase_upgrade import (
+    DEEPL_PRO_TRANSLATE_URL,
+    DEEPL_TRANSLATE_TIMEOUT_SECONDS,
+    GROQ_REWRITE_TIMEOUT_SECONDS,
+    adapt_phrase_with_groq as _adapt_phrase_with_groq,
+    deepl_context as _deepl_context,
+    deepl_formality as _deepl_formality,
+    deepl_translate_url as _deepl_translate_url,
+    translate_with_deepl as _translate_with_deepl,
+)
+from .sessions import DEFAULT_CONTEXT, build_phrases, extract_openai_text, make_session, read_session_state, list_sessions, sanitize_session_name, session_display_title, session_duration_seconds
 from .soniox import NUM_CHANNELS, SAMPLE_RATE, run_transcription_bridge
 from cli.live_transcriber.async_diarize import AsyncDiarizeError, redo_diarization
 
+
+GOOGLE_PLACES_NEARBY_URL = "https://places.googleapis.com/v1/places:searchNearby"
 
 load_dotenv()
 
@@ -39,6 +57,11 @@ def health() -> dict[str, Any]:
     return {
         "status": "ok",
         "has_soniox_key": bool(os.environ.get("SONIOX_API_KEY")),
+        "has_groq_key": bool(os.environ.get("GROQ_API_KEY")),
+        "has_deepl_key": bool(os.environ.get("DEEPL_API_KEY")),
+        "has_deepgram_key": bool(os.environ.get("DEEPGRAM_API_KEY")),
+        "has_openai_key": bool(os.environ.get("OPENAI_API_KEY")),
+        "has_google_maps_api_key": bool(_google_maps_api_key()),
         "audio": {
             "sample_rate": SAMPLE_RATE,
             "num_channels": NUM_CHANNELS,
@@ -51,6 +74,234 @@ def health() -> dict[str, Any]:
     }
 
 
+@app.post("/context/places")
+def places_context(payload: dict[str, Any]) -> dict[str, Any]:
+    api_key = _google_maps_api_key()
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Missing GOOGLE_MAPS_API_KEY for Google Places enrichment.")
+
+    lat = _payload_float(payload, "lat")
+    lng = _payload_float(payload, "lng")
+    if lat is None or lng is None:
+        raise HTTPException(status_code=400, detail="Expected lat and lng.")
+
+    intent = str(payload.get("intent") or "").strip().lower()
+    poi_type = str(payload.get("poi_type") or "").strip().lower()
+    included_types = _google_place_types(intent, poi_type)
+
+    try:
+        places = _fetch_google_places(api_key, lat, lng, included_types)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return _places_context(places, intent, poi_type)
+
+
+@app.post("/context/maps-list")
+def maps_list_context(payload: dict[str, Any]) -> dict[str, Any]:
+    url = str(payload.get("url") or "").strip()
+    if not url:
+        raise HTTPException(status_code=400, detail="Expected a Google Maps shared list URL.")
+    try:
+        return _fetch_google_maps_list(url)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@app.post("/context/rewrite")
+def rewrite_context(payload: dict[str, Any]) -> dict[str, str]:
+    api_key = os.environ.get("GROQ_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Missing GROQ_API_KEY for phrase adaptation.")
+
+    source_text = str(payload.get("source_text") or "").strip()
+    source_language = str(payload.get("source_language") or "").strip()
+    target_language = str(payload.get("target_language") or "").strip()
+    rewrite_context = payload.get("rewrite_context") if isinstance(payload.get("rewrite_context"), dict) else {}
+    if not source_text or not source_language or not target_language:
+        raise HTTPException(status_code=400, detail="Expected source_language, target_language, and source_text.")
+
+    try:
+        result = _adapt_phrase_with_groq(api_key, source_language, target_language, source_text, rewrite_context)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    target_translation = ""
+    if result.get("source_rewrite"):
+        deepl_key = os.environ.get("DEEPL_API_KEY")
+        if deepl_key:
+            try:
+                target_translation = _translate_with_deepl(
+                    deepl_key,
+                    result["source_rewrite"],
+                    source_language,
+                    target_language,
+                    _deepl_context(rewrite_context, payload),
+                    rewrite_context,
+                )
+            except RuntimeError:
+                target_translation = ""
+    return {**result, "target_translation": target_translation}
+
+
+@app.post("/context/translate")
+def translate_context(payload: dict[str, Any]) -> dict[str, str]:
+    api_key = os.environ.get("DEEPL_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Missing DEEPL_API_KEY for phrase translation.")
+
+    source_text = str(payload.get("source_text") or "").strip()
+    source_language = str(payload.get("source_language") or "").strip()
+    target_language = str(payload.get("target_language") or "").strip()
+    rewrite_context = payload.get("rewrite_context") if isinstance(payload.get("rewrite_context"), dict) else {}
+    if not source_text or not source_language or not target_language:
+        raise HTTPException(status_code=400, detail="Expected source_language, target_language, and source_text.")
+
+    try:
+        target_translation = _translate_with_deepl(
+            api_key,
+            source_text,
+            source_language,
+            target_language,
+            _deepl_context(rewrite_context, payload),
+            rewrite_context,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"target_translation": target_translation}
+
+
+def _openai_name_katakana_options(api_key: str, first_name: str, last_name: str) -> list[dict[str, str]]:
+    import requests
+
+    def _clip_reading(text: str, max_len: int = 48) -> str:
+        t = text.strip()
+        if len(t) <= max_len:
+            return t
+        return t[: max_len - 1].rstrip() + "…"
+
+    display = f"{first_name.strip()} {last_name.strip()}".strip()
+    prompt = {
+        "task": (
+            "Suggest Japanese katakana spellings for this person's name as used on reservations, "
+            "name tags, and introductions in Japan. Prefer common exophone renderings. "
+            "Split katakana into given name (first) and family name (last) as separate strings. "
+            "If only one English name part is provided, leave the unused katakana field as an empty string. "
+            "For each option you MUST also return first_reading_en and last_reading_en: very short Latin spellings "
+            "of how each katakana chunk sounds to an English speaker (like comparing Jan vs Yan vs Jaan for the "
+            "same given name). No full sentences, no parentheses, no Japanese in these two fields—only a few "
+            "Latin letters/words each (max about 24 characters per field). Return JSON only."
+        ),
+        "name": {"first_name": first_name.strip(), "last_name": last_name.strip(), "full_display": display},
+        "output_schema": {
+            "options": [
+                {
+                    "first_katakana": "katakana for given/first name or empty",
+                    "last_katakana": "katakana for family/last name or empty",
+                    "first_reading_en": "how the first katakana sounds in Latin letters, very short",
+                    "last_reading_en": "how the last katakana sounds in Latin letters, very short",
+                }
+            ]
+        },
+    }
+    model = os.environ.get("OPENAI_NAME_KATAKANA_MODEL", "gpt-4o-mini")
+    response = requests.post(
+        "https://api.openai.com/v1/responses",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json={
+            "model": model,
+            "input": json.dumps(prompt, ensure_ascii=False),
+            "text": {"format": {"type": "json_object"}},
+            "max_output_tokens": 360,
+        },
+        timeout=45,
+    )
+    if response.status_code != 200:
+        raise RuntimeError(f"OpenAI name katakana request failed: {response.status_code} {response.text[:240]}")
+    raw_text = extract_openai_text(response.json())
+    payload = json.loads(raw_text)
+    options = payload.get("options")
+    if not isinstance(options, list):
+        raise RuntimeError("OpenAI response missing options array")
+    out: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for item in options:
+        if isinstance(item, str):
+            clean = item.strip()
+            if not clean:
+                continue
+            if "・" in clean:
+                a, _, b = clean.partition("・")
+                row = {
+                    "first_katakana": a.strip(),
+                    "last_katakana": b.strip(),
+                    "first_reading_en": _clip_reading(first_name.strip()),
+                    "last_reading_en": _clip_reading(last_name.strip()),
+                }
+            else:
+                row = {
+                    "first_katakana": clean,
+                    "last_katakana": "",
+                    "first_reading_en": _clip_reading(first_name.strip()),
+                    "last_reading_en": "",
+                }
+            key = (
+                row["first_katakana"],
+                row["last_katakana"],
+                row["first_reading_en"],
+                row["last_reading_en"],
+            )
+            if key not in seen and (row["first_katakana"] or row["last_katakana"]):
+                seen.add(key)
+                out.append(row)
+        elif isinstance(item, dict):
+            fk = str(item.get("first_katakana") or item.get("given_katakana") or "").strip()
+            lk = str(item.get("last_katakana") or item.get("family_katakana") or "").strip()
+            f_read = str(item.get("first_reading_en") or item.get("first_sound_en") or "").strip()
+            l_read = str(item.get("last_reading_en") or item.get("last_sound_en") or "").strip()
+            if not f_read and fk:
+                f_read = first_name.strip()
+            if not l_read and lk:
+                l_read = last_name.strip()
+            f_read = _clip_reading(f_read)
+            l_read = _clip_reading(l_read)
+            if not fk and not lk:
+                continue
+            key = (fk, lk, f_read, l_read)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(
+                {
+                    "first_katakana": fk,
+                    "last_katakana": lk,
+                    "first_reading_en": f_read,
+                    "last_reading_en": l_read,
+                }
+            )
+        if len(out) >= 8:
+            break
+    return out
+
+
+@app.post("/context/name-katakana")
+def name_katakana_context(payload: dict[str, Any]) -> dict[str, Any]:
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Missing OPENAI_API_KEY.")
+
+    first_name = str(payload.get("first_name") or "").strip()
+    last_name = str(payload.get("last_name") or "").strip()
+    if not first_name and not last_name:
+        raise HTTPException(status_code=400, detail="Expected first_name and/or last_name.")
+
+    try:
+        options = _openai_name_katakana_options(api_key, first_name, last_name)
+    except (RuntimeError, json.JSONDecodeError, KeyError, ValueError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    return {"options": options}
+
+
 @app.get("/languages")
 def languages() -> dict[str, Any]:
     return {
@@ -58,6 +309,244 @@ def languages() -> dict[str, Any]:
         "default_target_language": DEFAULT_TARGET_LANGUAGE,
         "languages": list_languages(),
     }
+
+
+def _google_maps_api_key() -> str | None:
+    return os.environ.get("GOOGLE_MAPS_API_KEY")
+
+
+def _payload_float(payload: dict[str, Any], key: str) -> float | None:
+    try:
+        return float(payload[key])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _google_place_types(intent: str, poi_type: str) -> list[str]:
+    signal = f"{intent} {poi_type}"
+    if "train" in signal or "station" in signal:
+        return ["train_station", "subway_station", "bus_station"]
+    if "restaurant" in signal or "food" in signal:
+        return ["restaurant", "cafe"]
+    if "hotel" in signal:
+        return ["hotel"]
+    if "shrine" in signal or "temple" in signal:
+        return ["tourist_attraction", "place_of_worship"]
+    if "shop" in signal or "shopping" in signal:
+        return ["store", "shopping_mall"]
+    if "doctor" in signal or "clinic" in signal or "hospital" in signal:
+        return ["hospital", "doctor"]
+    return []
+
+
+def _fetch_google_places(api_key: str, lat: float, lng: float, included_types: list[str]) -> list[dict[str, Any]]:
+    body: dict[str, Any] = {
+        "maxResultCount": 8,
+        "rankPreference": "DISTANCE",
+        "locationRestriction": {
+            "circle": {
+                "center": {"latitude": lat, "longitude": lng},
+                "radius": 500.0,
+            }
+        },
+    }
+    if included_types:
+        body["includedTypes"] = included_types
+    request = urllib.request.Request(
+        GOOGLE_PLACES_NEARBY_URL,
+        data=json.dumps(body).encode("utf-8"),
+        headers={
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": api_key,
+            "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.primaryType,places.types",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=8) as response:
+            data = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Google Places request failed ({exc.code}): {detail[:300]}") from exc
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"Google Places request failed: {exc}") from exc
+    places = data.get("places", [])
+    return places if isinstance(places, list) else []
+
+
+def _places_context(places: list[dict[str, Any]], intent: str, poi_type: str) -> dict[str, Any]:
+    names: list[str] = []
+    general: list[str] = []
+    terms = _base_terms_for_place_signal(intent, poi_type)
+    translation_terms = _base_translation_terms_for_place_signal(intent, poi_type)
+    for place in places:
+        if not isinstance(place, dict):
+            continue
+        name = _place_name(place)
+        if not name:
+            continue
+        names.append(name)
+        primary_type = str(place.get("primaryType") or "").replace("_", " ")
+        address = str(place.get("formattedAddress") or "").strip()
+        general.append(f"Nearby POI: {name}" + (f" ({primary_type})" if primary_type else ""))
+        if address:
+            general.append(f"Nearby address: {address}")
+    return {
+        "places": _dedupe(names),
+        "general": _dedupe(general),
+        "terms": _dedupe(names + terms),
+        "translation_terms": _dedupe(translation_terms),
+    }
+
+
+def _place_name(place: dict[str, Any]) -> str:
+    display = place.get("displayName")
+    if isinstance(display, dict):
+        return str(display.get("text") or "").strip()
+    return ""
+
+
+def _fetch_google_maps_list(url: str) -> dict[str, Any]:
+    html_text = _http_text(url, timeout=10)
+    match = re.search(r'href="([^"]*/maps/preview/entitylist/getlist[^"]+)"', html_text)
+    if not match:
+        raise RuntimeError("Could not find a public Google Maps list payload in that link.")
+    payload_url = urllib.parse.urljoin("https://www.google.com", html.unescape(match.group(1)))
+    raw = _http_text(payload_url, timeout=10)
+    start = raw.find("[")
+    if start < 0:
+        raise RuntimeError("Google Maps list payload was empty.")
+    try:
+        data = json.loads(raw[start:])
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Could not parse Google Maps list payload.") from exc
+    places = _extract_google_maps_list_places(data)
+    if not places:
+        raise RuntimeError("No places were found in that Google Maps list.")
+    return {
+        "title": _extract_google_maps_list_title(data),
+        "source_url": url,
+        "places": places[:500],
+    }
+
+
+def _http_text(url: str, timeout: int = 8) -> str:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "text/html,application/json,*/*",
+            "User-Agent": "Mozilla/5.0 cottonoha/1.0",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            charset = response.headers.get_content_charset() or "utf-8"
+            return response.read().decode(charset, errors="replace")
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Google Maps list request failed ({exc.code}): {detail[:240]}") from exc
+    except OSError as exc:
+        raise RuntimeError(f"Google Maps list request failed: {exc}") from exc
+
+
+def _extract_google_maps_list_title(data: Any) -> str:
+    if isinstance(data, list) and len(data) > 4 and isinstance(data[4], str):
+        title = data[4].strip()
+        if title:
+            return title
+    if isinstance(data, list):
+        for item in data:
+            title = _extract_google_maps_list_title(item)
+            if title:
+                return title
+    return ""
+
+
+def _extract_google_maps_list_places(data: Any) -> list[dict[str, Any]]:
+    places: list[dict[str, Any]] = []
+
+    def visit(node: Any) -> None:
+        if isinstance(node, list):
+            place = _google_maps_list_place_from_node(node)
+            if place:
+                places.append(place)
+                return
+            for item in node:
+                visit(item)
+
+    visit(data)
+    seen: set[str] = set()
+    deduped: list[dict[str, Any]] = []
+    for place in places:
+        key = str(place.get("place_id") or place.get("name") or "").strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(place)
+    return deduped
+
+
+def _google_maps_list_place_from_node(node: list[Any]) -> dict[str, Any] | None:
+    if len(node) < 3 or not isinstance(node[1], list) or not isinstance(node[2], str):
+        return None
+    name = node[2].strip()
+    if not name or name.startswith("http"):
+        return None
+    detail = node[1]
+    address = ""
+    if len(detail) > 4 and isinstance(detail[4], str):
+        address = detail[4].strip()
+    elif len(detail) > 2 and isinstance(detail[2], str):
+        address = detail[2].strip()
+    lat = lng = None
+    if len(detail) > 5 and isinstance(detail[5], list) and len(detail[5]) > 3:
+        lat = detail[5][2] if isinstance(detail[5][2], (int, float)) else None
+        lng = detail[5][3] if isinstance(detail[5][3], (int, float)) else None
+    place_id = str(detail[7]).strip() if len(detail) > 7 and isinstance(detail[7], str) else ""
+    return {
+        "name": name,
+        "address": address,
+        "lat": lat,
+        "lng": lng,
+        "place_id": place_id,
+    }
+
+
+def _base_terms_for_place_signal(intent: str, poi_type: str) -> list[str]:
+    signal = f"{intent} {poi_type}"
+    if "train" in signal or "station" in signal:
+        return ["改札", "乗り換え", "終電", "ホーム", "乗り場", "出口"]
+    if "restaurant" in signal or "food" in signal:
+        return ["予約", "お会計", "アレルギー", "卵", "小麦", "ナッツ"]
+    if "hotel" in signal:
+        return ["予約名", "荷物預かり", "チェックイン", "チェックアウト"]
+    if "shrine" in signal or "temple" in signal:
+        return ["御朱印", "お守り", "おみくじ", "鳥居"]
+    return []
+
+
+def _base_translation_terms_for_place_signal(intent: str, poi_type: str) -> list[str]:
+    signal = f"{intent} {poi_type}"
+    if "train" in signal or "station" in signal:
+        return ["platform -> ホーム / 乗り場", "ticket gate -> 改札", "last train -> 終電"]
+    if "restaurant" in signal or "food" in signal:
+        return ["check/bill -> お会計", "no meat/fish broth -> 肉や魚の出汁もなし"]
+    if "hotel" in signal:
+        return ["leave luggage -> 荷物を預ける"]
+    if "shrine" in signal or "temple" in signal:
+        return ["goshuin -> 御朱印", "amulet -> お守り"]
+    return []
+
+
+def _dedupe(values: list[str]) -> list[str]:
+    seen = set()
+    result = []
+    for value in values:
+        clean = value.strip()
+        if clean and clean not in seen:
+            seen.add(clean)
+            result.append(clean)
+    return result
 
 
 @app.get("/sessions")
@@ -93,8 +582,75 @@ def session_detail(session_name: str) -> dict[str, Any]:
         enriched_state["artifact"] = latest_artifact
     return {
         "session": enriched_state,
+        "adaptations": _read_session_adaptations(session_dir),
         "phrases": build_phrases(session, []),
     }
+
+
+@app.post("/sessions/{session_name}/adaptations")
+def save_session_adaptation(session_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    state = read_session_state(session_name)
+    if not state:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    key = str(payload.get("key") or "").strip()
+    adaptation = payload.get("adaptation") if isinstance(payload.get("adaptation"), dict) else {}
+    if not key:
+        raise HTTPException(status_code=400, detail="Expected key.")
+
+    safe_name = sanitize_session_name(session_name)
+    session_dir = shared.REPO_ROOT / "output" / safe_name
+    adaptations = _read_session_adaptations(session_dir)
+    adaptations[key] = {
+        "source_rewrite": str(adaptation.get("source_rewrite") or ""),
+        "target_translation": str(adaptation.get("target_translation") or ""),
+        "status": str(adaptation.get("status") or "ready"),
+    }
+    _write_session_adaptations(session_dir, adaptations)
+    return {"session": safe_name, "key": key, "adaptation": adaptations[key]}
+
+
+@app.patch("/sessions/{session_name}")
+def rename_session(session_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+    state = read_session_state(session_name)
+    if not state:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    title = str(payload.get("title") or "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Expected title.")
+
+    safe_name = sanitize_session_name(session_name)
+    session_dir = shared.REPO_ROOT / "output" / safe_name
+    state["title"] = title[:48]
+    state_path = session_dir / "session_state.json"
+    state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    summary_path = session_dir / "session_summary.json"
+    if summary_path.exists():
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+            if isinstance(summary, dict):
+                summary["title"] = state["title"]
+                summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    return {"name": safe_name, "title": state["title"]}
+
+
+@app.delete("/sessions/{session_name}")
+def delete_session(session_name: str) -> dict[str, Any]:
+    state = read_session_state(session_name)
+    if not state:
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+    safe_name = sanitize_session_name(session_name)
+    session_dir = shared.REPO_ROOT / "output" / safe_name
+    if not session_dir.exists() or not session_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Session not found.")
+    shutil.rmtree(session_dir)
+    return {"name": safe_name, "deleted": True}
 
 
 @app.post("/sessions/{session_name}/rediarize")
@@ -278,6 +834,22 @@ def _latest_tokens_for_session(session_dir, state: dict[str, Any]) -> list[dict[
     return list(state.get("tokens") or [])
 
 
+def _read_session_adaptations(session_dir) -> dict[str, Any]:
+    path = session_dir / "phrase_adaptations.json"
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _write_session_adaptations(session_dir, adaptations: dict[str, Any]) -> None:
+    path = session_dir / "phrase_adaptations.json"
+    path.write_text(json.dumps(adaptations, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def _latest_transcript_artifact(session_dir) -> dict[str, str] | None:
     artifacts = _improved_artifacts_by_recency(session_dir)
     if artifacts:
@@ -439,7 +1011,7 @@ def _revise_translation_samples(api_key: str, samples: list[dict[str, Any]], con
 
     prompt = {
         "task": (
-            "Improve bilingual live-caption translations for a natural Japanese/English conversation. "
+            "Improve bilingual live-caption translations for a natural live conversation. "
             "Use each existing translation as a draft. Correct meaning errors and unnatural phrasing, "
             "preserve names, game terms, family context, food/place terms, and casual tone. "
             "Keep captions concise. Do not add explanations. Return JSON only."

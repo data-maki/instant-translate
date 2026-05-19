@@ -9,7 +9,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app import main as app_main
 from app.languages import validate_language_pair
 from app.main import app
-from app.sessions import build_phrases, make_session, process_soniox_tokens
+from app.soniox import get_soniox_config, normalize_start_context
+from app.sessions import build_phrases, list_sessions, make_session, process_soniox_tokens
 
 
 def test_health_and_language_defaults():
@@ -22,11 +23,368 @@ def test_health_and_language_defaults():
     languages = client.get("/languages").json()
     codes = {item["code"] for item in languages["languages"]}
     assert {"en", "ja"}.issubset(codes)
+    assert {"my", "th", "vi"}.issubset(codes)
+
+
+def test_places_context_requires_google_maps_api_key(monkeypatch):
+    monkeypatch.delenv("GOOGLE_MAPS_API_KEY", raising=False)
+    monkeypatch.setenv("GOOGLE_MAPS_SERVER_KEY", "ignored")
+
+    response = TestClient(app).post("/context/places", json={"lat": 35.6895, "lng": 139.6917})
+
+    assert response.status_code == 400
+    assert "GOOGLE_MAPS_API_KEY" in response.json()["detail"]
+
+
+def test_places_context_enriches_nearby_station_terms(monkeypatch):
+    monkeypatch.setenv("GOOGLE_MAPS_API_KEY", "test-google-key")
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self):
+            return json.dumps({
+                "places": [
+                    {
+                        "displayName": {"text": "Shinjuku Station"},
+                        "formattedAddress": "3 Chome Shinjuku, Tokyo",
+                        "primaryType": "train_station",
+                    }
+                ]
+            }).encode("utf-8")
+
+    def fake_urlopen(request, timeout):
+        assert timeout == 8
+        assert request.get_header("X-goog-api-key") == "test-google-key"
+        return FakeResponse()
+
+    monkeypatch.setattr(app_main.urllib.request, "urlopen", fake_urlopen)
+
+    response = TestClient(app).post(
+        "/context/places",
+        json={"lat": 35.6895, "lng": 139.6917, "intent": "train", "poi_type": "train station"},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["places"] == ["Shinjuku Station"]
+    assert "Shinjuku Station" in payload["terms"]
+    assert "改札" in payload["terms"]
+    assert "ticket gate -> 改札" in payload["translation_terms"]
+
+
+def test_soniox_config_accepts_structured_context():
+    context = {
+        "general": [{"key": "setting", "value": "train station"}],
+        "terms": ["Shinjuku Station", "改札"],
+        "text": "Short trip note.",
+        "translation_terms": [{"source": "ticket gate", "target": "改札"}],
+    }
+
+    config = get_soniox_config("test-key", ["ja", "en"], context)
+
+    assert config["context"] == context
+
+
+def test_soniox_config_keeps_extra_language_hints():
+    config = get_soniox_config("test-key", ["ja", "th", "vi", "my", "en"], language_hints=["ja", "th", "vi", "my", "fr", "en"])
+
+    assert config["translation"] == {"type": "two_way", "language_a": "ja", "language_b": "en"}
+    assert config["language_hints"] == ["ja", "th", "vi", "my", "fr", "en"]
+
+
+def test_start_context_normalizes_structured_context_without_aliases(monkeypatch):
+    monkeypatch.delenv("GOOGLE_MAPS_SERVER_KEY", raising=False)
+    context = normalize_start_context({
+        "general": [{"key": "setting", "value": "restaurant"}, {"key": "", "value": "ignored"}],
+        "terms": ["お会計", ""],
+        "translation_terms": [{"source": "check", "target": "お会計"}, {"source": "", "target": "ignored"}],
+    })
+
+    assert context == {
+        "general": [{"key": "setting", "value": "restaurant"}],
+        "terms": ["お会計"],
+        "translation_terms": [{"source": "check", "target": "お会計"}],
+    }
+
+
+def test_rewrite_context_requires_groq_key(monkeypatch):
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
+
+    response = TestClient(app).post(
+        "/context/rewrite",
+        json={
+            "source_language": "en",
+            "target_language": "ja",
+            "source_text": "I want the check.",
+        },
+    )
+
+    assert response.status_code == 400
+    assert "GROQ_API_KEY" in response.json()["detail"]
+
+
+def test_rewrite_context_uses_groq_qwen_with_reasoning_none(monkeypatch):
+    import requests
+
+    monkeypatch.setenv("GROQ_API_KEY", "test-groq-key")
+    monkeypatch.setenv("DEEPL_API_KEY", "test-deepl-key")
+    monkeypatch.setenv("DEEPL_GLOSSARY_ID", "glossary-123")
+    monkeypatch.delenv("DEEPL_FORMALITY", raising=False)
+    captured = {}
+
+    class FakeGroqResponse:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": json.dumps({
+                                "source_rewrite": "Could we get the bill, please?",
+                                "target_rewrite": "これは無視されるべきです。",
+                            })
+                        }
+                    }
+                ]
+            }
+
+    class FakeDeepLResponse:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"translations": [{"text": "お会計をお願いします。"}]}
+
+    def fake_post(url, headers, json, timeout):
+        if "groq.com" in url:
+            captured["groq_url"] = url
+            captured["groq_headers"] = headers
+            captured["groq_json"] = json
+            captured["groq_timeout"] = timeout
+            return FakeGroqResponse()
+        captured["deepl_url"] = url
+        captured["deepl_headers"] = headers
+        captured["deepl_json"] = json
+        captured["deepl_timeout"] = timeout
+        return FakeDeepLResponse()
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    response = TestClient(app).post(
+        "/context/rewrite",
+        json={
+            "source_language": "en",
+            "target_language": "ja",
+            "source_text": "I want the check.",
+            "draft_translation": "お会計が欲しいです。",
+            "rewrite_context": {"tone": {"audience": "restaurant staff", "register": "polite_neutral"}, "recent_dialogue": []},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "source_rewrite": "Could we get the bill, please?",
+        "target_translation": "お会計をお願いします。",
+    }
+    assert captured["groq_url"] == "https://api.groq.com/openai/v1/chat/completions"
+    assert captured["groq_json"]["model"] == "qwen/qwen3-32b"
+    assert captured["groq_json"]["reasoning_effort"] == "none"
+    assert captured["groq_json"]["response_format"] == {"type": "json_object"}
+    assert captured["groq_timeout"] == app_main.GROQ_REWRITE_TIMEOUT_SECONDS
+    prompt = json.loads(captured["groq_json"]["messages"][1]["content"])
+    assert "draft_translation" not in prompt
+    assert "target_rewrite" not in json.dumps(prompt, ensure_ascii=False)
+    assert "Do not translate to Japanese" in prompt["task"]
+    assert any("Do not output Japanese" in item for item in prompt["hard_constraints"])
+    assert captured["deepl_url"] == app_main.DEEPL_PRO_TRANSLATE_URL
+    assert captured["deepl_headers"]["Authorization"] == "DeepL-Auth-Key test-deepl-key"
+    assert captured["deepl_timeout"] == app_main.DEEPL_TRANSLATE_TIMEOUT_SECONDS
+    assert captured["deepl_json"]["text"] == ["Could we get the bill, please?"]
+    assert captured["deepl_json"]["source_lang"] == "EN"
+    assert captured["deepl_json"]["target_lang"] == "JA"
+    assert captured["deepl_json"]["model_type"] == "latency_optimized"
+    assert captured["deepl_json"]["formality"] == "more"
+    assert captured["deepl_json"]["glossary_id"] == "glossary-123"
+    assert "Previous Japanese draft" in captured["deepl_json"]["context"]
+
+
+def test_deepl_uses_pro_endpoint_by_default(monkeypatch):
+    monkeypatch.delenv("DEEPL_API_URL", raising=False)
+    assert app_main._deepl_translate_url() == app_main.DEEPL_PRO_TRANSLATE_URL
+
+
+def test_deepl_formality_maps_registers(monkeypatch):
+    monkeypatch.delenv("DEEPL_FORMALITY", raising=False)
+    assert app_main._deepl_formality({"tone": {"deepl_formality": "less", "register": "polite_neutral"}}) == "less"
+    assert app_main._deepl_formality({"tone": {"register": "casual_intimate", "audience": "Close friend"}}) == "less"
+    assert app_main._deepl_formality({"tone": {"register": "casual_intimate", "audience": "Family / in-laws"}}) == "more"
+    assert app_main._deepl_formality({"tone": {"register": "external_formal_business", "audience": "Client / customer"}}) == "more"
+    assert app_main._deepl_formality({"tone": {"deepl_formality": "more"}}, "th") == ""
+
+
+def test_translate_context_runs_deepl_without_qwen(monkeypatch):
+    import requests
+
+    monkeypatch.setenv("DEEPL_API_KEY", "test-deepl-key")
+    monkeypatch.delenv("DEEPL_GLOSSARY_ID", raising=False)
+    captured = {}
+
+    class FakeDeepLResponse:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"translations": [{"text": "お会計をお願いします。"}]}
+
+    def fake_post(url, headers, json, timeout):
+        captured["url"] = url
+        captured["json"] = json
+        return FakeDeepLResponse()
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    response = TestClient(app).post(
+        "/context/translate",
+        json={
+            "source_language": "en",
+            "target_language": "ja",
+            "source_text": "I'd like the bill, please.",
+            "rewrite_context": {"tone": {"deepl_formality": "more"}},
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"target_translation": "お会計をお願いします。"}
+    assert captured["url"] == app_main.DEEPL_PRO_TRANSLATE_URL
+    assert captured["json"]["text"] == ["I'd like the bill, please."]
+    assert captured["json"]["formality"] == "more"
+
+
+def test_translate_context_supports_multilingual_text_targets_without_formality(monkeypatch):
+    import requests
+
+    monkeypatch.setenv("DEEPL_API_KEY", "test-deepl-key")
+    monkeypatch.delenv("DEEPL_GLOSSARY_ID", raising=False)
+    captured: list[dict[str, str]] = []
+
+    class FakeDeepLResponse:
+        status_code = 200
+        text = ""
+
+        def __init__(self, translated: str):
+            self.translated = translated
+
+        def json(self):
+            return {"translations": [{"text": self.translated}]}
+
+    translations = {
+        "TH": "ขอใบเสร็จได้ไหมครับ/คะ",
+        "MY": "ဘေလ်ပေးလို့ရမလား။",
+        "VI": "Cho tôi xin hóa đơn được không?",
+    }
+
+    def fake_post(url, headers, json, timeout):
+        captured.append(json)
+        return FakeDeepLResponse(translations[json["target_lang"]])
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    for target_language in ["th", "my", "vi"]:
+        response = TestClient(app).post(
+            "/context/translate",
+            json={
+                "source_language": "en",
+                "target_language": target_language,
+                "source_text": "Could I get the bill, please?",
+                "draft_translation": "お会計をお願いします。",
+                "rewrite_context": {"tone": {"deepl_formality": "more", "audience": "hotel staff"}},
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["target_translation"] == translations[target_language.upper()]
+
+    assert [item["target_lang"] for item in captured] == ["TH", "MY", "VI"]
+    assert all("formality" not in item for item in captured)
+
+
+def test_name_katakana_requires_openai_key(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    response = TestClient(app).post("/context/name-katakana", json={"first_name": "John", "last_name": "Smith"})
+    assert response.status_code == 400
+    assert "OPENAI_API_KEY" in response.json()["detail"]
+
+
+def test_name_katakana_requires_non_empty_name(monkeypatch):
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    response = TestClient(app).post("/context/name-katakana", json={"first_name": "", "last_name": "  "})
+    assert response.status_code == 400
+
+
+def test_name_katakana_returns_options(monkeypatch):
+    import requests
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+
+    class FakeOpenAIResponse:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            payload = {
+                "options": [
+                    {
+                        "first_katakana": "ジョン",
+                        "last_katakana": "スミス",
+                        "first_reading_en": "John",
+                        "last_reading_en": "Smith",
+                    },
+                    {
+                        "first_katakana": "ジョン",
+                        "last_katakana": "スミス",
+                        "first_reading_en": "Jon",
+                        "last_reading_en": "Smith",
+                    },
+                    {
+                        "first_katakana": "ジョン",
+                        "last_katakana": "スミス",
+                        "first_reading_en": "John",
+                        "last_reading_en": "Smith",
+                    },
+                ]
+            }
+            return {"output_text": json.dumps(payload)}
+
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: FakeOpenAIResponse())
+
+    response = TestClient(app).post(
+        "/context/name-katakana",
+        json={"first_name": "John", "last_name": "Smith"},
+    )
+    assert response.status_code == 200
+    data = response.json()["options"]
+    assert len(data) == 2
+    readings = {(row["first_reading_en"], row["last_reading_en"]) for row in data}
+    assert ("John", "Smith") in readings
+    assert ("Jon", "Smith") in readings
 
 
 def test_validate_language_pair_defaults_to_two_way_english_japanese():
     sources, target = validate_language_pair([], "")
-    assert sources == ["en", "ja"]
+    assert sources == ["ja", "en"]
+    assert target == "en"
+
+
+def test_validate_language_pair_keeps_additional_language_hints():
+    sources, target = validate_language_pair(["ja", "th", "vi", "my", "en"], "en")
+    assert sources == ["ja", "th", "vi", "my", "en"]
     assert target == "en"
 
 
@@ -61,6 +419,28 @@ def test_phrase_builder_groups_original_and_translation(tmp_path, monkeypatch):
     assert phrases[0]["texts"] == {"ja": "こんにちは", "en": "Hello"}
 
 
+def test_phrase_builder_handles_unexpected_detected_language(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.shared.REPO_ROOT", tmp_path)
+    session = make_session("unexpected french", ["ja", "th", "vi", "my", "en"], "en")
+    raw_tokens = [
+        {"text": "Bonjour", "speaker": 1, "language": "fr", "is_final": True, "translation_status": "original"},
+        {
+            "text": "Hello",
+            "speaker": 1,
+            "language": "en",
+            "source_language": "fr",
+            "is_final": True,
+            "translation_status": "translation",
+        },
+    ]
+
+    process_soniox_tokens(session, raw_tokens)
+    phrases = build_phrases(session)
+
+    assert phrases[0]["source_lang"] == "fr"
+    assert phrases[0]["texts"] == {"fr": "Bonjour", "en": "Hello"}
+
+
 def test_session_state_persists_context_and_speaker_plan(tmp_path, monkeypatch):
     monkeypatch.setattr("app.shared.REPO_ROOT", tmp_path)
     session = make_session("speaker plan", ["ja", "en"], "en")
@@ -77,6 +457,75 @@ def test_session_state_persists_context_and_speaker_plan(tmp_path, monkeypatch):
     resumed = make_session("speaker plan", ["ja", "en"], "en")
     assert resumed.expected_speaker_count == 6
     assert resumed.expected_speaker_names == ["Akiko", "John"]
+
+
+def test_list_sessions_sorts_by_updated_newest_first(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.shared.REPO_ROOT", tmp_path)
+    output = tmp_path / "output"
+    output.mkdir()
+    for name, updated in [
+        ("old", "2026-05-12T10:00:00"),
+        ("new", "2026-05-18T10:00:00"),
+        ("middle", "2026-05-15T10:00:00"),
+    ]:
+        session_dir = output / name
+        session_dir.mkdir()
+        (session_dir / "session_state.json").write_text(
+            json.dumps({"updated": updated, "tokens": [], "source_languages": ["en", "ja"], "target_language": "en"}),
+            encoding="utf-8",
+        )
+    (output / "legacy-without-state").mkdir()
+
+    assert [session["name"] for session in list_sessions()] == ["new", "middle", "old"]
+
+
+def test_session_rename_and_delete_endpoints(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.shared.REPO_ROOT", tmp_path)
+    session = make_session("rename me", ["ja", "en"], "en")
+    session.final_tokens = [{"text": "hello", "speaker": 1, "language": "en", "is_final": True}]
+    session.save_state()
+    session_dir = tmp_path / "output" / "rename-me"
+    (session_dir / "session_summary.json").write_text(
+        json.dumps({"title": "Auto title", "summary": "A short summary."}),
+        encoding="utf-8",
+    )
+
+    client = TestClient(app)
+    renamed = client.patch("/sessions/rename-me", json={"title": "Manual title"})
+
+    assert renamed.status_code == 200
+    assert renamed.json()["title"] == "Manual title"
+    assert client.get("/sessions/rename-me").json()["session"]["title"] == "Manual title"
+
+    deleted = client.delete("/sessions/rename-me")
+
+    assert deleted.status_code == 200
+    assert deleted.json()["deleted"] is True
+    assert not session_dir.exists()
+
+
+def test_session_adaptations_are_persisted_and_loaded(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.shared.REPO_ROOT", tmp_path)
+    session = make_session("adapted chat", ["en", "ja"], "ja")
+    session.final_tokens = [{"text": "check", "speaker": 1, "language": "en", "is_final": True}]
+    session.save_state()
+
+    client = TestClient(app)
+    saved = client.post(
+        "/sessions/adapted-chat/adaptations",
+        json={
+            "key": "0-1-en:ja:check",
+            "adaptation": {
+                "source_rewrite": "I'd like the bill, please.",
+                "target_translation": "お会計をお願いします。",
+                "status": "ready",
+            },
+        },
+    )
+
+    assert saved.status_code == 200
+    detail = client.get("/sessions/adapted-chat").json()
+    assert detail["adaptations"]["0-1-en:ja:check"]["target_translation"] == "お会計をお願いします。"
 
 
 def test_translation_update_stats_are_persisted(tmp_path, monkeypatch):

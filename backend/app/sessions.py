@@ -45,24 +45,57 @@ def list_sessions() -> list[dict[str, Any]]:
         return []
 
     sessions: list[dict[str, Any]] = []
-    for path in sorted(output_dir.iterdir(), key=lambda item: item.stat().st_mtime, reverse=True):
+    for path in output_dir.iterdir():
         if not path.is_dir():
             continue
         state = read_session_state(path.name)
+        if not state:
+            continue
         title = session_display_title(path, state)
+        updated = session_updated_iso(path, state.get("updated"))
         sessions.append({
             "name": path.name,
             "title": title,
-            "updated": state.get("updated") if state else None,
-            "token_count": len(state.get("tokens", [])) if state else 0,
-            "duration_seconds": session_duration_seconds(state.get("tokens", []) if state else []),
-            "source_languages": state.get("source_languages") if state else None,
-            "target_language": state.get("target_language") if state else None,
+            "updated": updated,
+            "token_count": len(state.get("tokens", [])),
+            "duration_seconds": session_duration_seconds(state.get("tokens", [])),
+            "source_languages": state.get("source_languages"),
+            "target_language": state.get("target_language"),
         })
-    return sessions
+    return sorted(sessions, key=lambda session: session_sort_time(output_dir / session["name"], session), reverse=True)
+
+
+def session_updated_iso(session_dir: Path, updated: Any) -> str | None:
+    if isinstance(updated, str) and parse_session_time(updated) is not None:
+        return updated
+    try:
+        return datetime.fromtimestamp(session_dir.stat().st_mtime, timezone.utc).isoformat()
+    except OSError:
+        return None
+
+
+def session_sort_time(session_dir: Path, session: dict[str, Any]) -> float:
+    parsed = parse_session_time(session.get("updated"))
+    if parsed is not None:
+        return parsed
+    try:
+        return session_dir.stat().st_mtime
+    except OSError:
+        return 0
+
+
+def parse_session_time(value: Any) -> float | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        return None
 
 
 def session_display_title(session_dir: Path, state: dict[str, Any] | None) -> str:
+    if state and state.get("title"):
+        return str(state["title"])[:48]
     summary = read_session_summary(session_dir)
     if summary and summary.get("title"):
         return str(summary["title"])[:48]

@@ -9,6 +9,7 @@ from typing import Any, Awaitable, Callable
 
 import websockets
 
+from .provider_streams import ProviderFanout
 from .sessions import DEFAULT_CONTEXT, build_phrases, make_session, process_soniox_tokens, summarize_finished_session
 
 
@@ -25,10 +26,11 @@ ReceiveAudio = Callable[[], Awaitable[bytes | str | None]]
 def get_soniox_config(
     api_key: str,
     source_languages: list[str],
-    context: str | None = None,
+    context: str | dict[str, Any] | None = None,
     language_hints: list[str] | None = None,
 ) -> dict[str, Any]:
-    lang_a, lang_b = source_languages[0], source_languages[1]
+    lang_b = source_languages[-1]
+    lang_a = next((language for language in source_languages if language != lang_b), source_languages[0])
     hints = list(dict.fromkeys(language_hints or source_languages))
     config: dict[str, Any] = {
         "api_key": api_key,
@@ -47,8 +49,37 @@ def get_soniox_config(
         },
     }
     if context:
-        config["context"] = {"text": context}
+        config["context"] = normalize_soniox_context(context)
     return config
+
+
+def normalize_soniox_context(context: str | dict[str, Any]) -> dict[str, Any]:
+    if isinstance(context, str):
+        return {"text": context}
+    normalized: dict[str, Any] = {}
+    general = context.get("general")
+    if isinstance(general, list):
+        entries = [
+            {"key": str(item.get("key") or "").strip(), "value": str(item.get("value") or "").strip()}
+            for item in general
+            if isinstance(item, dict)
+        ]
+        normalized["general"] = [item for item in entries if item["key"] and item["value"]][:15]
+    terms = context.get("terms")
+    if isinstance(terms, list):
+        normalized["terms"] = [str(term).strip() for term in terms if str(term).strip()][:60]
+    text = context.get("text")
+    if isinstance(text, str) and text.strip():
+        normalized["text"] = text.strip()
+    translation_terms = context.get("translation_terms")
+    if isinstance(translation_terms, list):
+        entries = [
+            {"source": str(item.get("source") or "").strip(), "target": str(item.get("target") or "").strip()}
+            for item in translation_terms
+            if isinstance(item, dict)
+        ]
+        normalized["translation_terms"] = [item for item in entries if item["source"] and item["target"]][:20]
+    return normalized
 
 
 async def run_transcription_bridge(
@@ -68,12 +99,17 @@ async def run_transcription_bridge(
     requested_languages = start_message.get("source_languages") or ["en", "ja"]
     target_language = start_message.get("target_language") or "en"
     session = make_session(start_message.get("session_name") or "", requested_languages, target_language)
-    context = (start_message.get("context") or DEFAULT_CONTEXT).strip()
-    session.context = context
+    context = normalize_start_context(start_message.get("context"))
+    session.context = context_summary(context)
     session.expected_speaker_count = parse_expected_speaker_count(start_message.get("expected_speaker_count"))
     session.expected_speaker_names = parse_expected_speaker_names(start_message.get("expected_speaker_names"))
+    send_lock = asyncio.Lock()
 
-    await send_event({
+    async def safe_send_event(event: dict[str, Any]) -> None:
+        async with send_lock:
+            await send_event(event)
+
+    await safe_send_event({
         "type": "session",
         "session": {
             "name": session.name,
@@ -95,10 +131,12 @@ async def run_transcription_bridge(
                 context,
                 list(requested_languages) + [target_language],
             )))
-            await send_event({"type": "status", "status": "listening"})
+            await safe_send_event({"type": "status", "status": "listening"})
 
             stop_event = asyncio.Event()
             partial_tokens: list[dict[str, Any]] = []
+            providers = ProviderFanout(safe_send_event)
+            providers.start()
 
             async def browser_to_soniox() -> None:
                 while not stop_event.is_set():
@@ -116,7 +154,9 @@ async def run_transcription_bridge(
                     if payload:
                         session.add_audio_frame(payload)
                         await soniox.send(payload)
+                        providers.publish(payload)
                 stop_event.set()
+                providers.close_inputs()
                 try:
                     await soniox.send("")
                 except Exception:
@@ -127,7 +167,7 @@ async def run_transcription_bridge(
                 async for message in soniox:
                     response = json.loads(message)
                     if response.get("error_code") is not None:
-                        await send_event({
+                        await safe_send_event({
                             "type": "error",
                             "message": f"{response['error_code']} - {response.get('error_message', 'Unknown error')}",
                         })
@@ -138,7 +178,7 @@ async def run_transcription_bridge(
                         session,
                         response.get("tokens", []),
                     )
-                    await send_event({
+                    await safe_send_event({
                         "type": "transcript",
                         "phrases": build_phrases(session, partial_tokens),
                         "final_token_count": len(session.final_tokens),
@@ -159,18 +199,53 @@ async def run_transcription_bridge(
                 task.cancel()
             for task in done:
                 task.result()
+            providers.cancel()
 
     except Exception as exc:
-        await send_event({"type": "error", "message": str(exc)})
+        await safe_send_event({"type": "error", "message": str(exc)})
     finally:
         if session.final_tokens:
             try:
                 path = session.save_segment()
                 summary = summarize_finished_session(session)
-                await send_event(saved_transcript_event(session, path, summary))
+                await safe_send_event(saved_transcript_event(session, path, summary))
             except OSError as exc:
-                await send_event({"type": "error", "message": f"Failed to save session: {exc}"})
-        await send_event({"type": "status", "status": "stopped"})
+                await safe_send_event({"type": "error", "message": f"Failed to save session: {exc}"})
+        await safe_send_event({"type": "status", "status": "stopped"})
+
+
+def normalize_start_context(context: Any) -> str | dict[str, Any]:
+    if isinstance(context, dict):
+        normalized = normalize_soniox_context(context)
+        return normalized or DEFAULT_CONTEXT
+    if isinstance(context, str) and context.strip():
+        return context.strip()
+    return DEFAULT_CONTEXT
+
+
+def context_summary(context: str | dict[str, Any]) -> str:
+    if isinstance(context, str):
+        return context
+    parts: list[str] = []
+    for item in context.get("general", []):
+        if isinstance(item, dict) and item.get("key") and item.get("value"):
+            parts.append(f"{item['key']}: {item['value']}")
+    terms = context.get("terms", [])
+    if isinstance(terms, list) and terms:
+        parts.append("terms: " + ", ".join(str(term) for term in terms[:20]))
+    translation_terms = context.get("translation_terms", [])
+    if isinstance(translation_terms, list) and translation_terms:
+        rendered = [
+            f"{item.get('source')} -> {item.get('target')}"
+            for item in translation_terms[:10]
+            if isinstance(item, dict) and item.get("source") and item.get("target")
+        ]
+        if rendered:
+            parts.append("translation_terms: " + "; ".join(rendered))
+    text = context.get("text")
+    if isinstance(text, str) and text.strip():
+        parts.append(text.strip())
+    return "\n".join(parts) or DEFAULT_CONTEXT
 
 
 def saved_transcript_event(session, path, summary: dict[str, str] | None = None) -> dict[str, Any]:

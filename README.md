@@ -12,7 +12,7 @@ Create local env first:
 cp .env.example .env
 ```
 
-Set `SONIOX_API_KEY` in `.env`. Set `OPENAI_API_KEY` too if you want the post-recording **Improve transcript** translation cleanup.
+Set `SONIOX_API_KEY` in `.env`. Set a DeepL Pro `DEEPL_API_KEY` plus `GROQ_API_KEY` for live phrase upgrades: Qwen adapts the English, then DeepL translates the adapted English to Japanese with the selected plain/polite tone. Set `DEEPL_GLOSSARY_ID` if you have a DeepL glossary. Set `DEEPGRAM_API_KEY` and `OPENAI_API_KEY` for the optional parallel transcription/translation lane and for traveler name katakana suggestions on the profile page (`OPENAI_NAME_KATAKANA_MODEL` defaults to `gpt-4o-mini`). Set `GOOGLE_MAPS_API_KEY` to enrich GPS context with nearby Places terms. `GROQ_REWRITE_MODEL` defaults to `qwen/qwen3-32b`.
 
 Run the backend API in one terminal:
 
@@ -116,7 +116,7 @@ The end-of-meeting speaker review panel lets you quickly filter by detected spea
 
 ## Supported Languages
 
-🇸🇦 Arabic, 🪨 Basque, 🇧🇦 Bosnian, 🇧🇬 Bulgarian, 🐈 Catalan, 🇨🇳 Chinese, 🇭🇷 Croatian, 🇨🇿 Czech, 🇩🇰 Danish, 🇳🇱 Dutch, 🇺🇸 English, 🇪🇪 Estonian, 🇫🇮 Finnish, 🇫🇷 French, 🐟 Galician, 🇩🇪 German, 🇬🇷 Greek, 🇮🇳 Gujarati, 🇮🇱 Hebrew, 🇮🇳 Hindi, 🇭🇺 Hungarian, 🇮🇩 Indonesian, 🇮🇹 Italian, 🇯🇵 Japanese, 🇰🇷 Korean, 🇱🇻 Latvian, 🇱🇹 Lithuanian, 🇲🇰 Macedonian, 🇲🇾 Malay, 🇮🇳 Malayalam, 🇮🇳 Marathi, 🇳🇴 Norwegian, 🇮🇷 Persian, 🇵🇱 Polish, 🇵🇹 Portuguese, 🇮🇳 Punjabi, 🇷🇴 Romanian, 🇷🇺 Russian, 🇷🇸 Serbian, 🇸🇰 Slovak, 🇸🇮 Slovenian, 🇪🇸 Spanish, 🇸🇪 Swedish, 🇵🇭 Tagalog, 🇮🇳 Tamil, 🇮🇳 Telugu, 🇹🇭 Thai, 🇹🇷 Turkish, 🇺🇦 Ukrainian, 🇵🇰 Urdu, 🇻🇳 Vietnamese
+🇸🇦 Arabic, 🪨 Basque, 🇧🇦 Bosnian, 🇧🇬 Bulgarian, 🐈 Catalan, 🇨🇳 Chinese, 🇭🇷 Croatian, 🇨🇿 Czech, 🇩🇰 Danish, 🇳🇱 Dutch, 🇬🇧 English, 🇪🇪 Estonian, 🇫🇮 Finnish, 🇫🇷 French, 🐟 Galician, 🇩🇪 German, 🇬🇷 Greek, 🇮🇳 Gujarati, 🇮🇱 Hebrew, 🇮🇳 Hindi, 🇭🇺 Hungarian, 🇮🇩 Indonesian, 🇮🇹 Italian, 🇯🇵 Japanese, 🇰🇷 Korean, 🇱🇻 Latvian, 🇱🇹 Lithuanian, 🇲🇰 Macedonian, 🇲🇾 Malay, 🇮🇳 Malayalam, 🇮🇳 Marathi, 🇳🇴 Norwegian, 🇮🇷 Persian, 🇵🇱 Polish, 🇵🇹 Portuguese, 🇮🇳 Punjabi, 🇷🇴 Romanian, 🇷🇺 Russian, 🇷🇸 Serbian, 🇸🇰 Slovak, 🇸🇮 Slovenian, 🇪🇸 Spanish, 🇸🇪 Swedish, 🇵🇭 Tagalog, 🇮🇳 Tamil, 🇮🇳 Telugu, 🇹🇭 Thai, 🇹🇷 Turkish, 🇺🇦 Ukrainian, 🇵🇰 Urdu, 🇻🇳 Vietnamese
 
 ---
 
