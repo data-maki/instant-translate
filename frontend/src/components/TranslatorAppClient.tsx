@@ -1,13 +1,7 @@
 "use client";
 
-import dynamic from "next/dynamic";
-import type { TranslatorAppProps } from "@/components/TranslatorApp";
-
-const TranslatorAppNoSsr = dynamic<TranslatorAppProps>(
-  () => import("@/components/TranslatorApp").then((module) => module.TranslatorApp),
-  { ssr: false }
-);
+import { TranslatorApp, type TranslatorAppProps } from "@/components/TranslatorApp";
 
 export function TranslatorAppClient(props: TranslatorAppProps) {
-  return <TranslatorAppNoSsr {...props} />;
+  return <TranslatorApp {...props} />;
 }

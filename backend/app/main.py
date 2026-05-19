@@ -111,7 +111,7 @@ def rewrite_context(payload: dict[str, Any]) -> dict[str, str]:
     except RuntimeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     target_translation = ""
-    if target_language == "ja" and result.get("source_rewrite"):
+    if result.get("source_rewrite"):
         deepl_key = os.environ.get("DEEPL_API_KEY")
         if deepl_key:
             try:
@@ -807,7 +807,7 @@ def _revise_translation_samples(api_key: str, samples: list[dict[str, Any]], con
 
     prompt = {
         "task": (
-            "Improve bilingual live-caption translations for a natural Japanese/English conversation. "
+            "Improve bilingual live-caption translations for a natural live conversation. "
             "Use each existing translation as a draft. Correct meaning errors and unnatural phrasing, "
             "preserve names, game terms, family context, food/place terms, and casual tone. "
             "Keep captions concise. Do not add explanations. Return JSON only."

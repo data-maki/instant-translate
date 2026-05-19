@@ -35,6 +35,7 @@ SONIOX_LANGUAGES = {
     "ms": {"name": "Malay", "flag": "🇲🇾"},
     "ml": {"name": "Malayalam", "flag": "🇮🇳"},
     "mr": {"name": "Marathi", "flag": "🇮🇳"},
+    "my": {"name": "Burmese", "flag": "🇲🇲"},
     "no": {"name": "Norwegian", "flag": "🇳🇴"},
     "fa": {"name": "Persian", "flag": "🇮🇷"},
     "pl": {"name": "Polish", "flag": "🇵🇱"},

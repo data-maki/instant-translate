@@ -29,7 +29,8 @@ def get_soniox_config(
     context: str | dict[str, Any] | None = None,
     language_hints: list[str] | None = None,
 ) -> dict[str, Any]:
-    lang_a, lang_b = source_languages[0], source_languages[1]
+    lang_b = source_languages[-1]
+    lang_a = next((language for language in source_languages if language != lang_b), source_languages[0])
     hints = list(dict.fromkeys(language_hints or source_languages))
     config: dict[str, Any] = {
         "api_key": api_key,

@@ -23,6 +23,7 @@ def test_health_and_language_defaults():
     languages = client.get("/languages").json()
     codes = {item["code"] for item in languages["languages"]}
     assert {"en", "ja"}.issubset(codes)
+    assert {"my", "th", "vi"}.issubset(codes)
 
 
 def test_places_context_requires_google_maps_api_key(monkeypatch):
@@ -87,6 +88,13 @@ def test_soniox_config_accepts_structured_context():
     config = get_soniox_config("test-key", ["ja", "en"], context)
 
     assert config["context"] == context
+
+
+def test_soniox_config_keeps_extra_language_hints():
+    config = get_soniox_config("test-key", ["ja", "th", "vi", "my", "en"], language_hints=["ja", "th", "vi", "my", "fr", "en"])
+
+    assert config["translation"] == {"type": "two_way", "language_a": "ja", "language_b": "en"}
+    assert config["language_hints"] == ["ja", "th", "vi", "my", "fr", "en"]
 
 
 def test_start_context_normalizes_structured_context_without_aliases(monkeypatch):
@@ -218,6 +226,7 @@ def test_deepl_formality_maps_registers(monkeypatch):
     assert app_main._deepl_formality({"tone": {"register": "casual_intimate", "audience": "Close friend"}}) == "less"
     assert app_main._deepl_formality({"tone": {"register": "casual_intimate", "audience": "Family / in-laws"}}) == "more"
     assert app_main._deepl_formality({"tone": {"register": "external_formal_business", "audience": "Client / customer"}}) == "more"
+    assert app_main._deepl_formality({"tone": {"deepl_formality": "more"}}, "th") == ""
 
 
 def test_translate_context_runs_deepl_without_qwen(monkeypatch):
@@ -256,6 +265,54 @@ def test_translate_context_runs_deepl_without_qwen(monkeypatch):
     assert captured["url"] == app_main.DEEPL_PRO_TRANSLATE_URL
     assert captured["json"]["text"] == ["I'd like the bill, please."]
     assert captured["json"]["formality"] == "more"
+
+
+def test_translate_context_supports_multilingual_text_targets_without_formality(monkeypatch):
+    import requests
+
+    monkeypatch.setenv("DEEPL_API_KEY", "test-deepl-key")
+    monkeypatch.delenv("DEEPL_GLOSSARY_ID", raising=False)
+    captured: list[dict[str, str]] = []
+
+    class FakeDeepLResponse:
+        status_code = 200
+        text = ""
+
+        def __init__(self, translated: str):
+            self.translated = translated
+
+        def json(self):
+            return {"translations": [{"text": self.translated}]}
+
+    translations = {
+        "TH": "ขอใบเสร็จได้ไหมครับ/คะ",
+        "MY": "ဘေလ်ပေးလို့ရမလား။",
+        "VI": "Cho tôi xin hóa đơn được không?",
+    }
+
+    def fake_post(url, headers, json, timeout):
+        captured.append(json)
+        return FakeDeepLResponse(translations[json["target_lang"]])
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    for target_language in ["th", "my", "vi"]:
+        response = TestClient(app).post(
+            "/context/translate",
+            json={
+                "source_language": "en",
+                "target_language": target_language,
+                "source_text": "Could I get the bill, please?",
+                "draft_translation": "お会計をお願いします。",
+                "rewrite_context": {"tone": {"deepl_formality": "more", "audience": "hotel staff"}},
+            },
+        )
+
+        assert response.status_code == 200
+        assert response.json()["target_translation"] == translations[target_language.upper()]
+
+    assert [item["target_lang"] for item in captured] == ["TH", "MY", "VI"]
+    assert all("formality" not in item for item in captured)
 
 
 def test_name_katakana_requires_openai_key(monkeypatch):
@@ -321,7 +378,13 @@ def test_name_katakana_returns_options(monkeypatch):
 
 def test_validate_language_pair_defaults_to_two_way_english_japanese():
     sources, target = validate_language_pair([], "")
-    assert sources == ["en", "ja"]
+    assert sources == ["ja", "en"]
+    assert target == "en"
+
+
+def test_validate_language_pair_keeps_additional_language_hints():
+    sources, target = validate_language_pair(["ja", "th", "vi", "my", "en"], "en")
+    assert sources == ["ja", "th", "vi", "my", "en"]
     assert target == "en"
 
 
@@ -354,6 +417,28 @@ def test_phrase_builder_groups_original_and_translation(tmp_path, monkeypatch):
     assert phrases[0]["speaker_label"] == "Speaker A"
     assert phrases[0]["source_lang"] == "ja"
     assert phrases[0]["texts"] == {"ja": "こんにちは", "en": "Hello"}
+
+
+def test_phrase_builder_handles_unexpected_detected_language(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.shared.REPO_ROOT", tmp_path)
+    session = make_session("unexpected french", ["ja", "th", "vi", "my", "en"], "en")
+    raw_tokens = [
+        {"text": "Bonjour", "speaker": 1, "language": "fr", "is_final": True, "translation_status": "original"},
+        {
+            "text": "Hello",
+            "speaker": 1,
+            "language": "en",
+            "source_language": "fr",
+            "is_final": True,
+            "translation_status": "translation",
+        },
+    ]
+
+    process_soniox_tokens(session, raw_tokens)
+    phrases = build_phrases(session)
+
+    assert phrases[0]["source_lang"] == "fr"
+    assert phrases[0]["texts"] == {"fr": "Bonjour", "en": "Hello"}
 
 
 def test_session_state_persists_context_and_speaker_plan(tmp_path, monkeypatch):
