@@ -28,8 +28,50 @@ type AppStatus =
   | "stopped"
   | "error";
 
-const DEFAULT_CONTEXT =
+const BASE_CONTEXT =
   "Natural bilingual conversation in Japan. Preserve nuance, casual tone, names, places, food, family context, and culturally specific references.";
+const DEFAULT_TONE_PRESET = "older-stranger";
+const TONE_BLOCK_START = "[Tone preset]";
+const TONE_BLOCK_END = "[/Tone preset]";
+
+const TONE_PRESETS = [
+  {
+    id: "older-stranger",
+    label: "Older stranger",
+    instruction:
+      "Default to respectful, polite Japanese suitable for speaking with an older person or someone just met. Prefer desu/masu, avoid overly casual phrasing, and preserve warmth without sounding stiff."
+  },
+  {
+    id: "tourism-service",
+    label: "Tourism/service",
+    instruction:
+      "Use clear, courteous service-style Japanese suitable for tourism, restaurants, shops, directions, announcements, and public-facing help. Keep wording practical and easy to understand."
+  },
+  {
+    id: "business-superior",
+    label: "Boss/client",
+    instruction:
+      "Use business-appropriate polite Japanese for a boss, senior colleague, or client. Prefer respectful phrasing and avoid casual shortcuts. Use honorific/respectful wording when natural."
+  },
+  {
+    id: "business-peer",
+    label: "Coworker/peer",
+    instruction:
+      "Use polite but natural Japanese for coworkers or peers. Keep it professional without overusing stiff keigo."
+  },
+  {
+    id: "direct-report",
+    label: "Employee/report",
+    instruction:
+      "Use clear, respectful Japanese for speaking with an employee or direct report. Avoid sounding condescending; prefer concise, professional, supportive phrasing."
+  },
+  {
+    id: "close-family",
+    label: "Family/friend",
+    instruction:
+      "Use warm, natural Japanese for close family or friends. Casual phrasing is acceptable when it matches the source, but preserve respect where age or family role implies it."
+  }
+];
 
 type SpeakerDraft = {
   mergeInto: string;
@@ -64,8 +106,8 @@ export function TranslatorApp() {
   const [sourceALanguages, setSourceALanguages] = useState(["ja"]);
   const [sourceB, setSourceB] = useState("en");
   const [expectedSpeakerCount, setExpectedSpeakerCount] = useState("");
-  const [expectedSpeakerNames, setExpectedSpeakerNames] = useState("");
-  const [context, setContext] = useState(DEFAULT_CONTEXT);
+  const [tonePreset, setTonePreset] = useState(DEFAULT_TONE_PRESET);
+  const [context, setContext] = useState(contextWithTone(BASE_CONTEXT, DEFAULT_TONE_PRESET));
   const [status, setStatus] = useState<AppStatus>("checking");
   const [error, setError] = useState("");
   const [phrases, setPhrases] = useState<Phrase[]>([]);
@@ -133,7 +175,6 @@ export function TranslatorApp() {
   const isLive = status === "requesting microphone" || status === "connecting" || status === "listening";
   const postProcessing = rediarizing || translating || improvingAll;
   const statusLabel = status === "requesting microphone" ? "mic access" : status;
-  const speakerNames = expectedSpeakerNames.split(",").map((name) => name.trim()).filter(Boolean);
   const hasLanguagePair = sourceALanguages.length > 0 && !sourceALanguages.includes(sourceB);
   const speakerSummaries = useMemo(() => summarizeSpeakers(phrases), [phrases]);
   const sessionGroups = useMemo(() => groupSessions(sessions), [sessions]);
@@ -244,11 +285,10 @@ export function TranslatorApp() {
       setActiveSessionTitle(detail.session.title || "New chat");
       setSourceALanguages(loadedSources.length > 0 ? loadedSources : [sourceA]);
       setSourceB(loadedTarget);
-      setContext(detail.session.context || DEFAULT_CONTEXT);
+      setContext(detail.session.context || contextWithTone(BASE_CONTEXT, DEFAULT_TONE_PRESET));
       setExpectedSpeakerCount(
         detail.session.expected_speaker_count ? String(detail.session.expected_speaker_count) : ""
       );
-      setExpectedSpeakerNames((detail.session.expected_speaker_names || []).join(", "));
       setPhrases(detail.phrases || []);
       setTokenCount(detail.session.tokens?.length || detail.phrases?.length || 0);
       setSavedPath(detail.session.artifact?.path || "");
@@ -307,6 +347,11 @@ export function TranslatorApp() {
         ? withoutTarget
         : [code === "en" ? "ja" : "en"];
     });
+  }
+
+  function changeTonePreset(presetId: string) {
+    setTonePreset(presetId);
+    setContext((current) => contextWithTone(stripToneBlock(current || BASE_CONTEXT), presetId));
   }
 
   function handleServerEvent(message: TranscriptEvent) {
@@ -528,6 +573,16 @@ export function TranslatorApp() {
                   disabled={isLive}
                 />
               </label>
+              <label>
+                Tone
+                <select value={tonePreset} onChange={(event) => changeTonePreset(event.target.value)} disabled={isLive}>
+                  {TONE_PRESETS.map((preset) => (
+                    <option key={preset.id} value={preset.id}>
+                      {preset.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
 
             <div className="startFields contextFields">
@@ -558,7 +613,7 @@ export function TranslatorApp() {
           {speakerSummaries.length > 0 ? (
             <SpeakerReviewPanel
               drafts={speakerDrafts}
-              expectedNames={speakerNames}
+              expectedNames={[]}
               liveMode={isLive}
               onSave={saveReview}
               onSelect={setSelectedSpeaker}
@@ -976,6 +1031,21 @@ function phraseColumns(phrase: Phrase, sourceLanguages: string[], targetLanguage
     targetLanguage
   ];
   return Array.from(new Set(columns));
+}
+
+function contextWithTone(baseContext: string, presetId: string): string {
+  const preset = TONE_PRESETS.find((item) => item.id === presetId) || TONE_PRESETS[0];
+  const cleanBase = stripToneBlock(baseContext).trim() || BASE_CONTEXT;
+  return `${cleanBase}\n\n${TONE_BLOCK_START}\n${preset.instruction}\n${TONE_BLOCK_END}`;
+}
+
+function stripToneBlock(value: string): string {
+  const start = value.indexOf(TONE_BLOCK_START);
+  const end = value.indexOf(TONE_BLOCK_END);
+  if (start === -1 || end === -1 || end < start) {
+    return value;
+  }
+  return `${value.slice(0, start)}${value.slice(end + TONE_BLOCK_END.length)}`.trim();
 }
 
 function groupSessions(sessions: SessionSummary[]): SessionGroup[] {
