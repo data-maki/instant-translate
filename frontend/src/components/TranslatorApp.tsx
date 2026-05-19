@@ -1,5 +1,6 @@
 "use client";
 
+import type { CSSProperties } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   fetchLanguages,
@@ -38,6 +39,17 @@ type SpeakerSummary = {
   count: number;
   sample: string;
 };
+
+const SPEAKER_COLORS = [
+  "#2f6f55",
+  "#b45f2a",
+  "#315f9c",
+  "#8a4f9f",
+  "#b23b53",
+  "#5d6f2f",
+  "#2f7f86",
+  "#9a6a1f"
+];
 
 export function TranslatorApp() {
   const [languages, setLanguages] = useState<Language[]>([]);
@@ -82,10 +94,10 @@ export function TranslatorApp() {
 
   useEffect(() => {
     feedRef.current?.scrollTo({
-      top: feedRef.current.scrollHeight,
+      top: 0,
       behavior: "smooth"
     });
-  }, [phrases]);
+  }, [phrases, selectedSpeaker]);
 
   const languageMap = useMemo(() => {
     return new Map(languages.map((language) => [language.code, language]));
@@ -103,9 +115,13 @@ export function TranslatorApp() {
   const statusLabel = status === "requesting microphone" ? "mic access" : status;
   const speakerNames = expectedSpeakerNames.split(",").map((name) => name.trim()).filter(Boolean);
   const speakerSummaries = useMemo(() => summarizeSpeakers(phrases), [phrases]);
-  const displayedPhrases = selectedSpeaker
-    ? phrases.filter((phrase) => speakerKey(phrase.speaker) === selectedSpeaker)
-    : phrases;
+  const displayedPhrases = useMemo(() => {
+    const compacted = compactPhrases(phrases);
+    const filtered = selectedSpeaker
+      ? compacted.filter((phrase) => speakerKey(phrase.speaker) === selectedSpeaker)
+      : compacted;
+    return filtered.slice().reverse();
+  }, [phrases, selectedSpeaker]);
 
   async function start() {
     setError("");
@@ -302,11 +318,9 @@ export function TranslatorApp() {
           <div className="brandLockup">
             <BrandMark />
             <div>
-              <p className="eyebrow">leaves of speech</p>
               <h1>cottonoha</h1>
             </div>
           </div>
-          <p className="subhead">Live Japanese <span aria-hidden="true">↔</span> English captions for everyday conversations in Japan.</p>
         </div>
         <div className="connectionPill">
           <span className={`dot ${status === "listening" ? "live" : ""}`} aria-hidden="true" />
@@ -594,21 +608,25 @@ function PhraseCard({
   languageMap: Map<string, Language>;
   columns: string[];
 }) {
-  const source = phrase.source_lang ? languageMap.get(phrase.source_lang) : undefined;
+  const color = speakerColor(speakerKey(phrase.speaker));
+  const style = { "--speaker-color": color } as CSSProperties;
 
   return (
-    <article className={`phrase ${phrase.is_final ? "" : "partial"}`}>
+    <article className={`phrase ${phrase.is_final ? "" : "partial"}`} style={style}>
       <div className="phraseMeta">
-        <span className="speakerBadge">{phrase.speaker_label}</span>
-        {source ? <span className="sourceBadge">Spoke {source.flag} {source.name}</span> : null}
-        <span>{phrase.is_final ? "final" : "live"}</span>
+        <span
+          className={`statusDot ${phrase.is_final ? "final" : "live"}`}
+          aria-label={phrase.is_final ? "final" : "live"}
+          title={phrase.is_final ? "final" : "live"}
+        />
       </div>
       <div className="phraseLines">
         {columns.map((code) => {
           const language = languageMap.get(code);
           const text = phrase.texts[code] || "";
+          const isSource = code === phrase.source_lang;
           return (
-            <div className="lineBox" key={code}>
+            <div className={`lineBox ${isSource ? "sourceLine" : ""}`} key={code}>
               <span className="lineLabel">{language?.flag} {language?.name ?? code.toUpperCase()}</span>
               <span className={`lineText ${code === "ja" ? "japanese" : ""}`}>{text || "..."}</span>
               {code === "ja" && phrase.romaji_ja ? <span className="romaji">{phrase.romaji_ja}</span> : null}
@@ -618,6 +636,42 @@ function PhraseCard({
       </div>
     </article>
   );
+}
+
+function compactPhrases(phrases: Phrase[]): Phrase[] {
+  const compact: Phrase[] = [];
+  for (const phrase of phrases) {
+    const previous = compact.at(-1);
+    if (
+      previous
+      && speakerKey(previous.speaker) === speakerKey(phrase.speaker)
+      && previous.source_lang === phrase.source_lang
+    ) {
+      compact[compact.length - 1] = mergePhrase(previous, phrase);
+    } else {
+      compact.push(phrase);
+    }
+  }
+  return compact;
+}
+
+function mergePhrase(previous: Phrase, next: Phrase): Phrase {
+  const texts = { ...previous.texts };
+  for (const [language, text] of Object.entries(next.texts)) {
+    if (!text.trim()) {
+      continue;
+    }
+    texts[language] = texts[language]?.trim()
+      ? `${texts[language].trim()}\n${text.trim()}`
+      : text;
+  }
+  return {
+    ...next,
+    id: `${previous.id}-${next.id}`,
+    texts,
+    romaji_ja: [previous.romaji_ja, next.romaji_ja].filter(Boolean).join("\n") || null,
+    is_final: previous.is_final && next.is_final
+  };
 }
 
 function summarizeSpeakers(phrases: Phrase[]): SpeakerSummary[] {
@@ -655,4 +709,15 @@ function speakerKey(speaker: number | string | null): string {
 function phraseSnippet(phrase: Phrase): string {
   const text = Object.values(phrase.texts).find((value) => value.trim());
   return text ? text.trim().slice(0, 120) : "";
+}
+
+function speakerColor(id: string): string {
+  if (!id) {
+    return "#315f45";
+  }
+  let hash = 0;
+  for (const char of id) {
+    hash = (hash * 31 + char.charCodeAt(0)) % 9973;
+  }
+  return SPEAKER_COLORS[hash % SPEAKER_COLORS.length];
 }
