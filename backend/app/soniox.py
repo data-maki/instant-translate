@@ -26,15 +26,17 @@ def get_soniox_config(
     api_key: str,
     source_languages: list[str],
     context: str | None = None,
+    language_hints: list[str] | None = None,
 ) -> dict[str, Any]:
     lang_a, lang_b = source_languages[0], source_languages[1]
+    hints = list(dict.fromkeys(language_hints or source_languages))
     config: dict[str, Any] = {
         "api_key": api_key,
         "model": SONIOX_MODEL,
         "audio_format": AUDIO_FORMAT,
         "sample_rate": SAMPLE_RATE,
         "num_channels": NUM_CHANNELS,
-        "language_hints": [lang_a, lang_b],
+        "language_hints": hints,
         "enable_language_identification": True,
         "enable_speaker_diarization": True,
         "enable_endpoint_detection": True,
@@ -63,11 +65,9 @@ async def run_transcription_bridge(
         })
         return
 
-    session = make_session(
-        start_message.get("session_name") or "",
-        start_message.get("source_languages") or ["en", "ja"],
-        start_message.get("target_language") or "en",
-    )
+    requested_languages = start_message.get("source_languages") or ["en", "ja"]
+    target_language = start_message.get("target_language") or "en"
+    session = make_session(start_message.get("session_name") or "", requested_languages, target_language)
     context = (start_message.get("context") or DEFAULT_CONTEXT).strip()
     session.context = context
     session.expected_speaker_count = parse_expected_speaker_count(start_message.get("expected_speaker_count"))
@@ -89,7 +89,12 @@ async def run_transcription_bridge(
 
     try:
         async with websockets.connect(SONIOX_WEBSOCKET_URL, ping_interval=20) as soniox:
-            await soniox.send(json.dumps(get_soniox_config(api_key, session.source_languages, context)))
+            await soniox.send(json.dumps(get_soniox_config(
+                api_key,
+                session.source_languages,
+                context,
+                list(requested_languages) + [target_language],
+            )))
             await send_event({"type": "status", "status": "listening"})
 
             stop_event = asyncio.Event()

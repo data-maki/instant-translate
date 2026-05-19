@@ -61,9 +61,8 @@ const SPEAKER_COLORS = [
 
 export function TranslatorApp() {
   const [languages, setLanguages] = useState<Language[]>([]);
-  const [sourceA, setSourceA] = useState("ja");
+  const [sourceALanguages, setSourceALanguages] = useState(["ja"]);
   const [sourceB, setSourceB] = useState("en");
-  const [targetLanguage, setTargetLanguage] = useState("en");
   const [expectedSpeakerCount, setExpectedSpeakerCount] = useState("");
   const [expectedSpeakerNames, setExpectedSpeakerNames] = useState("");
   const [context, setContext] = useState(DEFAULT_CONTEXT);
@@ -129,11 +128,13 @@ export function TranslatorApp() {
     return [...core, ...rest];
   }, [languages]);
 
+  const sourceA = sourceALanguages[0] || (sourceB === "en" ? "ja" : "en");
   const canStart = status === "idle" || status === "stopped" || status === "error";
   const isLive = status === "requesting microphone" || status === "connecting" || status === "listening";
   const postProcessing = rediarizing || translating || improvingAll;
   const statusLabel = status === "requesting microphone" ? "mic access" : status;
   const speakerNames = expectedSpeakerNames.split(",").map((name) => name.trim()).filter(Boolean);
+  const hasLanguagePair = sourceALanguages.length > 0 && !sourceALanguages.includes(sourceB);
   const speakerSummaries = useMemo(() => summarizeSpeakers(phrases), [phrases]);
   const sessionGroups = useMemo(() => groupSessions(sessions), [sessions]);
   const visibleSessionGroups = useMemo(() => {
@@ -183,10 +184,10 @@ export function TranslatorApp() {
           JSON.stringify({
             type: "start",
             session_name: "",
-            source_languages: [sourceA, sourceB],
-            target_language: targetLanguage,
+            source_languages: [...sourceALanguages, sourceB],
+            target_language: sourceB,
             expected_speaker_count: expectedSpeakerCount ? Number(expectedSpeakerCount) : null,
-            expected_speaker_names: speakerNames,
+            expected_speaker_names: [],
             context
           })
         );
@@ -237,11 +238,12 @@ export function TranslatorApp() {
         throw new Error("Session not found.");
       }
       const sourceLanguages = detail.session.source_languages || [sourceA, sourceB];
+      const loadedTarget = detail.session.target_language || sourceLanguages[1] || sourceB;
+      const loadedSources = sourceLanguages.filter((code) => code && code !== loadedTarget);
       setActiveSession(detail.session.name);
       setActiveSessionTitle(detail.session.title || "New chat");
-      setSourceA(sourceLanguages[0] || sourceA);
-      setSourceB(sourceLanguages[1] || sourceB);
-      setTargetLanguage(detail.session.target_language || targetLanguage);
+      setSourceALanguages(loadedSources.length > 0 ? loadedSources : [sourceA]);
+      setSourceB(loadedTarget);
       setContext(detail.session.context || DEFAULT_CONTEXT);
       setExpectedSpeakerCount(
         detail.session.expected_speaker_count ? String(detail.session.expected_speaker_count) : ""
@@ -280,6 +282,31 @@ export function TranslatorApp() {
     setTokenCount(0);
     shouldFollowFeedRef.current = true;
     setStatus("idle");
+  }
+
+  function toggleSourceLanguage(code: string) {
+    if (isLive || code === sourceB) {
+      return;
+    }
+    setSourceALanguages((current) => {
+      const next = current.includes(code)
+        ? current.filter((language) => language !== code)
+        : [...current, code];
+      return next.length > 0 ? next : current;
+    });
+  }
+
+  function changeTargetLanguage(code: string) {
+    if (isLive) {
+      return;
+    }
+    setSourceB(code);
+    setSourceALanguages((current) => {
+      const withoutTarget = current.filter((language) => language !== code);
+      return withoutTarget.length > 0
+        ? withoutTarget
+        : [code === "en" ? "ja" : "en"];
+    });
   }
 
   function handleServerEvent(message: TranscriptEvent) {
@@ -464,14 +491,15 @@ export function TranslatorApp() {
             <span className="tokenCount">{tokenCount} final tokens</span>
           </div>
           <div className="languageRail" aria-label="Transcript languages">
-            {[sourceA, sourceB].map((code) => {
-              const language = languageMap.get(code);
-              return (
-                <span key={code}>
-                  {language?.flag} {language?.name ?? code.toUpperCase()}
-                </span>
-              );
-            })}
+            <LanguagePicker
+              disabled={isLive}
+              languageMap={languageMap}
+              languages={orderedLanguages}
+              onSourceToggle={toggleSourceLanguage}
+              onTargetChange={changeTargetLanguage}
+              sourceLanguages={sourceALanguages}
+              targetLanguage={sourceB}
+            />
           </div>
           <section className="startPanel" aria-label="Start conversation">
             <div className="startPanelHeader">
@@ -480,7 +508,7 @@ export function TranslatorApp() {
                 <h3>{activeSessionTitle || "Start a session"}</h3>
               </div>
               <div className="actions compactActions">
-                <button className="primaryButton" onClick={start} disabled={!canStart || sourceA === sourceB}>
+                <button className="primaryButton" onClick={start} disabled={!canStart || !hasLanguagePair}>
                   Listen
                 </button>
                 <button className="secondaryButton" onClick={stop} disabled={!isLive}>
@@ -500,55 +528,9 @@ export function TranslatorApp() {
                   disabled={isLive}
                 />
               </label>
-              <label>
-                Speaker names
-                <input
-                  value={expectedSpeakerNames}
-                  onChange={(event) => setExpectedSpeakerNames(event.target.value)}
-                  placeholder="Aiko, Jan, Maria"
-                  disabled={isLive}
-                />
-              </label>
-              <label>
-                Translation focus
-                <select
-                  value={targetLanguage}
-                  onChange={(event) => setTargetLanguage(event.target.value)}
-                  disabled={isLive}
-                >
-                  {[sourceA, sourceB].map((code) => {
-                    const language = languageMap.get(code);
-                    return (
-                      <option key={code} value={code}>
-                        {language?.flag ?? ""} {language?.name ?? code.toUpperCase()}
-                      </option>
-                    );
-                  })}
-                </select>
-              </label>
             </div>
 
-            <div className="startFields languageFields">
-              <label>
-                Language A
-                <select value={sourceA} onChange={(event) => setSourceA(event.target.value)} disabled={isLive}>
-                  {orderedLanguages.map((language) => (
-                    <option key={language.code} value={language.code}>
-                      {language.flag} {language.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Language B
-                <select value={sourceB} onChange={(event) => setSourceB(event.target.value)} disabled={isLive}>
-                  {orderedLanguages.map((language) => (
-                    <option key={language.code} value={language.code}>
-                      {language.flag} {language.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
+            <div className="startFields contextFields">
               <label className="contextField">
                 Context hint
                 <textarea value={context} onChange={(event) => setContext(event.target.value)} disabled={isLive} />
@@ -557,7 +539,7 @@ export function TranslatorApp() {
 
             <div className="statusBox inlineStatus">
               <strong>{activeSessionTitle || "No active session"}</strong>
-              <span>{sourceA.toUpperCase()} ↔ {sourceB.toUpperCase()} · focus {targetLanguage.toUpperCase()}</span>
+              <span>{sourceALanguages.join(", ").toUpperCase()} → {sourceB.toUpperCase()}</span>
               {savedPath ? <span>Saved: {savedPath}</span> : null}
               {rediarizeStatus ? <span>{rediarizeStatus}</span> : null}
               {translationStatus ? <span>{translationStatus}</span> : null}
@@ -599,7 +581,7 @@ export function TranslatorApp() {
                 <PhraseCard
                   key={phrase.id}
                   phrase={phrase}
-                  columns={[sourceA, sourceB]}
+                  columns={phraseColumns(phrase, sourceALanguages, sourceB)}
                 />
               ))
             )}
@@ -687,6 +669,68 @@ function SessionSidebar({
         </button>
       ) : null}
     </aside>
+  );
+}
+
+function LanguagePicker({
+  disabled,
+  languageMap,
+  languages,
+  onSourceToggle,
+  onTargetChange,
+  sourceLanguages,
+  targetLanguage
+}: {
+  disabled: boolean;
+  languageMap: Map<string, Language>;
+  languages: Language[];
+  onSourceToggle: (code: string) => void;
+  onTargetChange: (code: string) => void;
+  sourceLanguages: string[];
+  targetLanguage: string;
+}) {
+  return (
+    <>
+      <details className="languageMenu">
+        <summary>
+          <span>Spoken</span>
+          <strong>{sourceLanguages.map((code) => languageLabel(languageMap, code)).join(", ")}</strong>
+        </summary>
+        <div className="languageMenuPanel">
+          {languages.map((language) => (
+            <label className="languageOption" key={language.code}>
+              <input
+                checked={sourceLanguages.includes(language.code)}
+                disabled={disabled || language.code === targetLanguage}
+                onChange={() => onSourceToggle(language.code)}
+                type="checkbox"
+              />
+              <span>{language.flag} {language.name}</span>
+            </label>
+          ))}
+        </div>
+      </details>
+      <details className="languageMenu">
+        <summary>
+          <span>Translate to</span>
+          <strong>{languageLabel(languageMap, targetLanguage)}</strong>
+        </summary>
+        <div className="languageMenuPanel">
+          {languages.map((language) => (
+            <label className="languageOption" key={language.code}>
+              <input
+                checked={targetLanguage === language.code}
+                disabled={disabled}
+                name="target-language"
+                onChange={() => onTargetChange(language.code)}
+                type="radio"
+              />
+              <span>{language.flag} {language.name}</span>
+            </label>
+          ))}
+        </div>
+      </details>
+    </>
   );
 }
 
@@ -919,6 +963,19 @@ function speakerColor(id: string): string {
     hash = (hash * 31 + char.charCodeAt(0)) % 9973;
   }
   return SPEAKER_COLORS[hash % SPEAKER_COLORS.length];
+}
+
+function languageLabel(languageMap: Map<string, Language>, code: string): string {
+  const language = languageMap.get(code);
+  return language ? `${language.flag} ${language.name}` : code.toUpperCase();
+}
+
+function phraseColumns(phrase: Phrase, sourceLanguages: string[], targetLanguage: string): string[] {
+  const columns = [
+    ...sourceLanguages.filter((code) => code === phrase.source_lang || phrase.texts[code]),
+    targetLanguage
+  ];
+  return Array.from(new Set(columns));
 }
 
 function groupSessions(sessions: SessionSummary[]): SessionGroup[] {

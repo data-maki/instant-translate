@@ -439,6 +439,76 @@ textarea:focus {
   font-weight: 850;
 }
 
+.languageMenu {
+  position: relative;
+  min-width: 0;
+}
+
+.languageMenu summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: 36px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.languageMenu summary::-webkit-details-marker {
+  display: none;
+}
+
+.languageMenu summary span {
+  color: var(--muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+}
+
+.languageMenu summary strong {
+  overflow: hidden;
+  color: var(--foreground);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.languageMenuPanel {
+  position: absolute;
+  top: calc(100% + 7px);
+  left: 0;
+  z-index: 4;
+  display: grid;
+  gap: 3px;
+  width: min(280px, 80vw);
+  max-height: 330px;
+  overflow-y: auto;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.languageOption {
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 8px;
+  min-height: 34px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  color: var(--foreground);
+  font-size: 0.82rem;
+  font-weight: 750;
+}
+
+.languageOption:hover {
+  background: var(--panel-soft);
+}
+
+.languageOption input {
+  min-height: auto;
+  width: auto;
+}
+
 .startPanel {
   display: grid;
   gap: 10px;
@@ -461,12 +531,12 @@ textarea:focus {
 
 .startFields {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 8px;
 }
 
-.languageFields {
-  grid-template-columns: minmax(120px, 0.75fr) minmax(120px, 0.75fr) minmax(220px, 1.5fr);
+.contextFields {
+  grid-template-columns: 1fr;
 }
 
 .contextField textarea {
@@ -723,7 +793,7 @@ textarea:focus {
 
   .actions,
   .startFields,
-  .languageFields,
+  .contextFields,
   .phraseLines,
   .languageRail,
   .speakerRow {
