@@ -88,6 +88,14 @@ async def run_transcription_bridge(
     receive_audio: ReceiveAudio,
     send_event: SendEvent,
 ) -> None:
+    if start_message.get("enable_openai_realtime"):
+        await run_openai_realtime_overdub_bridge(
+            start_message=start_message,
+            receive_audio=receive_audio,
+            send_event=send_event,
+        )
+        return
+
     api_key = os.environ.get("SONIOX_API_KEY")
     if not api_key:
         await send_event({
@@ -135,7 +143,10 @@ async def run_transcription_bridge(
 
             stop_event = asyncio.Event()
             partial_tokens: list[dict[str, Any]] = []
-            providers = ProviderFanout(safe_send_event)
+            providers = ProviderFanout(
+                safe_send_event,
+                enable_openai_realtime=bool(start_message.get("enable_openai_realtime")),
+            )
             providers.start()
 
             async def browser_to_soniox() -> None:
@@ -211,6 +222,75 @@ async def run_transcription_bridge(
                 await safe_send_event(saved_transcript_event(session, path, summary))
             except OSError as exc:
                 await safe_send_event({"type": "error", "message": f"Failed to save session: {exc}"})
+        await safe_send_event({"type": "status", "status": "stopped"})
+
+
+async def run_openai_realtime_overdub_bridge(
+    *,
+    start_message: dict[str, Any],
+    receive_audio: ReceiveAudio,
+    send_event: SendEvent,
+) -> None:
+    if not os.environ.get("OPENAI_API_KEY"):
+        await send_event({
+            "type": "error",
+            "message": "Missing OPENAI_API_KEY. Add it to .env or the backend environment.",
+        })
+        return
+
+    requested_languages = start_message.get("source_languages") or ["en", "ja"]
+    target_language = start_message.get("target_language") or "en"
+    session = make_session(start_message.get("session_name") or "", requested_languages, target_language)
+    send_lock = asyncio.Lock()
+
+    async def safe_send_event(event: dict[str, Any]) -> None:
+        async with send_lock:
+            await send_event(event)
+
+    await safe_send_event({
+        "type": "session",
+        "session": {
+            "name": session.name,
+            "title": "New chat",
+            "source_languages": session.source_languages,
+            "target_language": session.target_language,
+            "expected_speaker_count": parse_expected_speaker_count(start_message.get("expected_speaker_count")),
+            "expected_speaker_names": parse_expected_speaker_names(start_message.get("expected_speaker_names")),
+            "was_resumed": False,
+            "token_count": 0,
+        },
+    })
+
+    providers = ProviderFanout(
+        safe_send_event,
+        enable_openai_realtime=True,
+        enable_deepgram=False,
+    )
+    providers.start()
+    await safe_send_event({"type": "status", "status": "listening"})
+
+    try:
+        while True:
+            payload = await receive_audio()
+            if payload is None:
+                break
+            if isinstance(payload, str):
+                try:
+                    control = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+                if control.get("type") == "stop":
+                    break
+                continue
+            if payload:
+                providers.publish(payload)
+    finally:
+        providers.close_inputs()
+        try:
+            await providers.wait()
+        except Exception as exc:
+            await safe_send_event({"type": "error", "message": str(exc)})
+        providers.cancel()
         await safe_send_event({"type": "status", "status": "stopped"})
 
 

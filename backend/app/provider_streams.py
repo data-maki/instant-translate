@@ -26,18 +26,26 @@ SendEvent = Callable[[dict[str, Any]], Awaitable[None]]
 
 
 class ProviderFanout:
-    def __init__(self, send_event: SendEvent):
+    def __init__(
+        self,
+        send_event: SendEvent,
+        *,
+        enable_openai_realtime: bool = False,
+        enable_deepgram: bool = True,
+    ):
         self.send_event = send_event
+        self.enable_openai_realtime = enable_openai_realtime
+        self.enable_deepgram = enable_deepgram
         self.queues: list[asyncio.Queue[bytes | None]] = []
         self.tasks: list[asyncio.Task[None]] = []
 
     def start(self) -> None:
         deepgram_key = os.environ.get("DEEPGRAM_API_KEY")
-        if deepgram_key:
+        if self.enable_deepgram and deepgram_key:
             self._add_stream(run_deepgram_bridge(deepgram_key, self.send_event))
 
         openai_key = os.environ.get("OPENAI_API_KEY")
-        if openai_key:
+        if self.enable_openai_realtime and openai_key:
             self._add_stream(run_openai_translation_bridge(openai_key, self.send_event))
 
     def publish(self, payload: bytes) -> None:
@@ -58,6 +66,10 @@ class ProviderFanout:
         for task in self.tasks:
             task.cancel()
 
+    async def wait(self) -> None:
+        if self.tasks:
+            await asyncio.gather(*self.tasks)
+
     def _add_stream(self, coro_factory: Callable[[asyncio.Queue[bytes | None]], Awaitable[None]]) -> None:
         queue: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=80)
         self.queues.append(queue)
@@ -71,6 +83,15 @@ def provider_update(provider: str, kind: str, text: str, is_final: bool) -> dict
         "kind": kind,
         "text": text,
         "is_final": is_final,
+    }
+
+
+def openai_realtime_audio(delta: str) -> dict[str, Any]:
+    return {
+        "type": "openai_realtime_audio",
+        "audio": delta,
+        "format": "pcm_s16le",
+        "sample_rate": OPENAI_TRANSLATION_SAMPLE_RATE,
     }
 
 
@@ -134,6 +155,12 @@ def run_openai_translation_bridge(api_key: str, send_event: SendEvent):
                         output_text += str(data.get("delta") or "")
                         if output_text.strip():
                             await send_event(provider_update("openai_realtime", "translation", output_text.strip(), False))
+                    elif event_type == "session.output_audio.delta":
+                        delta = str(data.get("delta") or "")
+                        if delta:
+                            await send_event(openai_realtime_audio(delta))
+                    elif event_type == "session.closed":
+                        break
                     elif event_type and event_type.endswith(".done"):
                         if input_text.strip():
                             await send_event(provider_update("openai_realtime", "transcript", input_text.strip(), True))
@@ -141,8 +168,7 @@ def run_openai_translation_bridge(api_key: str, send_event: SendEvent):
                             await send_event(provider_update("openai_realtime", "translation", output_text.strip(), True))
                     elif event_type == "error":
                         await send_event(provider_update("openai_realtime", "error", str(data.get("error") or data), True))
-                    if sender.done():
-                        break
+                await sender
         except Exception as exc:
             await send_event(provider_update("openai_realtime", "error", str(exc), True))
 
@@ -161,6 +187,7 @@ async def send_openai_translation_audio(socket: Any, audio_queue: asyncio.Queue[
     while True:
         payload = await audio_queue.get()
         if payload is None:
+            await socket.send(json.dumps({"type": "session.close"}))
             break
         resampled = audioop.ratecv(payload, 2, NUM_CHANNELS, SAMPLE_RATE, OPENAI_TRANSLATION_SAMPLE_RATE, None)[0]
         await socket.send(json.dumps({

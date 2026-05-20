@@ -23,15 +23,22 @@ pip install -r backend/requirements.txt
 uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000 --reload
 ```
 
-Run the frontend in a second terminal:
+Run the frontend in a second terminal with pnpm:
 
 ```bash
-cd frontend
-npm install
-npm run dev
+pnpm install
+pnpm dev
 ```
 
 Open `http://localhost:3000`. The frontend talks to `http://localhost:8000` by default; override with `NEXT_PUBLIC_API_BASE_URL` only if you run the backend somewhere else.
+
+You can also run frontend commands from the workspace root:
+
+```bash
+pnpm typecheck
+pnpm lint
+pnpm build
+```
 
 ## Web Usage
 
@@ -111,7 +118,7 @@ The end-of-meeting speaker review panel lets you quickly filter by detected spea
 ## Requirements
 
 - Python 3.11+ (3.12 recommended)
-- Node.js 20+ for the web frontend
+- Node.js 20+ and pnpm 10+ for the web frontend
 - [Soniox API key](https://soniox.com)
 
 ## Supported Languages

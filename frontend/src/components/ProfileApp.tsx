@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { SignOutButton } from "@/components/SignOutButton";
 import { fetchNameKatakanaOptions, importGoogleMapsList, type NameKatakanaOption } from "@/lib/api";
 import {
   DEFAULT_PROFILE,
@@ -49,10 +50,15 @@ const PROFILE_FIELDS: {
   }
 ];
 
+const TRAVEL_PROFILE_FIELDS = PROFILE_FIELDS.filter((field) => ["age", "hotel", "travel_party"].includes(field.key));
+const FOOD_ACCESS_PROFILE_FIELDS = PROFILE_FIELDS.filter((field) =>
+  ["allergies", "spice_level", "mobility"].includes(field.key)
+);
+
 const SAVE_ACK_MS = 2200;
 
 export function ProfileApp() {
-  const [profile, setProfile] = useState<TravelerProfile>(() => loadTravelerProfile());
+  const [profile, setProfile] = useState<TravelerProfile>(DEFAULT_PROFILE);
   const [saveStatus, setSaveStatus] = useState("Saved in this browser");
   const [saveAck, setSaveAck] = useState(false);
   const saveAckTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -62,6 +68,13 @@ export function ProfileApp() {
   const [mapsListUrl, setMapsListUrl] = useState("");
   const [mapsImportStatus, setMapsImportStatus] = useState("");
   const [mapsImporting, setMapsImporting] = useState(false);
+
+  useEffect(() => {
+    const frame = window.requestAnimationFrame(() => {
+      setProfile(loadTravelerProfile());
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, []);
 
   function clearSaveAck() {
     if (saveAckTimer.current) {
@@ -188,9 +201,10 @@ export function ProfileApp() {
           <p className="panelKicker">profile</p>
           <h1>Reusable context</h1>
         </div>
-        <Link className="secondaryButton profileBackLink" href="/">
+        <Link className="secondaryButton profileBackLink" href="/chat">
           Back to translator
         </Link>
+        <SignOutButton />
       </header>
 
       <section className="profileEditor" aria-label="Traveler profile">
@@ -203,122 +217,111 @@ export function ProfileApp() {
         </div>
 
         <div className="profileGrid">
-          <div className="profileNameBlock">
-            <div className="profileNamePair">
-              <label className="contextField">
-                First name
-                <input
-                  onChange={(event) => updateProfile("first_name", event.target.value)}
-                  placeholder="John"
-                  value={profile.first_name}
-                  autoComplete="given-name"
-                />
-              </label>
-              <label className="contextField">
-                Last name
-                <input
-                  onChange={(event) => updateProfile("last_name", event.target.value)}
-                  placeholder="Smith"
-                  value={profile.last_name}
-                  autoComplete="family-name"
-                />
-              </label>
-            </div>
-            <div className="profileKatakana">
-              <div className="profileKatakanaHeader">
-                <span className="profileKatakanaLabel">Japanese katakana (by name)</span>
-                <button
-                  className="secondaryButton profileKatakanaSuggest"
-                  disabled={katakanaLoading || !profileWesternFullName(profile)}
-                  onClick={() => void suggestKatakana()}
-                  type="button"
-                >
-                  {katakanaLoading ? "Looking up…" : "Suggest katakana"}
-                </button>
+          <details className="profileSection" open>
+            <summary>Name</summary>
+            <div className="profileNameBlock">
+              <div className="profileNamePair">
+                <label className="contextField">
+                  First name
+                  <input
+                    onChange={(event) => updateProfile("first_name", event.target.value)}
+                    placeholder="John"
+                    value={profile.first_name}
+                    autoComplete="given-name"
+                  />
+                </label>
+                <label className="contextField">
+                  Last name
+                  <input
+                    onChange={(event) => updateProfile("last_name", event.target.value)}
+                    placeholder="Smith"
+                    value={profile.last_name}
+                    autoComplete="family-name"
+                  />
+                </label>
               </div>
-              {katakanaError ? <p className="profileKatakanaError">{katakanaError}</p> : null}
-              {katakanaOptions.length ? (
-                <div className="profileKatakanaOptions" role="group" aria-label="Pick katakana spellings">
-                  {katakanaOptions.map((opt) => (
-                    <button
-                      className={`profileKatakanaOption ${optionMatchesProfile(opt) ? "active" : ""}`}
-                      key={katakanaOptionKey(opt)}
-                      onClick={() => applyKatakanaOption(opt)}
-                      type="button"
-                    >
-                      <span className="profileKatakanaOptionNames">
-                        <span className="profileKatakanaPart">
-                          <span className="profileKatakanaPartLabel">First</span>
-                          <span className="profileKatakanaPartValue" lang="ja">
-                            {opt.first_katakana || "—"}
-                          </span>
-                          <span className="profileKatakanaReading" lang="en">
-                            {opt.first_reading_en.trim() || "—"}
-                          </span>
-                        </span>
-                        <span className="profileKatakanaPart">
-                          <span className="profileKatakanaPartLabel">Last</span>
-                          <span className="profileKatakanaPartValue" lang="ja">
-                            {opt.last_katakana || "—"}
-                          </span>
-                          <span className="profileKatakanaReading" lang="en">
-                            {opt.last_reading_en.trim() || "—"}
-                          </span>
-                        </span>
-                      </span>
-                    </button>
-                  ))}
+              <div className="profileKatakana">
+                <div className="profileKatakanaHeader">
+                  <span className="profileKatakanaLabel">Japanese katakana (by name)</span>
+                  <button
+                    className="secondaryButton profileKatakanaSuggest"
+                    disabled={katakanaLoading || !profileWesternFullName(profile)}
+                    onClick={() => void suggestKatakana()}
+                    type="button"
+                  >
+                    {katakanaLoading ? "Looking up…" : "Suggest katakana"}
+                  </button>
                 </div>
-              ) : null}
-              <div className="profileKatakanaManualPair">
-                <label className="contextField profileKatakanaManual">
-                  First name (katakana)
-                  <input
-                    onChange={(event) => updateProfile("first_name_katakana", event.target.value)}
-                    placeholder="ジョン"
-                    value={profile.first_name_katakana}
-                    lang="ja"
-                  />
-                </label>
-                <label className="contextField profileKatakanaManual">
-                  Last name (katakana)
-                  <input
-                    onChange={(event) => updateProfile("last_name_katakana", event.target.value)}
-                    placeholder="スミス"
-                    value={profile.last_name_katakana}
-                    lang="ja"
-                  />
-                </label>
+                {katakanaError ? <p className="profileKatakanaError">{katakanaError}</p> : null}
+                {katakanaOptions.length ? (
+                  <div className="profileKatakanaOptions" role="group" aria-label="Pick katakana spellings">
+                    {katakanaOptions.map((opt) => (
+                      <button
+                        className={`profileKatakanaOption ${optionMatchesProfile(opt) ? "active" : ""}`}
+                        key={katakanaOptionKey(opt)}
+                        onClick={() => applyKatakanaOption(opt)}
+                        type="button"
+                      >
+                        <span className="profileKatakanaOptionNames">
+                          <span className="profileKatakanaPart">
+                            <span className="profileKatakanaPartLabel">First</span>
+                            <span className="profileKatakanaPartValue" lang="ja">
+                              {opt.first_katakana || "—"}
+                            </span>
+                            <span className="profileKatakanaReading" lang="en">
+                              {opt.first_reading_en.trim() || "—"}
+                            </span>
+                          </span>
+                          <span className="profileKatakanaPart">
+                            <span className="profileKatakanaPartLabel">Last</span>
+                            <span className="profileKatakanaPartValue" lang="ja">
+                              {opt.last_katakana || "—"}
+                            </span>
+                            <span className="profileKatakanaReading" lang="en">
+                              {opt.last_reading_en.trim() || "—"}
+                            </span>
+                          </span>
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+                <div className="profileKatakanaManualPair">
+                  <label className="contextField profileKatakanaManual">
+                    First name (katakana)
+                    <input
+                      onChange={(event) => updateProfile("first_name_katakana", event.target.value)}
+                      placeholder="ジョン"
+                      value={profile.first_name_katakana}
+                      lang="ja"
+                    />
+                  </label>
+                  <label className="contextField profileKatakanaManual">
+                    Last name (katakana)
+                    <input
+                      onChange={(event) => updateProfile("last_name_katakana", event.target.value)}
+                      placeholder="スミス"
+                      value={profile.last_name_katakana}
+                      lang="ja"
+                    />
+                  </label>
+                </div>
+                <p className="profileKatakanaLatinHint">
+                  Latin names for reference:{" "}
+                  <strong>
+                    {[profile.first_name, profile.last_name].map((s) => s.trim()).filter(Boolean).join(" ") || "—"}
+                  </strong>
+                </p>
               </div>
-              <p className="profileKatakanaLatinHint">
-                Latin names for reference:{" "}
-                <strong>
-                  {[profile.first_name, profile.last_name].map((s) => s.trim()).filter(Boolean).join(" ") || "—"}
-                </strong>
-              </p>
             </div>
-          </div>
+          </details>
 
-          {PROFILE_FIELDS.map((field) => (
-            <label className="contextField" key={field.key}>
-              {field.label}
-              {field.multiline ? (
-                <textarea
-                  onChange={(event) => updateProfile(field.key, event.target.value)}
-                  placeholder={field.placeholder}
-                  value={profile[field.key]}
-                />
-              ) : (
-                <input
-                  onChange={(event) => updateProfile(field.key, event.target.value)}
-                  placeholder={field.placeholder}
-                  value={profile[field.key]}
-                />
-              )}
-            </label>
-          ))}
+          <ProfileFieldSection fields={TRAVEL_PROFILE_FIELDS} onChange={updateProfile} profile={profile} title="Travel context" />
 
-          <section className="profilePlacesBlock" aria-label="Saved Google Maps places">
+          <ProfileFieldSection fields={FOOD_ACCESS_PROFILE_FIELDS} onChange={updateProfile} profile={profile} title="Food & accessibility" />
+
+          <details className="profileSection profilePlacesBlock" aria-label="Saved Google Maps places">
+            <summary>Saved places</summary>
             <div className="profilePlacesHeader">
               <div>
                 <h3>Saved places</h3>
@@ -348,7 +351,7 @@ export function ProfileApp() {
                 value={profile.saved_places}
               />
             </label>
-          </section>
+          </details>
         </div>
 
         <div className="profileActions">
@@ -372,6 +375,44 @@ export function ProfileApp() {
         </div>
       </section>
     </main>
+  );
+}
+
+function ProfileFieldSection({
+  fields,
+  onChange,
+  profile,
+  title
+}: {
+  fields: typeof PROFILE_FIELDS;
+  onChange: (key: keyof TravelerProfile, value: string) => void;
+  profile: TravelerProfile;
+  title: string;
+}) {
+  return (
+    <details className="profileSection" open={title === "Travel context"}>
+      <summary>{title}</summary>
+      <div className="profileSectionGrid">
+        {fields.map((field) => (
+          <label className="contextField" key={field.key}>
+            {field.label}
+            {field.multiline ? (
+              <textarea
+                onChange={(event) => onChange(field.key, event.target.value)}
+                placeholder={field.placeholder}
+                value={profile[field.key]}
+              />
+            ) : (
+              <input
+                onChange={(event) => onChange(field.key, event.target.value)}
+                placeholder={field.placeholder}
+                value={profile[field.key]}
+              />
+            )}
+          </label>
+        ))}
+      </div>
+    </details>
   );
 }
 

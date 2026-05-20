@@ -13,7 +13,7 @@ import urllib.request
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from .languages import DEFAULT_SOURCE_LANGUAGES, DEFAULT_TARGET_LANGUAGE, list_languages
@@ -302,6 +302,46 @@ def name_katakana_context(payload: dict[str, Any]) -> dict[str, Any]:
     return {"options": options}
 
 
+@app.post("/realtime/translation-session")
+def realtime_translation_session(payload: dict[str, Any]) -> dict[str, Any]:
+    import requests
+
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Missing OPENAI_API_KEY.")
+
+    target_language = str(payload.get("target_language") or "ja").strip() or "ja"
+    user_hash = str(payload.get("user_hash") or "anonymous-user").strip() or "anonymous-user"
+    try:
+        response = requests.post(
+            "https://api.openai.com/v1/realtime/translations/client_secrets",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                "OpenAI-Safety-Identifier": user_hash,
+            },
+            json={
+                "session": {
+                    "model": "gpt-realtime-translate",
+                    "audio": {
+                        "output": {
+                            "language": target_language,
+                        },
+                    },
+                },
+            },
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"OpenAI realtime session request failed: {exc}") from exc
+    if response.status_code >= 400:
+        raise HTTPException(
+            status_code=502,
+            detail=f"OpenAI realtime session request failed: {response.status_code} {response.text[:240]}",
+        )
+    return response.json()
+
+
 @app.get("/languages")
 def languages() -> dict[str, Any]:
     return {
@@ -550,8 +590,12 @@ def _dedupe(values: list[str]) -> list[str]:
 
 
 @app.get("/sessions")
-def sessions() -> dict[str, Any]:
-    return {"sessions": list_sessions()}
+def sessions(limit: int | None = Query(default=None, ge=1, le=200)) -> dict[str, Any]:
+    all_sessions = list_sessions()
+    return {
+        "sessions": all_sessions[:limit] if limit is not None else all_sessions,
+        "total": len(all_sessions),
+    }
 
 
 @app.get("/sessions/{session_name}")

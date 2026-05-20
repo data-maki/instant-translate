@@ -376,6 +376,50 @@ def test_name_katakana_returns_options(monkeypatch):
     assert ("Jon", "Smith") in readings
 
 
+def test_realtime_translation_session_requires_openai_key(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    response = TestClient(app).post("/realtime/translation-session", json={"target_language": "ja"})
+    assert response.status_code == 400
+    assert "OPENAI_API_KEY" in response.json()["detail"]
+
+
+def test_realtime_translation_session_mints_client_secret(monkeypatch):
+    import requests
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    captured = {}
+
+    class FakeResponse:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {"value": "eph-test"}
+
+    def fake_post(url, headers, json, timeout):
+        captured["url"] = url
+        captured["headers"] = headers
+        captured["json"] = json
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(requests, "post", fake_post)
+
+    response = TestClient(app).post(
+        "/realtime/translation-session",
+        json={"target_language": "ja", "user_hash": "user-1"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["value"] == "eph-test"
+    assert captured["url"] == "https://api.openai.com/v1/realtime/translations/client_secrets"
+    assert captured["headers"]["Authorization"] == "Bearer sk-test"
+    assert captured["headers"]["OpenAI-Safety-Identifier"] == "user-1"
+    assert captured["json"]["session"]["model"] == "gpt-realtime-translate"
+    assert captured["json"]["session"]["audio"]["output"]["language"] == "ja"
+    assert captured["timeout"] == 15
+
+
 def test_validate_language_pair_defaults_to_two_way_english_japanese():
     sources, target = validate_language_pair([], "")
     assert sources == ["ja", "en"]
@@ -477,6 +521,30 @@ def test_list_sessions_sorts_by_updated_newest_first(tmp_path, monkeypatch):
     (output / "legacy-without-state").mkdir()
 
     assert [session["name"] for session in list_sessions()] == ["new", "middle", "old"]
+
+
+def test_sessions_endpoint_can_limit_initial_history_payload(tmp_path, monkeypatch):
+    monkeypatch.setattr("app.shared.REPO_ROOT", tmp_path)
+    output = tmp_path / "output"
+    output.mkdir()
+    for index in range(3):
+        session_dir = output / f"session-{index}"
+        session_dir.mkdir()
+        (session_dir / "session_state.json").write_text(
+            json.dumps({
+                "updated": f"2026-05-1{index}T10:00:00",
+                "tokens": [],
+                "source_languages": ["en", "ja"],
+                "target_language": "en",
+            }),
+            encoding="utf-8",
+        )
+
+    response = TestClient(app).get("/sessions?limit=2")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] == 3
+    assert len(body["sessions"]) == 2
 
 
 def test_session_rename_and_delete_endpoints(tmp_path, monkeypatch):

@@ -30,6 +30,45 @@ frontend/.next/
 frontend/out/
 frontend/.env*.local
 frontend/tsconfig.tsbuildinfo
+frontend/auth.db
+frontend/auth.db-journal
+
+# Root-level install artifacts
+/node_modules/
+/lib/
+/auth.db
+
+# Xcode / Swift / iOS
+xcuserdata/
+*.xcuserstate
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+timeline.xctimeline
+playground.xcworkspace
+
+# Swift Package Manager
+.build/
+.swiftpm/
+ios/Cottonoha/.build/
+ios/Cottonoha/.swiftpm/
+
+# Keep Package.resolved committed for the app/package dependency graph.
+
+# Xcode workspace user data. Keep project files and shared workspace metadata.
+ios/CottonohaApp/CottonohaApp.xcodeproj/xcuserdata/
+ios/CottonohaApp/CottonohaApp.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcuserstate
+
+# Carthage
+Carthage/Build/
+
+# fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots/**/*.png
+fastlane/test_output
 
 # Backend
 .pytest_cache/

@@ -100,7 +100,7 @@ def session_display_title(session_dir: Path, state: dict[str, Any] | None) -> st
     if summary and summary.get("title"):
         return str(summary["title"])[:48]
     if state and state.get("tokens"):
-        return fallback_session_title(session_dir.name)
+        return fallback_session_title_from_tokens(state.get("tokens", [])) or fallback_session_title(session_dir.name)
     return "New chat"
 
 
@@ -233,6 +233,20 @@ def fallback_session_title(name: str) -> str:
     if not clean:
         return "Untitled session"
     return clean[:48]
+
+
+def fallback_session_title_from_tokens(tokens: list[dict[str, Any]]) -> str | None:
+    for token in tokens:
+        if token.get("is_audio_event") or token.get("translation_status") == "translation":
+            continue
+        text = str(token.get("text") or "").replace("<end>", "").replace("<END>", "").strip()
+        if len(text) < 3:
+            continue
+        words = text.split()
+        if len(words) > 7:
+            text = " ".join(words[:7])
+        return text[:48]
+    return None
 
 
 def read_session_state(name: str) -> dict[str, Any] | None:

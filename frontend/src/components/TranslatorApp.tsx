@@ -3,9 +3,11 @@
 import type { CSSProperties } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { SignOutButton } from "@/components/SignOutButton";
 import {
   adaptPhrase,
+  createRealtimeTranslationSession,
   deleteSession as deleteSavedSession,
   fetchPlacesContext,
   fetchSessionDetail,
@@ -22,8 +24,9 @@ import {
   TranscriptEvent,
   websocketUrl
 } from "@/lib/api";
-import { RecorderHandle, startPcmRecorder } from "@/lib/audio";
+import type { PcmAudioPlayer, RecorderHandle } from "@/lib/audio";
 import {
+  DEFAULT_PROFILE,
   loadTravelerProfile,
   profileKatakanaFullDisplay,
   profileWesternFullName,
@@ -168,8 +171,28 @@ type ProviderSignals = {
   translations: string[];
 };
 
+type RealtimeDirection = "english_to_target" | "target_to_english";
+
+type RealtimeWebRTCSession = {
+  audio: HTMLAudioElement;
+  pc: RTCPeerConnection;
+  setMicEnabled: (enabled: boolean) => void;
+  stop: () => void;
+  stream: MediaStream;
+};
+
+type RealtimeCaptionDraft = {
+  id: string;
+  input: string;
+  output: string;
+  sourceLanguage: string;
+  targetLanguage: string;
+  startedAt: number;
+};
+
 const DEEPL_FORMALITY_STORAGE_KEY = "mil-decoder-deepl-formality-v1";
 const DISPLAY_GROUP_PAUSE_SECONDS = 10;
+const INITIAL_SESSION_LIMIT = 8;
 const DEFAULT_SESSION_PLACE_CONTEXT: SessionPlaceContext = {
   location_hint: "",
   location_context: "",
@@ -211,6 +234,7 @@ const SPEAKER_COLORS = [
 export type TranslatorAppProps = {
   initialLanguages?: Language[];
   initialLoadError?: string;
+  initialSessionTotal?: number;
   initialSessions?: SessionSummary[];
   initialSourceLanguages?: string[];
   initialTargetLanguage?: string;
@@ -219,6 +243,7 @@ export type TranslatorAppProps = {
 export function TranslatorApp({
   initialLanguages = [],
   initialLoadError = "",
+  initialSessionTotal,
   initialSessions = [],
   initialSourceLanguages = ["ja"],
   initialTargetLanguage = "en"
@@ -230,13 +255,9 @@ export function TranslatorApp({
   const [sourceB, setSourceB] = useState(initialTargetLanguage);
   const [expectedSpeakerCount, setExpectedSpeakerCount] = useState("2");
   const [audiencePreset, setAudiencePreset] = useState(DEFAULT_AUDIENCE_PRESET);
-  const [deeplFormality, setDeepLFormality] = useState<DeepLFormality>(() => {
-    if (typeof window === "undefined") return "auto";
-    const saved = window.localStorage.getItem(DEEPL_FORMALITY_STORAGE_KEY);
-    return isDeepLFormality(saved) ? saved : "auto";
-  });
+  const [deeplFormality, setDeepLFormality] = useState<DeepLFormality>("auto");
   const [context, setContext] = useState("");
-  const [travelerProfile] = useState<TravelerProfile>(() => loadTravelerProfile());
+  const [travelerProfile, setTravelerProfile] = useState<TravelerProfile>(DEFAULT_PROFILE);
   const [sessionPlaceContext, setSessionPlaceContext] = useState<SessionPlaceContext>(DEFAULT_SESSION_PLACE_CONTEXT);
   const [geoStatus, setGeoStatus] = useState("");
   const selectedPreset = getAudiencePreset(audiencePreset);
@@ -263,18 +284,35 @@ export function TranslatorApp({
   const [editingSpeaker, setEditingSpeaker] = useState<string | null>(null);
   const [speakerEditorDraft, setSpeakerEditorDraft] = useState<SpeakerEditorDraft | null>(null);
   const [showEnhancedEnglish, setShowEnhancedEnglish] = useState(true);
+  const [openAIRealtimeEnabled, setOpenAIRealtimeEnabled] = useState(false);
   const [transcriptLatencyMode, setTranscriptLatencyMode] = useState<TranscriptLatencyMode>("fast");
   const [leftLanguageSelection, setLeftLanguageSelection] = useState<LeftLanguageSelection>("all");
   const [typedText, setTypedText] = useState("");
   const [reviewStatus, setReviewStatus] = useState("");
   const [sessions, setSessions] = useState<SessionSummary[]>(initialSessions);
+  const [sessionTotal, setSessionTotal] = useState(initialSessionTotal ?? initialSessions.length);
   const [sessionsExpanded, setSessionsExpanded] = useState(false);
   const [sessionsOpen, setSessionsOpen] = useState(false);
-  const [settingsMockOpen, setSettingsMockOpen] = useState(false);
   const [loadingSession, setLoadingSession] = useState("");
+  const [micCaptureEnabled, setMicCaptureEnabled] = useState(true);
+  const [englishToTargetOverdubEnabled, setEnglishToTargetOverdubEnabled] = useState(true);
+  const [targetToEnglishOverdubEnabled, setTargetToEnglishOverdubEnabled] = useState(true);
 
   const wsRef = useRef<WebSocket | null>(null);
   const recorderRef = useRef<RecorderHandle | null>(null);
+  const audioPlayerRef = useRef<PcmAudioPlayer | null>(null);
+  const realtimeSessionsRef = useRef<Record<RealtimeDirection, RealtimeWebRTCSession | null>>({
+    english_to_target: null,
+    target_to_english: null
+  });
+  const realtimeCaptionDraftsRef = useRef<Record<RealtimeDirection, RealtimeCaptionDraft | null>>({
+    english_to_target: null,
+    target_to_english: null
+  });
+  const realtimePhraseSequenceRef = useRef(0);
+  const realtimeTranscriptBridgeActiveRef = useRef(false);
+  const sonioxRealtimePhraseCountRef = useRef(0);
+  const micCaptureEnabledRef = useRef(true);
   const feedRef = useRef<HTMLDivElement | null>(null);
   const shouldFollowFeedRef = useRef(true);
   const adaptationRequestsRef = useRef<Set<string>>(new Set());
@@ -336,6 +374,17 @@ export function TranslatorApp({
     return groupDisplayPhrases(visiblePhrases);
   }, [visiblePhrases]);
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      const savedFormality = window.localStorage.getItem(DEEPL_FORMALITY_STORAGE_KEY);
+      if (isDeepLFormality(savedFormality)) {
+        setDeepLFormality(savedFormality);
+      }
+      setTravelerProfile(loadTravelerProfile());
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
   function setAdaptationsSynced(
     next:
       | Record<string, PhraseAdaptation>
@@ -372,6 +421,13 @@ export function TranslatorApp({
     setProviderSignalsSynced({ transcripts: [], translations: [] });
   }
 
+  function clearRealtimeCaptionDrafts() {
+    realtimeCaptionDraftsRef.current = {
+      english_to_target: null,
+      target_to_english: null
+    };
+  }
+
   function resetAdaptations() {
     setAdaptationsSynced({});
     adaptationRequestsRef.current.clear();
@@ -397,6 +453,83 @@ export function TranslatorApp({
     if (options.requestAdaptations !== false) {
       requestAdaptationsFor(next);
     }
+  }
+
+  function upsertRealtimePhrase(phrase: Phrase) {
+    setPhrases((current) => {
+      const existingIndex = current.findIndex((item) => item.id === phrase.id);
+      const next = existingIndex === -1
+        ? [...current, phrase]
+        : current.map((item) => (item.id === phrase.id ? phrase : item));
+      setTokenCount(next.length);
+      return next;
+    });
+    scrollFeedToBottomSoon();
+  }
+
+  function realtimeLanguagesForDirection(direction: RealtimeDirection) {
+    const targetLanguage = englishOverdubTargetLanguage(sourceALanguages, sourceB);
+    return direction === "english_to_target"
+      ? { sourceLanguage: ENGLISH_LANGUAGE, targetLanguage }
+      : { sourceLanguage: targetLanguage, targetLanguage: ENGLISH_LANGUAGE };
+  }
+
+  function ensureRealtimeCaptionDraft(direction: RealtimeDirection) {
+    const existing = realtimeCaptionDraftsRef.current[direction];
+    if (existing) {
+      return existing;
+    }
+    const languages = realtimeLanguagesForDirection(direction);
+    const draft: RealtimeCaptionDraft = {
+      id: `realtime-${direction}-${Date.now()}-${realtimePhraseSequenceRef.current}`,
+      input: "",
+      output: "",
+      sourceLanguage: languages.sourceLanguage,
+      targetLanguage: languages.targetLanguage,
+      startedAt: Date.now()
+    };
+    realtimePhraseSequenceRef.current += 1;
+    realtimeCaptionDraftsRef.current[direction] = draft;
+    return draft;
+  }
+
+  function realtimeDraftToPhrase(draft: RealtimeCaptionDraft, isFinal: boolean): Phrase {
+    return {
+      id: draft.id,
+      speaker: draft.sourceLanguage === ENGLISH_LANGUAGE ? "typed" : "realtime-listener",
+      speaker_label: draft.sourceLanguage === ENGLISH_LANGUAGE ? "You" : "Them",
+      source_lang: draft.sourceLanguage,
+      texts: {
+        [draft.sourceLanguage]: draft.input.trim(),
+        [draft.targetLanguage]: draft.output.trim()
+      },
+      is_final: isFinal,
+      time: Math.max(0, Math.round((Date.now() - draft.startedAt) / 1000))
+    };
+  }
+
+  function appendRealtimeCaptionDelta(
+    direction: RealtimeDirection,
+    field: "input" | "output",
+    delta: string,
+    render: boolean
+  ) {
+    const draft = ensureRealtimeCaptionDraft(direction);
+    draft[field] += delta;
+    if (render) {
+      upsertRealtimePhrase(realtimeDraftToPhrase(draft, false));
+    }
+  }
+
+  function finalizeRealtimeCaption(direction: RealtimeDirection) {
+    const draft = realtimeCaptionDraftsRef.current[direction];
+    if (!draft) {
+      return;
+    }
+    if (draft.input.trim() || draft.output.trim()) {
+      upsertRealtimePhrase(realtimeDraftToPhrase(draft, true));
+    }
+    realtimeCaptionDraftsRef.current[direction] = null;
   }
 
   function startDurationTimer(startedAt: number) {
@@ -572,7 +705,7 @@ export function TranslatorApp({
     }
   }
 
-  async function start() {
+  async function start(forceRealtime = openAIRealtimeEnabled) {
     setError("");
     setSavedPath("");
     setActiveSessionSynced("");
@@ -586,6 +719,7 @@ export function TranslatorApp({
     setPhrases([]);
     resetAdaptations();
     clearProviderSignals();
+    clearRealtimeCaptionDrafts();
     setTokenCount(0);
     setActiveDurationSeconds(0);
     startDurationTimer(Date.now());
@@ -593,6 +727,12 @@ export function TranslatorApp({
     setStatus("requesting microphone");
 
     try {
+      if (forceRealtime) {
+        await startRealtimeOverdub();
+        await startRealtimeTranscriptBridge();
+        return;
+      }
+      const { startPcmRecorder } = await import("@/lib/audio");
       const recorder = await startPcmRecorder((chunk) => {
         const socket = wsRef.current;
         if (socket?.readyState === WebSocket.OPEN) {
@@ -615,6 +755,7 @@ export function TranslatorApp({
             target_language: sourceB,
             expected_speaker_count: expectedSpeakerCount ? Number(expectedSpeakerCount) : null,
             expected_speaker_names: [],
+            enable_openai_realtime: forceRealtime,
             context: contextBundle.soniox
           })
         );
@@ -644,13 +785,245 @@ export function TranslatorApp({
     }
   }
 
+  function changeRealtimeEnabled(enabled: boolean) {
+    setOpenAIRealtimeEnabled(enabled);
+    if (enabled && showOnboarding && canStart && hasLanguagePair) {
+      void start(true);
+    }
+  }
+
+  async function startRealtimeOverdub() {
+    setActiveSessionTitle("Realtime overdub");
+    setStatus("connecting");
+    micCaptureEnabledRef.current = micCaptureEnabled;
+
+    const directions: RealtimeDirection[] = [];
+    if (englishToTargetOverdubEnabled) {
+      directions.push("english_to_target");
+    }
+    if (targetToEnglishOverdubEnabled) {
+      directions.push("target_to_english");
+    }
+    if (directions.length === 0) {
+      directions.push("english_to_target");
+      setEnglishToTargetOverdubEnabled(true);
+    }
+
+    for (const direction of directions) {
+      await startRealtimeDirection(direction);
+    }
+    setStatus("listening");
+  }
+
+  async function startRealtimeTranscriptBridge() {
+    realtimeTranscriptBridgeActiveRef.current = true;
+    sonioxRealtimePhraseCountRef.current = 0;
+    const { startPcmRecorder } = await import("@/lib/audio");
+    const recorder = await startPcmRecorder((chunk) => {
+      const socket = wsRef.current;
+      if (socket?.readyState === WebSocket.OPEN) {
+        socket.send(chunk);
+      }
+    }, {
+      autoGainControl: true,
+      echoCancellation: true,
+      noiseSuppression: true
+    });
+    recorderRef.current = recorder;
+
+    const socket = new WebSocket(websocketUrl());
+    socket.binaryType = "arraybuffer";
+    wsRef.current = socket;
+
+    socket.onopen = () => {
+      socket.send(
+        JSON.stringify({
+          type: "start",
+          session_name: "",
+          source_languages: [...sourceALanguages, sourceB],
+          target_language: sourceB,
+          expected_speaker_count: expectedSpeakerCount ? Number(expectedSpeakerCount) : null,
+          expected_speaker_names: [],
+          enable_openai_realtime: false,
+          context: contextBundle.soniox
+        })
+      );
+    };
+
+    socket.onmessage = (event) => {
+      const message = JSON.parse(event.data) as TranscriptEvent;
+      handleServerEvent(message);
+    };
+
+    socket.onerror = () => {
+      setError("Realtime transcript stream failed. Is the FastAPI backend running on port 8000?");
+      setStatus("error");
+      cleanup();
+    };
+
+    socket.onclose = () => {
+      realtimeTranscriptBridgeActiveRef.current = false;
+      if (status !== "stopping") {
+        setStatus((current) => (current === "error" ? "error" : "stopped"));
+      }
+      cleanup();
+    };
+  }
+
+  async function startRealtimeDirection(direction: RealtimeDirection) {
+    if (realtimeSessionsRef.current[direction]) {
+      return;
+    }
+    const targetLanguage = direction === "english_to_target"
+      ? englishOverdubTargetLanguage(sourceALanguages, sourceB)
+      : ENGLISH_LANGUAGE;
+    const secret = await createRealtimeTranslationSession({ target_language: targetLanguage });
+    const clientSecret = secret.value || secret.client_secret?.value;
+    if (!clientSecret) {
+      throw new Error("OpenAI realtime session response did not include a client secret.");
+    }
+
+    const stream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true
+      }
+    });
+    stream.getAudioTracks().forEach((track) => {
+      track.enabled = micCaptureEnabledRef.current;
+    });
+
+    const pc = new RTCPeerConnection();
+    pc.addTrack(stream.getAudioTracks()[0], stream);
+
+    const audio = new Audio();
+    audio.autoplay = true;
+    audio.setAttribute("playsinline", "true");
+    pc.ontrack = ({ streams }) => {
+      audio.srcObject = streams[0];
+      void audio.play().catch(() => {
+        setError("Browser blocked translated audio playback. Click the page and try again.");
+      });
+    };
+
+    const events = pc.createDataChannel("oai-events");
+    events.onmessage = ({ data }) => {
+      handleRealtimeTranslationEvent(direction, data);
+    };
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    const sdpResponse = await fetch("https://api.openai.com/v1/realtime/translations/calls", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${clientSecret}`,
+        "Content-Type": "application/sdp"
+      },
+      body: offer.sdp || ""
+    });
+    if (!sdpResponse.ok) {
+      throw new Error(await sdpResponse.text());
+    }
+    await pc.setRemoteDescription({
+      type: "answer",
+      sdp: await sdpResponse.text()
+    });
+
+    realtimeSessionsRef.current[direction] = {
+      audio,
+      pc,
+      setMicEnabled: (enabled: boolean) => {
+        stream.getAudioTracks().forEach((track) => {
+          track.enabled = enabled;
+        });
+      },
+      stop: () => {
+        stream.getTracks().forEach((track) => track.stop());
+        audio.pause();
+        audio.srcObject = null;
+        pc.close();
+      },
+      stream
+    };
+  }
+
+  function handleRealtimeTranslationEvent(direction: RealtimeDirection, rawData: string) {
+    let event: { type?: string; delta?: string; text?: string; transcript?: string; error?: unknown };
+    try {
+      event = JSON.parse(rawData);
+    } catch {
+      return;
+    }
+    const eventType = event.type || "";
+    const delta = typeof event.delta === "string"
+      ? event.delta
+      : typeof event.text === "string"
+        ? event.text
+        : typeof event.transcript === "string"
+          ? event.transcript
+          : "";
+    const isInputTranscriptDelta = eventType === "session.input_transcript.delta"
+      || eventType.endsWith(".input_transcript.delta")
+      || eventType.includes("input_audio_transcription.delta");
+    const isOutputTranscriptDelta = eventType === "session.output_transcript.delta"
+      || eventType.endsWith(".output_transcript.delta")
+      || eventType.includes("response.audio_transcript.delta");
+    const transcriptBridgeHasPhrases = sonioxRealtimePhraseCountRef.current > 0;
+    const shouldRenderRealtimeCaption = !realtimeTranscriptBridgeActiveRef.current || !transcriptBridgeHasPhrases;
+    if (isInputTranscriptDelta && delta) {
+      appendRealtimeCaptionDelta(direction, "input", delta, shouldRenderRealtimeCaption);
+      setProviderSignalsSynced((current) => ({
+        ...current,
+        transcripts: dedupeTail([...current.transcripts, delta], 12)
+      }));
+      return;
+    }
+    if (isOutputTranscriptDelta && delta) {
+      const existingDraft = realtimeCaptionDraftsRef.current[direction];
+      appendRealtimeCaptionDelta(
+        direction,
+        "output",
+        delta,
+        shouldRenderRealtimeCaption && (!realtimeTranscriptBridgeActiveRef.current || Boolean(existingDraft?.input.trim()))
+      );
+      setProviderSignalsSynced((current) => ({
+        ...current,
+        translations: dedupeTail([...current.translations, delta], 12)
+      }));
+      return;
+    }
+    if (eventType === "session.output_transcript.done" || eventType.endsWith(".output_transcript.done")) {
+      finalizeRealtimeCaption(direction);
+      return;
+    }
+    if (eventType === "error") {
+      setError(`OpenAI realtime ${directionLabel(direction)} failed: ${String(event.error || "unknown error")}`);
+    }
+  }
+
   async function refreshSessions() {
     try {
-      const result = await fetchSessions();
+      const result = await fetchSessions({ limit: sessionsExpanded ? undefined : INITIAL_SESSION_LIMIT });
       setSessions(result.sessions);
+      setSessionTotal(result.total);
     } catch {
       // The main health/language load already exposes backend connection errors.
     }
+  }
+
+  async function toggleSessionsExpanded() {
+    if (!sessionsExpanded && sessions.length < sessionTotal) {
+      try {
+        const result = await fetchSessions();
+        setSessions(result.sessions);
+        setSessionTotal(result.total);
+      } catch {
+        // Keep the compact list if the history refresh fails.
+      }
+    }
+    setSessionsExpanded((current) => !current);
   }
 
   async function loadSession(name: string) {
@@ -800,7 +1173,7 @@ export function TranslatorApp({
           setGeoStatus(message);
         }
       },
-      () => setGeoStatus("Could not fetch location."),
+      () => setGeoStatus("Location permission blocked. Enable it in browser settings or continue without location."),
       { enableHighAccuracy: false, timeout: 8000 }
     );
   }
@@ -874,6 +1247,10 @@ export function TranslatorApp({
       return;
     }
     if (message.type === "transcript") {
+      if (openAIRealtimeEnabled) {
+        sonioxRealtimePhraseCountRef.current = message.phrases.length;
+        clearRealtimeCaptionDrafts();
+      }
       setPhrasesAndFollow(message.phrases);
       setTokenCount(message.final_token_count);
       return;
@@ -891,6 +1268,10 @@ export function TranslatorApp({
           translations: dedupeTail([...current.translations, message.text], 12)
         }));
       }
+      return;
+    }
+    if (message.type === "openai_realtime_audio") {
+      audioPlayerRef.current?.playBase64Pcm16(message.audio, message.sample_rate);
       return;
     }
     if (message.type === "saved") {
@@ -914,6 +1295,11 @@ export function TranslatorApp({
 
   function stop() {
     setStatus("stopping");
+    if (openAIRealtimeEnabled) {
+      cleanup();
+      setStatus("stopped");
+      return;
+    }
     recorderRef.current?.stop();
     recorderRef.current = null;
     try {
@@ -933,6 +1319,46 @@ export function TranslatorApp({
         return current;
       });
     }, 45_000);
+  }
+
+  function toggleMicCapture() {
+    const enabled = !micCaptureEnabledRef.current;
+    micCaptureEnabledRef.current = enabled;
+    setMicCaptureEnabled(enabled);
+    Object.values(realtimeSessionsRef.current).forEach((session) => {
+      session?.setMicEnabled(enabled);
+    });
+  }
+
+  function toggleRealtimeDirection(direction: RealtimeDirection) {
+    const currentlyEnabled = direction === "english_to_target"
+      ? englishToTargetOverdubEnabled
+      : targetToEnglishOverdubEnabled;
+    const nextEnabled = !currentlyEnabled;
+    if (direction === "english_to_target") {
+      setEnglishToTargetOverdubEnabled(nextEnabled);
+    } else {
+      setTargetToEnglishOverdubEnabled(nextEnabled);
+    }
+
+    if (!isLive || !openAIRealtimeEnabled) {
+      return;
+    }
+    if (nextEnabled) {
+      void startRealtimeDirection(direction).catch((err: unknown) => {
+        setError(err instanceof Error ? err.message : `Could not start ${directionLabel(direction)}.`);
+        if (direction === "english_to_target") {
+          setEnglishToTargetOverdubEnabled(false);
+        } else {
+          setTargetToEnglishOverdubEnabled(false);
+        }
+      });
+      return;
+    }
+
+    finalizeRealtimeCaption(direction);
+    realtimeSessionsRef.current[direction]?.stop();
+    realtimeSessionsRef.current[direction] = null;
   }
 
   async function improveSpeakersAndTranslations() {
@@ -1018,10 +1444,23 @@ export function TranslatorApp({
     }
     recorderRef.current?.stop();
     recorderRef.current = null;
+    audioPlayerRef.current?.stop();
+    audioPlayerRef.current = null;
+    stopRealtimeSessions();
+    realtimeTranscriptBridgeActiveRef.current = false;
+    sonioxRealtimePhraseCountRef.current = 0;
     if (wsRef.current && wsRef.current.readyState < WebSocket.CLOSING) {
       wsRef.current.close();
     }
     wsRef.current = null;
+  }
+
+  function stopRealtimeSessions() {
+    for (const direction of Object.keys(realtimeSessionsRef.current) as RealtimeDirection[]) {
+      finalizeRealtimeCaption(direction);
+      realtimeSessionsRef.current[direction]?.stop();
+      realtimeSessionsRef.current[direction] = null;
+    }
   }
 
   function handleFeedScroll() {
@@ -1046,7 +1485,7 @@ export function TranslatorApp({
           activeSessionTitle={activeSessionTitle}
           expanded={sessionsExpanded}
           groups={visibleSessionGroups}
-          hasMore={sessions.length > countGroupedSessions(visibleSessionGroups)}
+          hasMore={sessionTotal > countGroupedSessions(visibleSessionGroups)}
           isOpen={sessionsOpen}
           loadingSession={loadingSession}
           onClose={() => setSessionsOpen(false)}
@@ -1054,10 +1493,8 @@ export function TranslatorApp({
           onLoad={loadSession}
           onNew={newSession}
           onRename={renameSessionTitle}
-          onToggleSettings={() => setSettingsMockOpen((current) => !current)}
-          onToggleExpanded={() => setSessionsExpanded((current) => !current)}
-          settingsMockOpen={settingsMockOpen}
-          total={sessions.length}
+          onToggleExpanded={() => void toggleSessionsExpanded()}
+          total={sessionTotal}
         />
 
         <section className={`transcriptPanel ${showOnboarding ? "setupMode" : ""}`} aria-label="Live transcript">
@@ -1073,9 +1510,24 @@ export function TranslatorApp({
                 <span />
                 <span />
               </button>
-              <h2>{transcriptTitle(sourceALanguages, sourceB, languageMap)}</h2>
+              <TranscriptTitle languageMap={languageMap} sourceLanguages={sourceALanguages} targetLanguage={sourceB} />
             </div>
             <div className="transcriptMeta">
+              <label
+                className={`realtimeToggle ${openAIRealtimeEnabled ? "active" : ""}`}
+                title="Use GPT realtime translation candidates"
+              >
+                <input
+                  checked={openAIRealtimeEnabled}
+                  disabled={isLive}
+                  onChange={(event) => changeRealtimeEnabled(event.target.checked)}
+                  type="checkbox"
+                />
+                <span className="realtimeSwitch" aria-hidden="true">
+                  <span />
+                </span>
+                <span>GPT realtime</span>
+              </label>
               <span className="tokenCount">{formatTranscriptStats(transcriptStats)}</span>
               {postProcessing && (reviewStatus || translationStatus || rediarizeStatus) ? (
                 <span className="compactStatus">{reviewStatus || translationStatus || rediarizeStatus}</span>
@@ -1100,7 +1552,14 @@ export function TranslatorApp({
               />
             </div>
           ) : null}
-          {showOnboarding ? (
+          {showOnboarding && openAIRealtimeEnabled ? (
+            <RealtimeStartPanel
+              canStart={canStart && hasLanguagePair}
+              disabled={isLive}
+              error={error}
+              onStart={() => start(true)}
+            />
+          ) : showOnboarding ? (
             <ConversationOnboarding
               audiencePreset={audiencePreset}
               canStart={canStart && hasLanguagePair}
@@ -1116,13 +1575,13 @@ export function TranslatorApp({
               onDeepLFormalityChange={changeDeepLFormality}
               onLocation={injectCurrentLocation}
               onSpeakerCountChange={setExpectedSpeakerCount}
-              onStart={start}
+              onStart={() => start(false)}
               preset={selectedPreset}
             />
           ) : error ? (
-            <div className="errorBox">{error}</div>
+            <FeedbackBanner message={error} />
           ) : null}
-          {phrases.length > 0 ? (
+          {phrases.length > 0 && !openAIRealtimeEnabled ? (
             <ChatDisplayToggle
               enhanced={showEnhancedEnglish}
               latencyMode={transcriptLatencyMode}
@@ -1135,7 +1594,15 @@ export function TranslatorApp({
           ) : null}
           <div className="feed" onScroll={handleFeedScroll} ref={feedRef}>
             {phrases.length === 0 ? (
-              <div className="emptyState" aria-hidden="true" />
+              <LiveCanvas
+                isLive={isLive}
+                micCaptureEnabled={micCaptureEnabled}
+                openAIRealtimeEnabled={openAIRealtimeEnabled}
+                sourceLanguages={sourceALanguages}
+                status={status}
+                targetLanguage={sourceB}
+                languageMap={languageMap}
+              />
             ) : visiblePhraseGroups.length === 0 ? (
               <div className="emptyState">
                 <strong>Waiting for corrections...</strong>
@@ -1169,10 +1636,18 @@ export function TranslatorApp({
           {!showOnboarding ? (
             <ComposerBar
               canStart={canStart && hasLanguagePair}
+              englishTargetLabel={languageShortLabel(englishOverdubTargetLanguage(sourceALanguages, sourceB), languageMap)}
+              englishToTargetOverdubEnabled={englishToTargetOverdubEnabled}
               isLive={isLive}
-              onStart={start}
+              micCaptureEnabled={micCaptureEnabled}
+              onStart={() => start(openAIRealtimeEnabled)}
               onStop={stop}
               onSubmit={submitTypedText}
+              onToggleEnglishToTarget={() => toggleRealtimeDirection("english_to_target")}
+              onToggleMicCapture={toggleMicCapture}
+              onToggleTargetToEnglish={() => toggleRealtimeDirection("target_to_english")}
+              openAIRealtimeEnabled={openAIRealtimeEnabled}
+              targetToEnglishOverdubEnabled={targetToEnglishOverdubEnabled}
               text={typedText}
               onTextChange={setTypedText}
             />
@@ -1273,21 +1748,79 @@ function ChatDisplayToggle({
 
 function ComposerBar({
   canStart,
+  englishTargetLabel,
+  englishToTargetOverdubEnabled,
   isLive,
+  micCaptureEnabled,
   onStart,
   onStop,
   onSubmit,
+  onToggleEnglishToTarget,
+  onToggleMicCapture,
+  onToggleTargetToEnglish,
   onTextChange,
+  openAIRealtimeEnabled,
+  targetToEnglishOverdubEnabled,
   text
 }: {
   canStart: boolean;
+  englishTargetLabel: string;
+  englishToTargetOverdubEnabled: boolean;
   isLive: boolean;
+  micCaptureEnabled: boolean;
   onStart: () => void;
   onStop: () => void;
   onSubmit: () => void;
+  onToggleEnglishToTarget: () => void;
+  onToggleMicCapture: () => void;
+  onToggleTargetToEnglish: () => void;
   onTextChange: (value: string) => void;
+  openAIRealtimeEnabled: boolean;
+  targetToEnglishOverdubEnabled: boolean;
   text: string;
 }) {
+  if (isLive && openAIRealtimeEnabled) {
+    return (
+      <div className="realtimeControlBar" aria-label="Realtime controls">
+        <button
+          aria-label={`Toggle English to ${englishTargetLabel} speaker overdub`}
+          aria-pressed={englishToTargetOverdubEnabled}
+          className={`realtimeControlButton ${englishToTargetOverdubEnabled ? "active" : ""}`}
+          onClick={onToggleEnglishToTarget}
+          title={`English to ${englishTargetLabel}`}
+          type="button"
+        >
+          <SpeakerIcon />
+          <span>EN → {englishTargetLabel}</span>
+        </button>
+        <button
+          aria-label={micCaptureEnabled ? "Pause microphone capture" : "Resume microphone capture"}
+          aria-pressed={micCaptureEnabled}
+          className={`realtimeMicButton ${micCaptureEnabled ? "active" : ""}`}
+          onClick={onToggleMicCapture}
+          title={micCaptureEnabled ? "Pause microphone" : "Resume microphone"}
+          type="button"
+        >
+          <MicIcon />
+        </button>
+        <button
+          aria-label={`Toggle ${englishTargetLabel} to English speaker overdub`}
+          aria-pressed={targetToEnglishOverdubEnabled}
+          className={`realtimeControlButton ${targetToEnglishOverdubEnabled ? "active" : ""}`}
+          onClick={onToggleTargetToEnglish}
+          title={`${englishTargetLabel} to English`}
+          type="button"
+        >
+          <span>{englishTargetLabel} → EN</span>
+          <SpeakerIcon />
+        </button>
+        <button className="transportButton realtimeStopButton recording" onClick={onStop} type="button">
+          Stop
+        </button>
+      </div>
+    );
+  }
+
   return (
     <form
       className="composerBar"
@@ -1316,6 +1849,27 @@ function ComposerBar({
         {isLive ? "■" : "▶"}
       </button>
     </form>
+  );
+}
+
+function SpeakerIcon() {
+  return (
+    <svg aria-hidden="true" className="controlIcon" viewBox="0 0 24 24">
+      <path d="M4 9v6h4l5 4V5L8 9H4Z" />
+      <path d="M16 8c1.2 1 1.8 2.4 1.8 4s-.6 3-1.8 4" />
+      <path d="M18.8 5.5A9 9 0 0 1 21 12a9 9 0 0 1-2.2 6.5" />
+    </svg>
+  );
+}
+
+function MicIcon() {
+  return (
+    <svg aria-hidden="true" className="controlIcon" viewBox="0 0 24 24">
+      <path d="M12 4a3 3 0 0 0-3 3v5a3 3 0 0 0 6 0V7a3 3 0 0 0-3-3Z" />
+      <path d="M6 11a6 6 0 0 0 12 0" />
+      <path d="M12 17v3" />
+      <path d="M9 20h6" />
+    </svg>
   );
 }
 
@@ -1409,6 +1963,114 @@ function ConversationOnboarding({
   );
 }
 
+function RealtimeStartPanel({
+  canStart,
+  disabled,
+  error,
+  onStart
+}: {
+  canStart: boolean;
+  disabled: boolean;
+  error: string;
+  onStart: () => void;
+}) {
+  return (
+    <section className="startPanel realtimeStartPanel" aria-label="Start realtime conversation">
+      <p className="realtimeStartHint">
+        Realtime uses the selected spoken and target languages only.
+      </p>
+      <div className="startPanelFooter">
+        <button className="primaryButton" onClick={onStart} disabled={disabled || !canStart} type="button">
+          Start realtime
+        </button>
+      </div>
+      {error ? <FeedbackBanner message={error} /> : null}
+    </section>
+  );
+}
+
+function TranscriptTitle({
+  languageMap,
+  sourceLanguages,
+  targetLanguage
+}: {
+  languageMap: Map<string, Language>;
+  sourceLanguages: string[];
+  targetLanguage: string;
+}) {
+  return (
+    <h2 className="transcriptTitle">
+      <span className="transcriptTitleFull">{transcriptTitle(sourceLanguages, targetLanguage, languageMap)}</span>
+      <span className="transcriptTitleCompact">
+        {transcriptShortTitle(sourceLanguages, targetLanguage, languageMap)}
+      </span>
+    </h2>
+  );
+}
+
+function FeedbackBanner({ message }: { message: string }) {
+  return <div className="errorBox" role="alert">{friendlyErrorMessage(message)}</div>;
+}
+
+function LiveCanvas({
+  isLive,
+  languageMap,
+  micCaptureEnabled,
+  openAIRealtimeEnabled,
+  sourceLanguages,
+  status,
+  targetLanguage
+}: {
+  isLive: boolean;
+  languageMap: Map<string, Language>;
+  micCaptureEnabled: boolean;
+  openAIRealtimeEnabled: boolean;
+  sourceLanguages: string[];
+  status: AppStatus;
+  targetLanguage: string;
+}) {
+  const shortTitle = transcriptShortTitle(sourceLanguages, targetLanguage, languageMap);
+  const fullTitle = transcriptTitle(sourceLanguages, targetLanguage, languageMap);
+  const headline = isLive
+    ? micCaptureEnabled
+      ? "Listening"
+      : "Microphone paused"
+    : "Ready to listen";
+  const detail = isLive
+    ? openAIRealtimeEnabled
+      ? "Realtime overdub is on. Speak naturally and subtitles will appear here."
+      : "Live transcription is running. Translated phrases will appear here."
+    : "Start a session when you are ready. Source speech and translation will stay together in this chat.";
+
+  return (
+    <section className="liveCanvas" aria-label="Conversation status">
+      <div className="liveCanvasHeader">
+        <span className={`liveDot ${isLive && micCaptureEnabled ? "active" : ""}`} aria-hidden="true" />
+        <div>
+          <strong>{headline}</strong>
+          <span>{statusLabel(status)}</span>
+        </div>
+      </div>
+      <div className="liveWave" aria-hidden="true">
+        <span />
+        <span />
+        <span />
+        <span />
+        <span />
+      </div>
+      <div className="liveDirection">
+        <span>{shortTitle}</span>
+        <small>{fullTitle}</small>
+      </div>
+      <div className="livePlaceholderBubbles" aria-hidden="true">
+        <span />
+        <span />
+      </div>
+      <p>{detail}</p>
+    </section>
+  );
+}
+
 function SessionSidebar({
   activeSession,
   activeSessionTitle,
@@ -1422,9 +2084,7 @@ function SessionSidebar({
   onLoad,
   onNew,
   onRename,
-  onToggleSettings,
   onToggleExpanded,
-  settingsMockOpen,
   total
 }: {
   activeSession: string;
@@ -1439,14 +2099,13 @@ function SessionSidebar({
   onLoad: (name: string) => void;
   onNew: () => void;
   onRename: (name: string, title: string) => Promise<void>;
-  onToggleSettings: () => void;
   onToggleExpanded: () => void;
-  settingsMockOpen: boolean;
   total: number;
 }) {
   const [openMenuSession, setOpenMenuSession] = useState("");
   const [renamingSession, setRenamingSession] = useState("");
   const [renameDraft, setRenameDraft] = useState("");
+  const [confirmDeleteSession, setConfirmDeleteSession] = useState("");
 
   async function saveRename(session: SessionSummary) {
     await onRename(session.name, renameDraft);
@@ -1456,14 +2115,11 @@ function SessionSidebar({
   }
 
   async function eraseSession(session: SessionSummary) {
-    const title = session.title || session.name;
-    if (!window.confirm(`Delete "${title}"? This cannot be undone.`)) {
-      return;
-    }
     await onDelete(session.name);
     setOpenMenuSession("");
     setRenamingSession("");
     setRenameDraft("");
+    setConfirmDeleteSession("");
   }
 
   return (
@@ -1522,6 +2178,7 @@ function SessionSidebar({
                         const nextOpen = menuOpen ? "" : session.name;
                         setOpenMenuSession(nextOpen);
                         setRenamingSession("");
+                        setConfirmDeleteSession("");
                         setRenameDraft(session.title || session.name);
                       }}
                       type="button"
@@ -1530,7 +2187,10 @@ function SessionSidebar({
                     </button>
                     {menuOpen ? (
                       <div className="sessionMenu" role="menu">
-                        <div className="sessionMenuMeta">Duration {formatDuration(session.duration_seconds)}</div>
+                        <div className="sessionMenuMeta">
+                          <span>{formatSessionUpdated(session.updated)}</span>
+                          <span>Duration {formatDuration(session.duration_seconds)}</span>
+                        </div>
                         {isRenaming ? (
                           <form
                             className="sessionRenameForm"
@@ -1561,6 +2221,19 @@ function SessionSidebar({
                               </button>
                             </div>
                           </form>
+                        ) : confirmDeleteSession === session.name ? (
+                          <div className="sessionDeleteConfirm">
+                            <strong>Delete this chat?</strong>
+                            <span>This removes it from history.</span>
+                            <div className="sessionMenuActions">
+                              <button className="sessionMenuAction danger" onClick={() => void eraseSession(session)} type="button">
+                                Delete
+                              </button>
+                              <button className="sessionMenuAction" onClick={() => setConfirmDeleteSession("")} type="button">
+                                Cancel
+                              </button>
+                            </div>
+                          </div>
                         ) : (
                           <div className="sessionMenuActions">
                             <button
@@ -1573,7 +2246,7 @@ function SessionSidebar({
                             >
                               Rename
                             </button>
-                            <button className="sessionMenuAction danger" onClick={() => void eraseSession(session)} type="button">
+                            <button className="sessionMenuAction danger" onClick={() => setConfirmDeleteSession(session.name)} type="button">
                               Delete
                             </button>
                           </div>
@@ -1595,21 +2268,12 @@ function SessionSidebar({
       ) : null}
 
       <div className="sidebarBottom">
-        {settingsMockOpen ? (
-          <div className="settingsMock">
-            <strong>Settings mock</strong>
-            <span>Placeholder only. These controls do not change this session yet.</span>
-          </div>
-        ) : null}
         <div className="sidebarBottomActions">
-          <button className="sidebarIconButton" onClick={onToggleSettings} type="button">
-            <SettingsIcon />
-            <span>settings</span>
-          </button>
-          <Link className="sidebarIconButton" href="/profile">
+          <Link className="sidebarIconButton" href="/profile" prefetch={false}>
             <ProfileIcon />
             <span>profile</span>
           </Link>
+          <SignOutButton className="sidebarIconButton" />
         </div>
       </div>
     </aside>
@@ -1633,47 +2297,161 @@ function LanguagePicker({
   sourceLanguages: string[];
   targetLanguage: string;
 }) {
+  const [openMenu, setOpenMenu] = useState<"source" | "target" | "">("");
+  const [query, setQuery] = useState("");
+  const [sourceDraft, setSourceDraft] = useState(sourceLanguages);
+  const [targetDraft, setTargetDraft] = useState(targetLanguage);
+
+  useEffect(() => {
+    if (!openMenu) {
+      return;
+    }
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previous;
+    };
+  }, [openMenu]);
+
+  const filteredLanguages = languages.filter((language) => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) {
+      return true;
+    }
+    return `${language.code} ${language.name}`.toLowerCase().includes(needle);
+  });
+
+  function closeSheet() {
+    setOpenMenu("");
+  }
+
+  function openSheet(menu: "source" | "target") {
+    if (disabled) {
+      return;
+    }
+    setSourceDraft(sourceLanguages);
+    setTargetDraft(targetLanguage);
+    setQuery("");
+    setOpenMenu(menu);
+  }
+
+  function toggleDraftSource(code: string) {
+    if (code === targetLanguage) {
+      return;
+    }
+    setSourceDraft((current) => {
+      const next = current.includes(code)
+        ? current.filter((language) => language !== code)
+        : [...current, code];
+      return next.length > 0 ? next : current;
+    });
+  }
+
+  function clearDraftSource() {
+    setSourceDraft((current) => current.slice(0, 1));
+  }
+
+  function applySheet() {
+    if (openMenu === "source") {
+      for (const language of languages) {
+        const selected = sourceDraft.includes(language.code);
+        const current = sourceLanguages.includes(language.code);
+        if (selected !== current && language.code !== targetLanguage) {
+          onSourceToggle(language.code);
+        }
+      }
+    }
+    if (openMenu === "target" && targetDraft !== targetLanguage) {
+      onTargetChange(targetDraft);
+    }
+    closeSheet();
+  }
+
+  const sheetTitle = openMenu === "source" ? "Spoken languages" : "Translate to";
+  const activeSourceLabels = sourceDraft.map((code) => languageLabel(languageMap, code));
+  const activeTargetLabel = languageLabel(languageMap, targetDraft);
+
   return (
     <>
-      <details className="languageMenu">
-        <summary>
+      <button className="languageMenuButton" disabled={disabled} onClick={() => openSheet("source")} type="button">
+        <span>
           <span>Spoken</span>
           <strong>{sourceLanguages.map((code) => languageLabel(languageMap, code)).join(", ")}</strong>
-        </summary>
-        <div className="languageMenuPanel">
-          {languages.map((language) => (
-            <label className="languageOption" key={language.code}>
-              <input
-                checked={sourceLanguages.includes(language.code)}
-                disabled={disabled || language.code === targetLanguage}
-                onChange={() => onSourceToggle(language.code)}
-                type="checkbox"
-              />
-              <span>{language.flag} {language.name}</span>
-            </label>
-          ))}
-        </div>
-      </details>
-      <details className="languageMenu">
-        <summary>
+        </span>
+      </button>
+      <button className="languageMenuButton" disabled={disabled} onClick={() => openSheet("target")} type="button">
+        <span>
           <span>Translate to</span>
           <strong>{languageLabel(languageMap, targetLanguage)}</strong>
-        </summary>
-        <div className="languageMenuPanel">
-          {languages.map((language) => (
-            <label className="languageOption" key={language.code}>
-              <input
-                checked={targetLanguage === language.code}
-                disabled={disabled}
-                name="target-language"
-                onChange={() => onTargetChange(language.code)}
-                type="radio"
-              />
-              <span>{language.flag} {language.name}</span>
-            </label>
-          ))}
+        </span>
+      </button>
+      {openMenu ? (
+        <div className="languageSheetBackdrop" role="presentation">
+          <section className="languageSheet" aria-label={sheetTitle} aria-modal="true" role="dialog">
+            <div className="languageSheetHeader">
+              <div>
+                <p className="panelKicker">{openMenu === "source" ? "Spoken" : "Target"}</p>
+                <h3>{sheetTitle}</h3>
+              </div>
+              <button aria-label="Close language picker" className="languageSheetClose" onClick={closeSheet} type="button">
+                ×
+              </button>
+            </div>
+            <input
+              aria-label="Search languages"
+              className="languageSearchInput"
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search languages"
+              value={query}
+            />
+            <div className="languageSelectedChips" aria-label="Selected languages">
+              {openMenu === "source"
+                ? activeSourceLabels.map((label) => <span key={label}>{label}</span>)
+                : <span>{activeTargetLabel}</span>}
+            </div>
+            <div className="languageSheetList">
+              {filteredLanguages.map((language) => {
+                const checked = openMenu === "source"
+                  ? sourceDraft.includes(language.code)
+                  : targetDraft === language.code;
+                const unavailable = openMenu === "source" && language.code === targetLanguage;
+                return (
+                  <label className="languageOption" key={language.code}>
+                    <input
+                      checked={checked}
+                      disabled={unavailable}
+                      name={openMenu === "target" ? "target-language-draft" : undefined}
+                      onChange={() => {
+                        if (openMenu === "source") {
+                          toggleDraftSource(language.code);
+                        } else {
+                          setTargetDraft(language.code);
+                        }
+                      }}
+                      type={openMenu === "source" ? "checkbox" : "radio"}
+                    />
+                    <span>{language.flag} {language.name}</span>
+                  </label>
+                );
+              })}
+            </div>
+            <div className="languageSheetFooter">
+              {openMenu === "source" ? (
+                <button className="secondaryButton" onClick={clearDraftSource} type="button">
+                  Clear
+                </button>
+              ) : (
+                <button className="secondaryButton" onClick={closeSheet} type="button">
+                  Cancel
+                </button>
+              )}
+              <button className="primaryButton" onClick={applySheet} type="button">
+                Done
+              </button>
+            </div>
+          </section>
         </div>
-      </details>
+      ) : null}
     </>
   );
 }
@@ -1735,16 +2513,16 @@ function AudiencePicker({
       <legend>Who are you speaking to?</legend>
       <div className="audienceOptions">
         {AUDIENCE_PRESETS.map((preset) => (
-          <label className="audienceOption" key={preset.id}>
-            <input
-              checked={value === preset.id}
-              disabled={disabled}
-              name="audience-preset"
-              onChange={() => onChange(preset.id)}
-              type="radio"
-            />
+          <button
+            aria-pressed={value === preset.id}
+            className={`audienceOption ${value === preset.id ? "active" : ""}`}
+            disabled={disabled}
+            key={preset.id}
+            onClick={() => onChange(preset.id)}
+            type="button"
+          >
             <span className="audienceName">{preset.label}</span>
-          </label>
+          </button>
         ))}
       </div>
     </fieldset>
@@ -1778,15 +2556,6 @@ function BrandMark({ compact = false }: { compact?: boolean }) {
     <span className={`brandMark ${compact ? "compact" : ""}`} aria-hidden="true">
       <Image alt="" height={34} src="/favicon.svg" width={34} />
     </span>
-  );
-}
-
-function SettingsIcon() {
-  return (
-    <svg aria-hidden="true" className="sidebarIcon" viewBox="0 0 16 16">
-      <path d="M8 2v12M2 8h12M4 4l8 8M12 4l-8 8" />
-      <circle cx="8" cy="8" r="2.5" />
-    </svg>
   );
 }
 
@@ -2197,6 +2966,12 @@ function transcriptTitle(sourceLanguages: string[], targetLanguage: string, lang
   const spoken = sourceLanguages.map((code) => compactLanguageLabel(languageMap, code)).join(", ");
   const target = compactLanguageLabel(languageMap, targetLanguage);
   return `${spoken || "Spoken"} → ${target}`;
+}
+
+function transcriptShortTitle(sourceLanguages: string[], targetLanguage: string, languageMap: Map<string, Language>): string {
+  const spoken = sourceLanguages.map((code) => languageShortLabel(code, languageMap)).join(", ");
+  const target = languageShortLabel(targetLanguage, languageMap);
+  return `${spoken || "SRC"} → ${target}`;
 }
 
 function compactLanguageLabel(languageMap: Map<string, Language>, code: string): string {
@@ -2653,6 +3428,67 @@ function normalizeSourceLanguagesForTarget(sourceLanguages: string[], targetLang
     return sources;
   }
   return [targetLanguage === "en" ? "ja" : "en"];
+}
+
+function englishOverdubTargetLanguage(sourceLanguages: string[], targetLanguage: string): string {
+  if (targetLanguage && targetLanguage !== ENGLISH_LANGUAGE) {
+    return targetLanguage;
+  }
+  return sourceLanguages.find((code) => code && code !== ENGLISH_LANGUAGE) || "ja";
+}
+
+function languageShortLabel(code: string, languageMap: Map<string, Language>): string {
+  return languageMap.get(code)?.code.toUpperCase() || code.toUpperCase();
+}
+
+function directionLabel(direction: RealtimeDirection): string {
+  return direction === "english_to_target" ? "English to target" : "target to English";
+}
+
+function statusLabel(status: AppStatus): string {
+  if (status === "requesting microphone") return "Waiting for microphone permission";
+  if (status === "connecting") return "Connecting";
+  if (status === "listening") return "Live";
+  if (status === "stopping") return "Stopping";
+  if (status === "stopped") return "Stopped";
+  if (status === "error") return "Needs attention";
+  return "Idle";
+}
+
+function friendlyErrorMessage(message: string): string {
+  const value = message.trim();
+  if (!value) {
+    return "";
+  }
+  if (/not supported/i.test(value)) {
+    return "Realtime is not available in this browser or backend configuration. Try Chrome, allow microphone access, and confirm the backend has OpenAI realtime credentials.";
+  }
+  if (/permission|denied|notallowed/i.test(value)) {
+    return "Microphone permission was blocked. Enable microphone access in your browser settings, then start again.";
+  }
+  if (/client secret|OpenAI realtime/i.test(value)) {
+    return `${value} Check OPENAI_API_KEY and the realtime session endpoint on the backend.`;
+  }
+  if (/WebSocket|FastAPI|backend/i.test(value)) {
+    return `${value} Confirm the backend is running and reachable, then try again.`;
+  }
+  return value;
+}
+
+function formatSessionUpdated(updated: string | null | undefined): string {
+  if (!updated) {
+    return "Recent";
+  }
+  const date = new Date(updated);
+  if (Number.isNaN(date.getTime())) {
+    return "Recent";
+  }
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit"
+  }).format(date);
 }
 
 function inferPoiType(intent: SessionIntent): string {

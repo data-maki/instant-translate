@@ -40,6 +40,12 @@ export type TranscriptEvent =
       is_final: boolean;
     }
   | {
+      type: "openai_realtime_audio";
+      audio: string;
+      format: "pcm_s16le" | string;
+      sample_rate: number;
+    }
+  | {
       type: "saved";
       session: string;
       path: string;
@@ -97,6 +103,13 @@ export type AdaptPhraseResult = {
 
 export type TranslatePhraseResult = {
   target_translation: string;
+};
+
+export type RealtimeTranslationSession = {
+  value?: string;
+  client_secret?: {
+    value?: string;
+  };
 };
 
 export type SessionSummary = {
@@ -161,8 +174,17 @@ export async function fetchLanguages(): Promise<{
   return requestJson("/languages", { cache: "no-store" }, "Could not load languages");
 }
 
-export async function fetchSessions(): Promise<{ sessions: SessionSummary[] }> {
-  return requestJson("/sessions", { cache: "no-store" }, "Could not load sessions");
+export async function fetchSessions(options: { limit?: number } = {}): Promise<{ sessions: SessionSummary[]; total: number }> {
+  const query = options.limit ? `?limit=${encodeURIComponent(String(options.limit))}` : "";
+  const result = await requestJson<{ sessions: SessionSummary[]; total?: number }>(
+    `/sessions${query}`,
+    { cache: "no-store" },
+    "Could not load sessions"
+  );
+  return {
+    sessions: result.sessions,
+    total: result.total ?? result.sessions.length
+  };
 }
 
 export async function fetchSessionDetail(sessionName: string): Promise<SessionDetail> {
@@ -229,6 +251,16 @@ export async function fetchPlacesContext(payload: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
   }, "Could not load nearby places");
+}
+
+export async function createRealtimeTranslationSession(payload: {
+  target_language: string;
+}): Promise<RealtimeTranslationSession> {
+  return requestJson("/realtime/translation-session", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  }, "Could not start GPT realtime translation");
 }
 
 export async function adaptPhrase(payload: {

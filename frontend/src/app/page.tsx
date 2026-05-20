@@ -1,32 +1,18 @@
-import { TranslatorAppClient } from "@/components/TranslatorAppClient";
-import { fetchLanguages, fetchSessions, Language, SessionSummary } from "@/lib/api";
+import { LandingPage } from "@/components/LandingPage";
+import { auth } from "@/lib/auth";
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
 
 export const dynamic = "force-dynamic";
 
 export default async function Home() {
-  let initialLanguages: Language[] = [];
-  let initialSourceLanguages = ["ja"];
-  let initialTargetLanguage = "en";
-  let initialSessions: SessionSummary[] = [];
-  let initialLoadError = "";
+  const session = await auth.api.getSession({
+    headers: await headers()
+  });
 
-  try {
-    const [languageResult, sessionResult] = await Promise.all([fetchLanguages(), fetchSessions()]);
-    initialLanguages = languageResult.languages;
-    initialSourceLanguages = languageResult.default_source_languages;
-    initialTargetLanguage = languageResult.default_target_language;
-    initialSessions = sessionResult.sessions;
-  } catch (error) {
-    initialLoadError = error instanceof Error ? error.message : "Could not load backend data.";
+  if (session) {
+    redirect("/chat");
   }
 
-  return (
-    <TranslatorAppClient
-      initialLanguages={initialLanguages}
-      initialLoadError={initialLoadError}
-      initialSessions={initialSessions}
-      initialSourceLanguages={initialSourceLanguages}
-      initialTargetLanguage={initialTargetLanguage}
-    />
-  );
+  return <LandingPage />;
 }
