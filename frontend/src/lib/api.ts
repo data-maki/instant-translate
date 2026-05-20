@@ -54,6 +54,12 @@ export type TranscriptEvent =
       phrases: Phrase[];
       token_count: number;
     }
+  | {
+      type: "session_renamed";
+      session: string;
+      title: string;
+      summary?: string | null;
+    }
   | { type: "error"; message: string };
 
 export type RediarizeResult = {
@@ -182,17 +188,25 @@ export async function fetchLanguages(): Promise<{
 }
 
 export async function fetchSessions(
-  options: { limit?: number; userId?: string } = {}
-): Promise<{ sessions: SessionSummary[]; total: number }> {
-  const query = options.limit ? `?limit=${encodeURIComponent(String(options.limit))}` : "";
-  const result = await requestJson<{ sessions: SessionSummary[]; total?: number }>(
+  options: { limit?: number; offset?: number; userId?: string } = {}
+): Promise<{ sessions: SessionSummary[]; total: number; offset: number }> {
+  const params = new URLSearchParams();
+  if (options.limit) {
+    params.set("limit", String(options.limit));
+  }
+  if (options.offset) {
+    params.set("offset", String(options.offset));
+  }
+  const query = params.toString() ? `?${params.toString()}` : "";
+  const result = await requestJson<{ sessions: SessionSummary[]; total?: number; offset?: number }>(
     `/sessions${query}`,
     withUserHeader({ cache: "no-store" }, options.userId),
     "Could not load sessions"
   );
   return {
     sessions: result.sessions,
-    total: result.total ?? result.sessions.length
+    total: result.total ?? result.sessions.length,
+    offset: result.offset ?? options.offset ?? 0,
   };
 }
 
@@ -216,6 +230,18 @@ export async function deleteSession(sessionName: string, userId?: string): Promi
   return requestJson(`/sessions/${encodeURIComponent(sessionName)}`, withUserHeader({
     method: "DELETE"
   }, userId), "Could not delete session");
+}
+
+export async function autoTitleSession(
+  sessionName: string,
+  options: { userId?: string; force?: boolean } = {},
+): Promise<{ name: string; title: string; summary: string; cached: boolean }> {
+  const params = options.force ? "?force=true" : "";
+  return requestJson(
+    `/sessions/${encodeURIComponent(sessionName)}/auto-title${params}`,
+    withUserHeader({ method: "POST" }, options.userId),
+    "Could not auto-title session",
+  );
 }
 
 export async function saveSessionAdaptation(payload: {

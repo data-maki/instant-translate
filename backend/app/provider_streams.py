@@ -23,6 +23,7 @@ OPENAI_TRANSLATION_SAMPLE_RATE = 24000
 NUM_CHANNELS = 1
 
 SendEvent = Callable[[dict[str, Any]], Awaitable[None]]
+OpenAISegmentSink = Callable[[str, str], Awaitable[None]]
 
 
 class ProviderFanout:
@@ -32,10 +33,12 @@ class ProviderFanout:
         *,
         enable_openai_realtime: bool = False,
         enable_deepgram: bool = True,
+        on_openai_final_segment: OpenAISegmentSink | None = None,
     ):
         self.send_event = send_event
         self.enable_openai_realtime = enable_openai_realtime
         self.enable_deepgram = enable_deepgram
+        self.on_openai_final_segment = on_openai_final_segment
         self.queues: list[asyncio.Queue[bytes | None]] = []
         self.tasks: list[asyncio.Task[None]] = []
 
@@ -46,7 +49,11 @@ class ProviderFanout:
 
         openai_key = os.environ.get("OPENAI_API_KEY")
         if self.enable_openai_realtime and openai_key:
-            self._add_stream(run_openai_translation_bridge(openai_key, self.send_event))
+            self._add_stream(run_openai_translation_bridge(
+                openai_key,
+                self.send_event,
+                on_final_segment=self.on_openai_final_segment,
+            ))
 
     def publish(self, payload: bytes) -> None:
         for queue in self.queues:
@@ -121,7 +128,12 @@ def run_deepgram_bridge(api_key: str, send_event: SendEvent):
     return bridge
 
 
-def run_openai_translation_bridge(api_key: str, send_event: SendEvent):
+def run_openai_translation_bridge(
+    api_key: str,
+    send_event: SendEvent,
+    *,
+    on_final_segment: OpenAISegmentSink | None = None,
+):
     async def bridge(audio_queue: asyncio.Queue[bytes | None]) -> None:
         try:
             async with websockets.connect(
@@ -144,6 +156,17 @@ def run_openai_translation_bridge(api_key: str, send_event: SendEvent):
                 sender = asyncio.create_task(send_openai_translation_audio(openai, audio_queue))
                 input_text = ""
                 output_text = ""
+                last_input_committed = ""
+                last_output_committed = ""
+
+                async def commit_segment(kind: str, text: str) -> None:
+                    if not text or not on_final_segment:
+                        return
+                    try:
+                        await on_final_segment(kind, text)
+                    except Exception:
+                        pass
+
                 async for message in openai:
                     data = json.loads(message)
                     event_type = data.get("type")
@@ -161,6 +184,20 @@ def run_openai_translation_bridge(api_key: str, send_event: SendEvent):
                             await send_event(openai_realtime_audio(delta))
                     elif event_type == "session.closed":
                         break
+                    elif event_type == "session.input_transcript.done":
+                        final_text = input_text.strip()
+                        if final_text and final_text != last_input_committed:
+                            await send_event(provider_update("openai_realtime", "transcript", final_text, True))
+                            await commit_segment("transcript", final_text)
+                            last_input_committed = final_text
+                        input_text = ""
+                    elif event_type == "session.output_transcript.done":
+                        final_text = output_text.strip()
+                        if final_text and final_text != last_output_committed:
+                            await send_event(provider_update("openai_realtime", "translation", final_text, True))
+                            await commit_segment("translation", final_text)
+                            last_output_committed = final_text
+                        output_text = ""
                     elif event_type and event_type.endswith(".done"):
                         if input_text.strip():
                             await send_event(provider_update("openai_realtime", "transcript", input_text.strip(), True))
@@ -168,6 +205,11 @@ def run_openai_translation_bridge(api_key: str, send_event: SendEvent):
                             await send_event(provider_update("openai_realtime", "translation", output_text.strip(), True))
                     elif event_type == "error":
                         await send_event(provider_update("openai_realtime", "error", str(data.get("error") or data), True))
+                # Flush any in-flight partial as a final segment when the stream closes.
+                if input_text.strip() and input_text.strip() != last_input_committed:
+                    await commit_segment("transcript", input_text.strip())
+                if output_text.strip() and output_text.strip() != last_output_committed:
+                    await commit_segment("translation", output_text.strip())
                 await sender
         except Exception as exc:
             await send_event(provider_update("openai_realtime", "error", str(exc), True))

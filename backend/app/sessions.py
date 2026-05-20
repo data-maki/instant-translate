@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
 from . import shared
 from .languages import validate_language_pair
 from cli.live_transcriber.japanese import to_romaji
 from cli.live_transcriber.session import Session, resolve_language
+
+
+logger = logging.getLogger(__name__)
+
+_background_summary_tasks: set[asyncio.Task[Any]] = set()
 
 
 DEFAULT_CONTEXT = (
@@ -105,12 +112,14 @@ def parse_session_time(value: Any) -> float | None:
 
 
 def session_display_title(session_dir: Path, state: dict[str, Any] | None) -> str:
-    if state and state.get("title"):
-        return str(state["title"])[:48]
+    state_title = str((state or {}).get("title") or "").strip()
+    # Treat a stale "New chat" in state as no title so the generated summary wins.
+    if state_title and state_title.lower() != "new chat":
+        return state_title[:48]
     summary = read_session_summary(session_dir)
     if summary and summary.get("title"):
         return str(summary["title"])[:48]
-    return "New chat"
+    return state_title[:48] if state_title else "New chat"
 
 
 def read_session_summary(session_dir: Path) -> dict[str, Any] | None:
@@ -152,6 +161,10 @@ def summarize_finished_session(session: Session) -> dict[str, str] | None:
     if existing and existing.get("title") and existing.get("summary"):
         return {"title": str(existing["title"]), "summary": str(existing["summary"])}
     if not os.environ.get("OPENAI_API_KEY"):
+        logger.warning("Skipping session title generation: OPENAI_API_KEY missing (session=%s)", session.name)
+        return None
+    if not session.final_tokens:
+        logger.info("Skipping session title generation: no final tokens (session=%s)", session.name)
         return None
 
     result = generate_session_summary(session.name, session.final_tokens)
@@ -162,7 +175,37 @@ def summarize_finished_session(session: Session) -> dict[str, str] | None:
             result["title"],
             os.environ.get("OPENAI_SESSION_TITLE_MODEL", "gpt-4o-mini"),
         )
+    else:
+        logger.warning("Title generation produced no result (session=%s)", session.name)
     return result
+
+
+def schedule_session_summary(
+    session: Session,
+    on_done: Callable[[dict[str, str]], Awaitable[None]] | None = None,
+) -> None:
+    """Run title generation in the background. Fire-and-forget; survives caller cancellation."""
+
+    async def runner() -> None:
+        try:
+            result = await asyncio.to_thread(summarize_finished_session, session)
+        except Exception:
+            logger.exception("Background summarize_finished_session crashed (session=%s)", session.name)
+            return
+        if result and on_done:
+            try:
+                await on_done(result)
+            except Exception:
+                logger.exception("Session-renamed callback failed (session=%s)", session.name)
+
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.run(runner())
+        return
+    task = loop.create_task(runner())
+    _background_summary_tasks.add(task)
+    task.add_done_callback(_background_summary_tasks.discard)
 
 
 def generate_session_summary(session_name: str, tokens: list[dict[str, Any]]) -> dict[str, str] | None:
@@ -176,11 +219,12 @@ def generate_session_summary(session_name: str, tokens: list[dict[str, Any]]) ->
         "task": (
             "Summarize this bilingual transcript and generate a short sidebar title. "
             "The title should be 2 to 6 words, concrete, and max 48 characters. "
-            "The summary should be one concise sentence."
+            "The summary should be one concise sentence. "
+            "Respond as a JSON object with exactly two string fields: \"title\" and \"summary\"."
         ),
         "session_id": session_name,
         "transcript": transcript,
-        "output_schema": {"summary": "...", "title": "..."},
+        "output_schema_json": {"summary": "string", "title": "string"},
     }
     model = os.environ.get("OPENAI_SESSION_TITLE_MODEL", "gpt-4o-mini")
     try:
@@ -199,13 +243,25 @@ def generate_session_summary(session_name: str, tokens: list[dict[str, Any]]) ->
             timeout=30,
         )
         if response.status_code != 200:
+            logger.warning(
+                "OpenAI title API returned %s for session=%s body=%s",
+                response.status_code,
+                session_name,
+                response.text[:300],
+            )
             return None
         payload = json.loads(extract_openai_text(response.json()))
-    except (OSError, KeyError, ValueError, requests.RequestException):
+    except (OSError, KeyError, ValueError, requests.RequestException) as exc:
+        logger.warning("OpenAI title API call failed for session=%s: %s", session_name, exc)
         return None
     summary = str(payload.get("summary") or "").strip()
     title = str(payload.get("title") or "").strip().strip('"').strip()
     if not summary or not title:
+        logger.warning(
+            "OpenAI title response missing fields for session=%s payload=%s",
+            session_name,
+            payload,
+        )
         return None
     return {"summary": summary, "title": title[:48]}
 

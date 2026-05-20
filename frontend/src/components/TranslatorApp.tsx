@@ -6,6 +6,7 @@ import Image from "next/image";
 import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   adaptPhrase,
+  autoTitleSession,
   createRealtimeTranslationSession,
   deleteSession as deleteSavedSession,
   fetchPlacesContext,
@@ -191,7 +192,8 @@ type RealtimeCaptionDraft = {
 
 const DEEPL_FORMALITY_STORAGE_KEY = "mil-decoder-deepl-formality-v1";
 const DISPLAY_GROUP_PAUSE_SECONDS = 10;
-const INITIAL_SESSION_LIMIT = 8;
+const INITIAL_SESSION_LIMIT = 24;
+const SESSION_PAGE_SIZE = 24;
 const DEFAULT_SESSION_PLACE_CONTEXT: SessionPlaceContext = {
   location_hint: "",
   location_context: "",
@@ -305,7 +307,7 @@ export function TranslatorApp({
   const [reviewStatus, setReviewStatus] = useState("");
   const [sessions, setSessions] = useState<SessionSummary[]>(initialSessions);
   const [sessionTotal, setSessionTotal] = useState(initialSessionTotal ?? initialSessions.length);
-  const [sessionsExpanded, setSessionsExpanded] = useState(false);
+  const [loadingMoreSessions, setLoadingMoreSessions] = useState(false);
   const [sessionsOpen, setSessionsOpen] = useDrawerState();
   const [loadingSession, setLoadingSession] = useState("");
   const [micCaptureEnabled, setMicCaptureEnabled] = useState(true);
@@ -370,12 +372,6 @@ export function TranslatorApp({
   }, [activeDurationSeconds, phrases, tokenCount]);
   const hasFinishedSession = Boolean(activeSession && savedPath && !isLive);
   const sessionGroups = useMemo(() => groupSessions(sessions), [sessions]);
-  const visibleSessionGroups = useMemo(() => {
-    if (sessionsExpanded) {
-      return sessionGroups;
-    }
-    return limitSessionGroups(sessionGroups, 8);
-  }, [sessionGroups, sessionsExpanded]);
   const visiblePhrases = useMemo(() => {
     if (transcriptLatencyMode === "fast") {
       return phrases;
@@ -1010,25 +1006,39 @@ export function TranslatorApp({
 
   async function refreshSessions() {
     try {
-      const result = await fetchSessions({ limit: sessionsExpanded ? undefined : INITIAL_SESSION_LIMIT, userId });
+      const desired = Math.max(INITIAL_SESSION_LIMIT, sessions.length);
+      const result = await fetchSessions({ limit: desired, userId });
       setSessions(result.sessions);
       setSessionTotal(result.total);
+      autoTitleMissingSessions(result.sessions);
     } catch {
       // The main health/language load already exposes backend connection errors.
     }
   }
 
-  async function toggleSessionsExpanded() {
-    if (!sessionsExpanded && sessions.length < sessionTotal) {
-      try {
-        const result = await fetchSessions({ userId });
-        setSessions(result.sessions);
-        setSessionTotal(result.total);
-      } catch {
-        // Keep the compact list if the history refresh fails.
-      }
+  async function loadMoreSessions() {
+    if (loadingMoreSessions || sessions.length >= sessionTotal) {
+      return;
     }
-    setSessionsExpanded((current) => !current);
+    setLoadingMoreSessions(true);
+    try {
+      const result = await fetchSessions({
+        limit: SESSION_PAGE_SIZE,
+        offset: sessions.length,
+        userId,
+      });
+      setSessions((current) => {
+        const seen = new Set(current.map((session) => session.name));
+        const next = result.sessions.filter((session) => !seen.has(session.name));
+        return next.length ? [...current, ...next] : current;
+      });
+      setSessionTotal(result.total);
+      autoTitleMissingSessions(result.sessions);
+    } catch {
+      // Leave what we have; the sentinel will retry on next intersection.
+    } finally {
+      setLoadingMoreSessions(false);
+    }
   }
 
   async function loadSession(name: string) {
@@ -1252,6 +1262,23 @@ export function TranslatorApp({
       refreshSessions();
       return;
     }
+    if (message.type === "session_renamed") {
+      const newTitle = String(message.title || "").trim();
+      if (!newTitle) {
+        return;
+      }
+      setSessions((current) =>
+        current.map((session) => (session.name === message.session ? { ...session, title: newTitle } : session))
+      );
+      if (activeSession === message.session) {
+        setActiveSessionTitle(newTitle);
+      }
+      const cached = sessionDetailCacheRef.current[message.session];
+      if (cached?.session) {
+        cached.session.title = newTitle;
+      }
+      return;
+    }
     if (message.type === "error") {
       setError(message.message);
       setStatus("error");
@@ -1449,17 +1476,16 @@ export function TranslatorApp({
         <SessionSidebar
           activeSession={activeSession}
           activeSessionTitle={activeSessionTitle}
-          expanded={sessionsExpanded}
-          groups={visibleSessionGroups}
-          hasMore={sessionTotal > countGroupedSessions(visibleSessionGroups)}
+          allGroups={sessionGroups}
           isOpen={sessionsOpen}
+          loadingMore={loadingMoreSessions}
           loadingSession={loadingSession}
           onClose={() => setSessionsOpen(false)}
           onDelete={deleteSessionByName}
           onLoad={loadSession}
+          onLoadMore={loadMoreSessions}
           onNew={newSession}
           onRename={renameSessionTitle}
-          onToggleExpanded={() => void toggleSessionsExpanded()}
           total={sessionTotal}
           userName={userName}
         />
@@ -1477,7 +1503,21 @@ export function TranslatorApp({
                 <span />
                 <span />
               </button>
-              <TranscriptTitle languageMap={languageMap} sourceLanguages={sourceALanguages} targetLanguage={sourceB} />
+              {showOnboarding ? (
+                <div className="headerLanguagePicker" aria-label="Transcript languages">
+                  <LanguagePicker
+                    disabled={isLive}
+                    languageMap={languageMap}
+                    languages={orderedLanguages}
+                    onSourceToggle={toggleSourceLanguage}
+                    onTargetChange={changeTargetLanguage}
+                    sourceLanguages={sourceALanguages}
+                    targetLanguage={sourceB}
+                  />
+                </div>
+              ) : (
+                <TranscriptTitle languageMap={languageMap} sourceLanguages={sourceALanguages} targetLanguage={sourceB} />
+              )}
             </div>
             <div className="transcriptMeta">
               <label
@@ -1510,19 +1550,6 @@ export function TranslatorApp({
               ) : null}
             </div>
           </div>
-          {showOnboarding ? (
-            <div className="languageRail" aria-label="Transcript languages">
-              <LanguagePicker
-                disabled={isLive}
-                languageMap={languageMap}
-                languages={orderedLanguages}
-                onSourceToggle={toggleSourceLanguage}
-                onTargetChange={changeTargetLanguage}
-                sourceLanguages={sourceALanguages}
-                targetLanguage={sourceB}
-              />
-            </div>
-          ) : null}
           {showOnboarding && openAIRealtimeEnabled ? (
             <RealtimeStartPanel
               canStart={canStart && hasLanguagePair}
@@ -1868,14 +1895,50 @@ function ConversationOnboarding({
   preset: typeof AUDIENCE_PRESETS[number];
 }) {
   return (
-    <section className="startPanel" aria-label="Start conversation">
-      <div className="quickStartFields">
-        <AudiencePicker disabled={disabled} onChange={onAudienceChange} value={audiencePreset} />
-        <SpeakerCountPicker disabled={disabled} onChange={onSpeakerCountChange} value={expectedSpeakerCount} />
+    <section className="chatHero" aria-label="Start conversation">
+      <div className="chatHeroInner">
+        <h2 className="chatHeroHeadline">Ready when you are.</h2>
+        <button
+          aria-label="Start session"
+          className="chatHeroMic"
+          disabled={!canStart}
+          onClick={onStart}
+          type="button"
+        >
+          <HeroMicIcon />
+        </button>
+        <p className="chatHeroSubhead">Who are you speaking to?</p>
+        <div className="chatHeroChips" role="group" aria-label="Who are you speaking to?">
+          {AUDIENCE_PRESETS.map((option) => (
+            <button
+              aria-pressed={audiencePreset === option.id}
+              className={`chatHeroChip ${audiencePreset === option.id ? "active" : ""}`}
+              disabled={disabled}
+              key={option.id}
+              onClick={() => onAudienceChange(option.id)}
+              type="button"
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+        <div className="chatHeroSpeakers" role="group" aria-label="Expected speakers">
+          <span className="chatHeroSpeakersLabel">Speakers</span>
+          {SPEAKER_COUNT_OPTIONS.map((count) => (
+            <button
+              aria-pressed={expectedSpeakerCount === count}
+              className={`chatHeroSpeakerOption ${expectedSpeakerCount === count ? "active" : ""}`}
+              disabled={disabled}
+              key={count}
+              onClick={() => onSpeakerCountChange(count)}
+              type="button"
+            >
+              {count === "6" ? "6+" : count}
+            </button>
+          ))}
+        </div>
       </div>
-
-      <ToneSummary preset={preset} />
-      <details className="advancedSetup">
+      {/*<details className="advancedSetup">
         <summary>Add a note (optional)</summary>
         <div className="startFields contextFields">
           <label className="contextField">
@@ -1902,15 +1965,21 @@ function ConversationOnboarding({
             ))}
           </div>
         </div>
-      </details>
+      </details>*/}
 
-      <div className="startPanelFooter">
-        <button className="primaryButton" onClick={onStart} disabled={!canStart} type="button">
-          Start session
-        </button>
-      </div>
-      {error ? <div className="errorBox">{error}</div> : null}
+      {error ? <div className="errorBox chatHeroError">{error}</div> : null}
     </section>
+  );
+}
+
+function HeroMicIcon() {
+  return (
+    <svg aria-hidden="true" className="chatHeroMicIcon" viewBox="0 0 24 24">
+      <path d="M12 3a3.2 3.2 0 0 0-3.2 3.2v6a3.2 3.2 0 1 0 6.4 0v-6A3.2 3.2 0 0 0 12 3Z" />
+      <path d="M5.5 11.2a6.5 6.5 0 0 0 13 0" />
+      <path d="M12 17.7v3.1" />
+      <path d="M9 20.8h6" />
+    </svg>
   );
 }
 
@@ -2022,33 +2091,31 @@ function LiveCanvas({
 function SessionSidebar({
   activeSession,
   activeSessionTitle,
-  expanded,
-  groups,
-  hasMore,
+  allGroups,
   isOpen,
+  loadingMore,
   loadingSession,
   onClose,
   onDelete,
   onLoad,
+  onLoadMore,
   onNew,
   onRename,
-  onToggleExpanded,
   total,
   userName
 }: {
   activeSession: string;
   activeSessionTitle: string;
-  expanded: boolean;
-  groups: SessionGroup[];
-  hasMore: boolean;
+  allGroups: SessionGroup[];
   isOpen: boolean;
+  loadingMore: boolean;
   loadingSession: string;
   onClose: () => void;
   onDelete: (name: string) => Promise<void>;
   onLoad: (name: string) => void;
+  onLoadMore: () => Promise<void> | void;
   onNew: () => void;
   onRename: (name: string, title: string) => Promise<void>;
-  onToggleExpanded: () => void;
   total: number;
   userName: string;
 }) {
@@ -2056,6 +2123,30 @@ function SessionSidebar({
   const [renamingSession, setRenamingSession] = useState("");
   const [renameDraft, setRenameDraft] = useState("");
   const [confirmDeleteSession, setConfirmDeleteSession] = useState("");
+  const [listEl, setListEl] = useState<HTMLDivElement | null>(null);
+  const groups = allGroups;
+  const visibleCount = countGroupedSessions(groups);
+  const hasMore = total > visibleCount;
+  const skeletonCount = hasMore ? Math.min(6, Math.max(1, total - visibleCount)) : 0;
+
+  // Callback ref: when the sentinel attaches, wire up IntersectionObserver against
+  // the scroll container. React 19 honors the returned cleanup when the ref detaches
+  // or when deps change.
+  function attachLoadMoreSentinel(node: HTMLDivElement | null) {
+    if (!node || !listEl || !hasMore || typeof IntersectionObserver === "undefined") {
+      return;
+    }
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) {
+          void onLoadMore();
+        }
+      },
+      { root: listEl, rootMargin: "200px 0px", threshold: 0 },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }
 
   async function saveRename(session: SessionSummary) {
     await onRename(session.name, renameDraft);
@@ -2086,12 +2177,11 @@ function SessionSidebar({
         </div>
       </div>
 
-      <div className="sessionList">
+      <div className="sessionList" ref={setListEl}>
         <button aria-label="Start a new chat" className="sessionButton newChatButton" onClick={onNew} type="button">
           <NewChatIcon />
           <span className="sessionTitle">New chat</span>
         </button>
-        <p className="sessionSectionLabel">History</p>
         {activeSession && !groups.some((group) => group.sessions.some((session) => session.name === activeSession)) ? (
           <section className="sessionGroup">
             <h3>Current</h3>
@@ -2142,10 +2232,6 @@ function SessionSidebar({
                     </button>
                     {menuOpen ? (
                       <div className="sessionMenu" role="menu">
-                        <div className="sessionMenuMeta">
-                          <span>{formatSessionUpdated(session.updated)}</span>
-                          <span>Duration {formatDuration(session.duration_seconds)}</span>
-                        </div>
                         {isRenaming ? (
                           <form
                             className="sessionRenameForm"
@@ -2178,8 +2264,7 @@ function SessionSidebar({
                           </form>
                         ) : confirmDeleteSession === session.name ? (
                           <div className="sessionDeleteConfirm">
-                            <strong>Delete this chat?</strong>
-                            <span>This removes it from history.</span>
+                            <span className="sessionDeleteConfirmLabel">Delete chat?</span>
                             <div className="sessionMenuActions">
                               <button className="sessionMenuAction danger" onClick={() => void eraseSession(session)} type="button">
                                 Delete
@@ -2190,21 +2275,30 @@ function SessionSidebar({
                             </div>
                           </div>
                         ) : (
-                          <div className="sessionMenuActions">
-                            <button
-                              className="sessionMenuAction"
-                              onClick={() => {
-                                setRenamingSession(session.name);
-                                setRenameDraft(session.title || session.name);
-                              }}
-                              type="button"
-                            >
-                              Rename
-                            </button>
-                            <button className="sessionMenuAction danger" onClick={() => setConfirmDeleteSession(session.name)} type="button">
-                              Delete
-                            </button>
-                          </div>
+                          <>
+                            <div className="sessionMenuActions">
+                              <button
+                                className="sessionMenuAction"
+                                onClick={() => {
+                                  setRenamingSession(session.name);
+                                  setRenameDraft(session.title || session.name);
+                                }}
+                                type="button"
+                              >
+                                <PencilIcon />
+                                <span>Rename</span>
+                              </button>
+                              <button className="sessionMenuAction danger" onClick={() => setConfirmDeleteSession(session.name)} type="button">
+                                <TrashIcon />
+                                <span>Delete</span>
+                              </button>
+                            </div>
+                            <div className="sessionMenuMeta">
+                              {formatSessionUpdated(session.updated)}
+                              <span aria-hidden="true">·</span>
+                              {formatDuration(session.duration_seconds)}
+                            </div>
+                          </>
                         )}
                       </div>
                     ) : null}
@@ -2227,13 +2321,26 @@ function SessionSidebar({
             );
           })
         )}
+        {hasMore ? (
+          <div className="sessionSkeletonGroup" aria-hidden="true">
+            {Array.from({ length: skeletonCount }).map((_, index) => (
+              <div className="sessionSkeletonRow" key={`skeleton-${index}`}>
+                <span className="sessionSkeletonBar" />
+              </div>
+            ))}
+          </div>
+        ) : null}
+        {hasMore ? (
+          <div
+            aria-hidden="true"
+            className="sessionLoadSentinel"
+            ref={attachLoadMoreSentinel}
+            role="presentation"
+          >
+            {loadingMore ? <span className="sessionLoadSpinner" /> : null}
+          </div>
+        ) : null}
       </div>
-
-      {hasMore || expanded ? (
-        <button className="filterButton fullWidthButton" onClick={onToggleExpanded} type="button">
-          {expanded ? "Show fewer" : `Show all ${total}`}
-        </button>
-      ) : null}
 
       <div className="sidebarBottom">
         <Link className="sidebarProfileChip" href="/profile" prefetch={false}>
@@ -2299,6 +2406,36 @@ function KebabIcon() {
       <circle cx="3" cy="8" r="1.5" fill="currentColor" />
       <circle cx="8" cy="8" r="1.5" fill="currentColor" />
       <circle cx="13" cy="8" r="1.5" fill="currentColor" />
+    </svg>
+  );
+}
+
+function PencilIcon() {
+  return (
+    <svg aria-hidden="true" className="menuActionIcon" viewBox="0 0 16 16">
+      <path
+        d="M11.4 2.6a1.4 1.4 0 0 1 2 2L5.6 12.4 3 13l.6-2.6 7.8-7.8Z"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.3"
+      />
+    </svg>
+  );
+}
+
+function TrashIcon() {
+  return (
+    <svg aria-hidden="true" className="menuActionIcon" viewBox="0 0 16 16">
+      <path
+        d="M3.5 4.5h9M6.5 4.5V3.2c0-.4.3-.7.7-.7h1.6c.4 0 .7.3.7.7v1.3M5 4.5l.6 8.1c0 .5.4.9.9.9h3c.5 0 .9-.4.9-.9L11 4.5"
+        fill="none"
+        stroke="currentColor"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeWidth="1.3"
+      />
     </svg>
   );
 }
@@ -2401,6 +2538,29 @@ function LanguagePicker({
     closeSheet();
   }
 
+  function handleSearchKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      applySheet();
+      return;
+    }
+    if (event.key === " " && query.trim().length > 0) {
+      const top = filteredLanguages.find((language) =>
+        openMenu === "source" ? language.code !== targetLanguage : true
+      );
+      if (!top) {
+        return;
+      }
+      event.preventDefault();
+      if (openMenu === "source") {
+        toggleDraftSource(top.code);
+      } else {
+        setTargetDraft(top.code);
+      }
+      setQuery("");
+    }
+  }
+
   const sheetTitle = openMenu === "source" ? "Spoken languages" : "Translate to";
   const activeSourceLabels = sourceDraft.map((code) => languageLabel(languageMap, code));
   const activeTargetLabel = languageLabel(languageMap, targetDraft);
@@ -2439,15 +2599,36 @@ function LanguagePicker({
             </div>
             <input
               aria-label="Search languages"
+              autoFocus
               className="languageSearchInput"
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search languages"
+              onKeyDown={handleSearchKeyDown}
+              placeholder="Search languages — Space to add, Enter to confirm"
               value={query}
             />
             <div className="languageSelectedChips" aria-label="Selected languages">
               {openMenu === "source"
-                ? activeSourceLabels.map((label) => <span key={label}>{label}</span>)
-                : <span>{activeTargetLabel}</span>}
+                ? sourceDraft.map((code) => {
+                    const label = languageLabel(languageMap, code);
+                    const canRemove = sourceDraft.length > 1;
+                    return (
+                      <span className="languageSelectedChip" key={code}>
+                        <span>{label}</span>
+                        {canRemove ? (
+                          <button
+                            aria-label={`Remove ${label}`}
+                            className="languageSelectedChipRemove"
+                            onClick={() => toggleDraftSource(code)}
+                            title="Remove"
+                            type="button"
+                          >
+                            ×
+                          </button>
+                        ) : null}
+                      </span>
+                    );
+                  })
+                : <span className="languageSelectedChip">{activeTargetLabel}</span>}
             </div>
             <div className="languageSheetList">
               {filteredLanguages.map((language) => {

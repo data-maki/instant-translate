@@ -28,7 +28,21 @@ from .phrase_upgrade import (
     deepl_translate_url as _deepl_translate_url,
     translate_with_deepl as _translate_with_deepl,
 )
-from .sessions import DEFAULT_CONTEXT, build_phrases, extract_openai_text, make_session, read_session_state, list_sessions, sanitize_session_name, session_belongs_to, session_display_title, session_duration_seconds
+from .sessions import (
+    DEFAULT_CONTEXT,
+    build_phrases,
+    extract_openai_text,
+    generate_session_summary,
+    list_sessions,
+    make_session,
+    read_session_state,
+    read_session_summary,
+    sanitize_session_name,
+    session_belongs_to,
+    session_display_title,
+    session_duration_seconds,
+    write_session_summary,
+)
 from .soniox import NUM_CHANNELS, SAMPLE_RATE, run_transcription_bridge
 from cli.live_transcriber.async_diarize import AsyncDiarizeError, redo_diarization
 
@@ -599,12 +613,17 @@ def _require_owner(state: dict[str, Any] | None, user_id: str | None) -> None:
 @app.get("/sessions")
 def sessions(
     limit: int | None = Query(default=None, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     x_user_id: str | None = Header(default=None, alias="X-User-Id"),
 ) -> dict[str, Any]:
     all_sessions = list_sessions(user_id=x_user_id)
+    sliced = all_sessions[offset:]
+    if limit is not None:
+        sliced = sliced[:limit]
     return {
-        "sessions": all_sessions[:limit] if limit is not None else all_sessions,
+        "sessions": sliced,
         "total": len(all_sessions),
+        "offset": offset,
     }
 
 
@@ -705,6 +724,69 @@ def rename_session(
             pass
 
     return {"name": safe_name, "title": state["title"]}
+
+
+@app.post("/sessions/{session_name}/auto-title")
+def auto_title_session(
+    session_name: str,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    force: bool = Query(default=False),
+) -> dict[str, Any]:
+    """Generate a title for a session that was never titled (or force a refresh).
+
+    This is the catch-up path for sessions whose fire-and-forget rename never
+    completed at close time (e.g., the server restarted, the OpenAI API was
+    down, or the session predates the auto-rename feature).
+    """
+    state = read_session_state(session_name)
+    if not state:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    _require_owner(state, x_user_id)
+
+    if not os.environ.get("OPENAI_API_KEY"):
+        raise HTTPException(status_code=503, detail="OPENAI_API_KEY is not configured.")
+
+    safe_name = sanitize_session_name(session_name)
+    session_dir = shared.REPO_ROOT / "output" / safe_name
+
+    if not force:
+        existing = read_session_summary(session_dir)
+        if existing and existing.get("title") and existing.get("summary"):
+            return {
+                "name": safe_name,
+                "title": str(existing["title"])[:48],
+                "summary": str(existing["summary"]),
+                "cached": True,
+            }
+
+    tokens = _latest_tokens_for_session(session_dir, state)
+    if not tokens:
+        raise HTTPException(status_code=422, detail="Session has no transcript to summarize.")
+
+    result = generate_session_summary(safe_name, tokens)
+    if not result:
+        raise HTTPException(status_code=502, detail="Title generation failed. See server logs for details.")
+
+    model = os.environ.get("OPENAI_SESSION_TITLE_MODEL", "gpt-4o-mini")
+    write_session_summary(session_dir, result["summary"], result["title"], model)
+
+    state_title = str(state.get("title") or "").strip()
+    if not state_title or state_title.lower() == "new chat":
+        state["title"] = result["title"][:48]
+        try:
+            (session_dir / "session_state.json").write_text(
+                json.dumps(state, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except OSError:
+            pass
+
+    return {
+        "name": safe_name,
+        "title": result["title"][:48],
+        "summary": result["summary"],
+        "cached": False,
+    }
 
 
 @app.delete("/sessions/{session_name}")

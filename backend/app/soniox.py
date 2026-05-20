@@ -5,12 +5,20 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 import websockets
 
 from .provider_streams import ProviderFanout
-from .sessions import DEFAULT_CONTEXT, build_phrases, make_session, process_soniox_tokens, summarize_finished_session
+from .sessions import (
+    DEFAULT_CONTEXT,
+    build_phrases,
+    make_session,
+    process_soniox_tokens,
+    read_session_summary,
+    schedule_session_summary,
+)
 
 
 SONIOX_WEBSOCKET_URL = "wss://stt-rt.soniox.com/transcribe-websocket"
@@ -221,10 +229,24 @@ async def run_transcription_bridge(
         if session.final_tokens:
             try:
                 path = session.save_segment()
-                summary = summarize_finished_session(session)
-                await safe_send_event(saved_transcript_event(session, path, summary))
             except OSError as exc:
                 await safe_send_event({"type": "error", "message": f"Failed to save session: {exc}"})
+            else:
+                cached = read_session_summary(Path(session.session_dir))
+                await safe_send_event(saved_transcript_event(session, path, cached))
+
+                async def push_rename(summary: dict[str, str]) -> None:
+                    try:
+                        await safe_send_event({
+                            "type": "session_renamed",
+                            "session": session.name,
+                            "title": summary["title"],
+                            "summary": summary.get("summary"),
+                        })
+                    except Exception:
+                        pass
+
+                schedule_session_summary(session, push_rename)
         await safe_send_event({"type": "status", "status": "stopped"})
 
 
@@ -248,10 +270,36 @@ async def run_openai_realtime_overdub_bridge(
     if user_id:
         session.user_id = user_id
     send_lock = asyncio.Lock()
+    started_at = asyncio.get_running_loop().time()
+    primary_source = session.source_languages[0] if session.source_languages else "en"
 
     async def safe_send_event(event: dict[str, Any]) -> None:
         async with send_lock:
             await send_event(event)
+
+    async def capture_openai_segment(kind: str, text: str) -> None:
+        if not text:
+            return
+        elapsed_ms = max(0, int((asyncio.get_running_loop().time() - started_at) * 1000))
+        if kind == "transcript":
+            language = primary_source
+            translation_status = "original"
+        else:
+            language = session.target_language or "en"
+            translation_status = "translation"
+        token = {
+            "text": text,
+            "start_ms": elapsed_ms,
+            "end_ms": elapsed_ms,
+            "confidence": 1.0,
+            "is_final": True,
+            "speaker": "1",
+            "language": language,
+            "translation_status": translation_status,
+            "resolved_language": language,
+            "source": "openai_realtime",
+        }
+        session.add_token(token)
 
     await safe_send_event({
         "type": "session",
@@ -271,6 +319,7 @@ async def run_openai_realtime_overdub_bridge(
         safe_send_event,
         enable_openai_realtime=True,
         enable_deepgram=False,
+        on_openai_final_segment=capture_openai_segment,
     )
     providers.start()
     await safe_send_event({"type": "status", "status": "listening"})
@@ -297,6 +346,27 @@ async def run_openai_realtime_overdub_bridge(
         except Exception as exc:
             await safe_send_event({"type": "error", "message": str(exc)})
         providers.cancel()
+        if session.final_tokens:
+            try:
+                path = session.save_segment()
+            except OSError as exc:
+                await safe_send_event({"type": "error", "message": f"Failed to save session: {exc}"})
+            else:
+                cached = read_session_summary(Path(session.session_dir))
+                await safe_send_event(saved_transcript_event(session, path, cached))
+
+                async def push_rename(summary: dict[str, str]) -> None:
+                    try:
+                        await safe_send_event({
+                            "type": "session_renamed",
+                            "session": session.name,
+                            "title": summary["title"],
+                            "summary": summary.get("summary"),
+                        })
+                    except Exception:
+                        pass
+
+                schedule_session_summary(session, push_rename)
         await safe_send_event({"type": "status", "status": "stopped"})
 
 
