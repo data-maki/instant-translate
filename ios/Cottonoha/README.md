@@ -73,6 +73,50 @@ In Xcode:
 
 The project already links this local Swift package and includes the microphone/local-network development `Info.plist` keys.
 
+## Codex iOS Debugging Setup
+
+The Codex Build iOS Apps plugin is enabled in `~/.codex/config.toml` as:
+
+```toml
+[plugins."build-ios-apps@openai-plugins"]
+enabled = true
+```
+
+It points at the official OpenAI plugins checkout under `~/.codex/.tmp/plugins` and wires `xcodebuildmcp` with these workflows:
+
+```json
+{
+  "DEVELOPER_DIR": "/Users/jcarbs/Downloads/Xcode.app/Contents/Developer",
+  "XCODEBUILDMCP_ENABLED_WORKFLOWS": "simulator,ui-automation,debugging,logging"
+}
+```
+
+That covers simulator discovery, build/run, UI snapshots, screenshots, logs, and LLDB attachment. It still requires a full Xcode install. This machine currently has Xcode at `/Users/jcarbs/Downloads/Xcode.app`, so the plugin is pinned to that developer directory. If Xcode moves to `/Applications`, update the plugin MCP env or switch the global developer directory:
+
+```bash
+sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+xcodebuild -version
+```
+
+The app uses native `Logger`/`OSLog` with subsystem `app.cottonoha.ios` and these categories:
+
+- `app`
+- `auth`
+- `network`
+- `realtime`
+- `audio`
+
+Useful simulator log query:
+
+```bash
+xcrun simctl spawn booted log stream \
+  --info --debug \
+  --predicate 'subsystem == "app.cottonoha.ios"' \
+  --style compact
+```
+
+The log lines intentionally avoid user text, email addresses, auth tokens, and audio payloads.
+
 ## Recreate The Xcode Project Manually
 
 You should not need this for normal use. If the generated project ever gets deleted, recreate it like this:
@@ -88,12 +132,12 @@ You should not need this for normal use. If the generated project ever gets dele
 5. Save the Xcode project as `ios/CottonohaApp/`, next to this package.
 6. In Xcode, choose `File -> Add Package Dependencies...`.
 7. Click `Add Local...` and select this folder: `ios/Cottonoha`.
-8. Add the `CottonohaApp` package product to your app target.
+8. Add the `CottonohaCore` package product to your app target.
 9. Replace the generated app entrypoint with:
 
 ```swift
 import SwiftUI
-import CottonohaApp
+import CottonohaCore
 
 @main
 struct CottonohaIOSApp: App {
@@ -109,7 +153,7 @@ For a physical iPhone, pass your Mac LAN IP in the app entrypoint:
 
 ```swift
 import SwiftUI
-import CottonohaApp
+import CottonohaCore
 
 @main
 struct CottonohaIOSApp: App {

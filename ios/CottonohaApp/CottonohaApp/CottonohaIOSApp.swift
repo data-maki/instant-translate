@@ -1,5 +1,5 @@
 import SwiftUI
-import CottonohaApp
+import CottonohaCore
 
 @main
 struct CottonohaIOSApp: App {

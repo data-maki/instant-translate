@@ -13,7 +13,7 @@ import urllib.request
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
 from .languages import DEFAULT_SOURCE_LANGUAGES, DEFAULT_TARGET_LANGUAGE, list_languages
@@ -28,7 +28,7 @@ from .phrase_upgrade import (
     deepl_translate_url as _deepl_translate_url,
     translate_with_deepl as _translate_with_deepl,
 )
-from .sessions import DEFAULT_CONTEXT, build_phrases, extract_openai_text, make_session, read_session_state, list_sessions, sanitize_session_name, session_display_title, session_duration_seconds
+from .sessions import DEFAULT_CONTEXT, build_phrases, extract_openai_text, make_session, read_session_state, list_sessions, sanitize_session_name, session_belongs_to, session_display_title, session_duration_seconds
 from .soniox import NUM_CHANNELS, SAMPLE_RATE, run_transcription_bridge
 from cli.live_transcriber.async_diarize import AsyncDiarizeError, redo_diarization
 
@@ -589,9 +589,19 @@ def _dedupe(values: list[str]) -> list[str]:
     return result
 
 
+def _require_owner(state: dict[str, Any] | None, user_id: str | None) -> None:
+    if state is None:
+        return
+    if not session_belongs_to(state, user_id):
+        raise HTTPException(status_code=404, detail="Session not found.")
+
+
 @app.get("/sessions")
-def sessions(limit: int | None = Query(default=None, ge=1, le=200)) -> dict[str, Any]:
-    all_sessions = list_sessions()
+def sessions(
+    limit: int | None = Query(default=None, ge=1, le=200),
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+) -> dict[str, Any]:
+    all_sessions = list_sessions(user_id=x_user_id)
     return {
         "sessions": all_sessions[:limit] if limit is not None else all_sessions,
         "total": len(all_sessions),
@@ -599,10 +609,14 @@ def sessions(limit: int | None = Query(default=None, ge=1, le=200)) -> dict[str,
 
 
 @app.get("/sessions/{session_name}")
-def session_detail(session_name: str) -> dict[str, Any]:
+def session_detail(
+    session_name: str,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+) -> dict[str, Any]:
     state = read_session_state(session_name)
     if not state:
         return {"session": state}
+    _require_owner(state, x_user_id)
 
     safe_name = sanitize_session_name(session_name)
     session_dir = shared.REPO_ROOT / "output" / safe_name
@@ -632,10 +646,15 @@ def session_detail(session_name: str) -> dict[str, Any]:
 
 
 @app.post("/sessions/{session_name}/adaptations")
-def save_session_adaptation(session_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+def save_session_adaptation(
+    session_name: str,
+    payload: dict[str, Any],
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+) -> dict[str, Any]:
     state = read_session_state(session_name)
     if not state:
         raise HTTPException(status_code=404, detail="Session not found.")
+    _require_owner(state, x_user_id)
 
     key = str(payload.get("key") or "").strip()
     adaptation = payload.get("adaptation") if isinstance(payload.get("adaptation"), dict) else {}
@@ -655,10 +674,15 @@ def save_session_adaptation(session_name: str, payload: dict[str, Any]) -> dict[
 
 
 @app.patch("/sessions/{session_name}")
-def rename_session(session_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+def rename_session(
+    session_name: str,
+    payload: dict[str, Any],
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+) -> dict[str, Any]:
     state = read_session_state(session_name)
     if not state:
         raise HTTPException(status_code=404, detail="Session not found.")
+    _require_owner(state, x_user_id)
 
     title = str(payload.get("title") or "").strip()
     if not title:
@@ -684,10 +708,14 @@ def rename_session(session_name: str, payload: dict[str, Any]) -> dict[str, Any]
 
 
 @app.delete("/sessions/{session_name}")
-def delete_session(session_name: str) -> dict[str, Any]:
+def delete_session(
+    session_name: str,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+) -> dict[str, Any]:
     state = read_session_state(session_name)
     if not state:
         raise HTTPException(status_code=404, detail="Session not found.")
+    _require_owner(state, x_user_id)
 
     safe_name = sanitize_session_name(session_name)
     session_dir = shared.REPO_ROOT / "output" / safe_name
@@ -698,7 +726,10 @@ def delete_session(session_name: str) -> dict[str, Any]:
 
 
 @app.post("/sessions/{session_name}/rediarize")
-def rediarize_session(session_name: str) -> dict[str, Any]:
+def rediarize_session(
+    session_name: str,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+) -> dict[str, Any]:
     api_key = os.environ.get("SONIOX_API_KEY")
     if not api_key:
         raise HTTPException(status_code=400, detail="Missing SONIOX_API_KEY.")
@@ -706,6 +737,7 @@ def rediarize_session(session_name: str) -> dict[str, Any]:
     state = read_session_state(session_name)
     if not state:
         raise HTTPException(status_code=404, detail="Session not found.")
+    _require_owner(state, x_user_id)
 
     safe_name = sanitize_session_name(session_name)
     session_dir = shared.REPO_ROOT / "output" / safe_name
@@ -755,7 +787,10 @@ def rediarize_session(session_name: str) -> dict[str, Any]:
 
 
 @app.post("/sessions/{session_name}/retranslate")
-def retranslate_session(session_name: str) -> dict[str, Any]:
+def retranslate_session(
+    session_name: str,
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+) -> dict[str, Any]:
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         raise HTTPException(status_code=400, detail="Missing OPENAI_API_KEY.")
@@ -763,6 +798,7 @@ def retranslate_session(session_name: str) -> dict[str, Any]:
     state = read_session_state(session_name)
     if not state:
         raise HTTPException(status_code=404, detail="Session not found.")
+    _require_owner(state, x_user_id)
 
     safe_name = sanitize_session_name(session_name)
     session_dir = shared.REPO_ROOT / "output" / safe_name
@@ -799,10 +835,15 @@ def retranslate_session(session_name: str) -> dict[str, Any]:
 
 
 @app.post("/sessions/{session_name}/speakers")
-def review_speakers(session_name: str, payload: dict[str, Any]) -> dict[str, Any]:
+def review_speakers(
+    session_name: str,
+    payload: dict[str, Any],
+    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+) -> dict[str, Any]:
     state = read_session_state(session_name)
     if not state:
         raise HTTPException(status_code=404, detail="Session not found.")
+    _require_owner(state, x_user_id)
 
     safe_name = sanitize_session_name(session_name)
     session_dir = shared.REPO_ROOT / "output" / safe_name

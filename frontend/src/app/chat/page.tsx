@@ -16,6 +16,8 @@ export default async function ChatPage() {
     redirect("/sign-in?next=/chat");
   }
 
+  const userId = session.user.id;
+  const userName = session.user.name || session.user.email || "";
   let initialLanguages: Language[] = [];
   let initialSourceLanguages = ["ja"];
   let initialTargetLanguage = "en";
@@ -26,7 +28,7 @@ export default async function ChatPage() {
   try {
     const [languageResult, sessionResult] = await Promise.all([
       fetchLanguages(),
-      fetchSessions({ limit: INITIAL_SESSION_LIMIT })
+      fetchSessions({ limit: INITIAL_SESSION_LIMIT, userId })
     ]);
     initialLanguages = languageResult.languages;
     initialSourceLanguages = languageResult.default_source_languages;
@@ -45,6 +47,8 @@ export default async function ChatPage() {
       initialSessions={initialSessions}
       initialSourceLanguages={initialSourceLanguages}
       initialTargetLanguage={initialTargetLanguage}
+      userId={userId}
+      userName={userName}
     />
   );
 }

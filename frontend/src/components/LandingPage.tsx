@@ -26,18 +26,26 @@ export function LandingPage() {
           <span className="brandMark compact" aria-hidden="true">
             <Image alt="" height={34} src="/favicon.svg" width={34} />
           </span>
-          <span lang="ja">コトノハ</span>
-          <span className="brandKanji" lang="ja">言の葉</span>
+          <span>{m.brand.name}</span>
+          <span className="brandKanji" lang="ja">{m.brand.kanji}</span>
         </Link>
         <div className="landingNavRight">
           <LocaleToggle />
           <Link className="landingNavLogin" href="/sign-in">
             {m.nav.login}
           </Link>
-          <Link className="landingNavCta" href={`/sign-up?locale=${locale}`}>
+          <Link className="landingNavCta heroDesktopCta" href={`/sign-up?locale=${locale}`}>
             {m.nav.cta}
             <span aria-hidden="true">→</span>
           </Link>
+          <a
+            className="landingNavCta heroMobileCta"
+            href="mailto:jcllobet@gmail.com?subject=cottonoha%20TestFlight%20invite"
+            aria-label={m.hero.ctaMobileTestflight}
+          >
+            TestFlight
+            <span aria-hidden="true">→</span>
+          </a>
         </div>
       </header>
 
@@ -70,7 +78,7 @@ export function LandingPage() {
             {m.hero.bodyAfter}
           </p>
           <div className="landingHeroActions">
-            <Link className="ctaPrimary mechaCta" href={`/sign-up?locale=${locale}`}>
+            <Link className="ctaPrimary mechaCta heroDesktopCta" href={`/sign-up?locale=${locale}`}>
               <span className="mechaCtaKicker" aria-hidden="true">
                 {m.hero.ctaPrimaryKicker}
               </span>
@@ -78,13 +86,26 @@ export function LandingPage() {
               <span aria-hidden="true">→</span>
             </Link>
             <Link
-              className="ctaSecondary mechaCtaSecondary"
+              className="ctaSecondary mechaCtaSecondary heroDesktopCta"
               href={`/sign-up?locale=${otherLocale}`}
               lang={otherLocale}
             >
               {m.hero.ctaSecondary}
               <span aria-hidden="true">→</span>
             </Link>
+            <a
+              className="ctaPrimary mechaCta heroMobileCta"
+              href="mailto:jcllobet@gmail.com?subject=cottonoha%20TestFlight%20invite"
+            >
+              <span className="mechaCtaKicker" aria-hidden="true">iOS</span>
+              <span className="mechaCtaLabel">{m.hero.ctaMobileTestflight}</span>
+              <span aria-hidden="true">→</span>
+            </a>
+            <Link className="ctaSecondary mechaCtaSecondary heroMobileCta" href={`/sign-up?locale=${locale}`}>
+              {m.hero.ctaMobileWeb}
+              <span aria-hidden="true">→</span>
+            </Link>
+            <p className="heroMobileNote heroMobileCta">{m.hero.ctaMobileNote}</p>
           </div>
           <div className="landingHeroProof">
             <span lang={locale}>{m.hero.proofPrimary}</span>
@@ -92,7 +113,10 @@ export function LandingPage() {
           </div>
         </div>
 
-        <aside className="landingSpecimen mechaCockpit" aria-label="Preview">
+        <aside
+          className="landingSpecimen mechaCockpit"
+          aria-label={`${m.hero.specimenScene}: ${m.hero.specimenLinePrimary.join("")} ${m.hero.specimenLineSecondary}`}
+        >
           <div className="mechaSunburst" aria-hidden="true" />
           <div className="mechaHalftone" aria-hidden="true" />
           <span className="mechaCorner tl" aria-hidden="true" />
@@ -106,24 +130,54 @@ export function LandingPage() {
               <span aria-hidden="true" /> {m.hero.specimenStatus}
             </span>
           </div>
-          <div className={`landingSpecimenBody specimenLocale-${locale}`} aria-hidden="true">
-            <span className="landingSpecimenKanji">{m.hero.specimenGlyphPrimary}</span>
-            <span className="mechaZ" aria-hidden="true">{m.hero.specimenGlyphSecondary}</span>
+          <div className={`landingSpecimenBody specimenLocale-${locale}`}>
+            {locale === "en" ? (
+              <div className="overdubBoard">
+                <div className="overdubLine">
+                  <span className="overdubLabel">{m.hero.specimenSayLabel} · EN</span>
+                  <p lang={m.hero.specimenLinePrimaryLang}>
+                    “{m.hero.specimenLinePrimary.join(" ")}”
+                  </p>
+                </div>
+                <div className="overdubBeam" aria-hidden="true">
+                  <span className="overdubBeamLabel">{m.hero.specimenBeamLabel}</span>
+                </div>
+                <div className="overdubLine">
+                  <span className="overdubLabel">{m.hero.specimenHearLabel} · JA</span>
+                  <p lang={m.hero.specimenLineSecondaryLang}>{m.hero.specimenLineSecondary}</p>
+                </div>
+              </div>
+            ) : (
+              <>
+                <span className="landingSpecimenKanji" aria-hidden="true">
+                  {m.hero.specimenGlyphPrimary}
+                </span>
+                <span className="mechaZ" aria-hidden="true">
+                  {m.hero.specimenGlyphSecondary}
+                </span>
+              </>
+            )}
           </div>
           <div className="landingSpecimenFoot">
             <div>
               <small>{m.hero.specimenScene}</small>
-              <strong lang={m.hero.specimenLinePrimaryLang}>
-                {m.hero.specimenLinePrimary.map((line, i) => (
-                  <span key={i}>
-                    {line}
-                    {i < m.hero.specimenLinePrimary.length - 1 && <br />}
-                  </span>
-                ))}
-              </strong>
-              <p className="mechaEcho" lang={m.hero.specimenLineSecondaryLang}>
-                {m.hero.specimenLineSecondary}
-              </p>
+              {locale === "ja" ? (
+                <>
+                  <strong lang={m.hero.specimenLinePrimaryLang}>
+                    {m.hero.specimenLinePrimary.map((line, i) => (
+                      <span key={i}>
+                        {line}
+                        {i < m.hero.specimenLinePrimary.length - 1 && <br />}
+                      </span>
+                    ))}
+                  </strong>
+                  <p className="mechaEcho" lang={m.hero.specimenLineSecondaryLang}>
+                    ↳ {m.hero.specimenLineSecondary}
+                  </p>
+                </>
+              ) : (
+                <strong className="overdubFootMark">{m.hero.specimenFootMark}</strong>
+              )}
             </div>
             <span className="landingSpecimenArrow" aria-hidden="true">
               ↗
@@ -132,7 +186,7 @@ export function LandingPage() {
         </aside>
       </section>
 
-      <section className="landingStatsBand" id="how">
+      <section className="landingStatsBand">
         {m.stats.map((s) => (
           <article className="landingStat" key={s.title}>
             <span className="landingStatFigure">{s.figure}</span>
@@ -144,7 +198,7 @@ export function LandingPage() {
         ))}
       </section>
 
-      <section className="landingPhrasesBand" id="phrases">
+      <section className="landingPhrasesBand">
         <header className="landingPhrasesHead">
           <div>
             <p className="panelKicker">{m.phrases.kicker}</p>
@@ -180,7 +234,7 @@ export function LandingPage() {
         </div>
       </section>
 
-      <section className="landingQuoteBand" id="story">
+      <section className="landingQuoteBand">
         <blockquote>
           <p className="landingQuoteEyebrow">{m.story.eyebrow}</p>
           <p className="landingQuoteBody">
@@ -190,21 +244,17 @@ export function LandingPage() {
             {m.story.bodyLine2}
             <span aria-hidden="true">{locale === "ja" ? "」" : "”"}</span>
           </p>
-          <cite>{m.story.cite}</cite>
         </blockquote>
         <div className="landingQuoteAside">
           <p>{m.story.aside}</p>
-          <Link className="ctaSecondary onDark" href={`/sign-up?locale=${locale}`}>
-            {m.story.link}
-            <span aria-hidden="true">→</span>
-          </Link>
+          <cite>{m.story.cite}</cite>
         </div>
       </section>
 
       <footer className="landingFooter">
         <Link className="landingBrand landingBrandLarge" href="/">
-          <span lang="ja">コトノハ</span>
-          <span className="brandKanji" lang="ja">言の葉</span>
+          <span>{m.brand.name}</span>
+          <span className="brandKanji" lang="ja">{m.brand.kanji}</span>
         </Link>
         <div className="landingFooterRule">
           <span>{m.footer.copyright}</span>

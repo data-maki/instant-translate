@@ -19,6 +19,7 @@ public actor WebSocketTranscriptionClient {
         let socket = session.webSocketTask(with: url)
         task = socket
         socket.resume()
+        AppLog.realtime.info("WebSocket connecting to \(self.url.absoluteString, privacy: .public)")
         try await sendJSON(startMessage)
         Task {
             await self.receiveLoop(onEvent: onEvent, onError: onError)
@@ -30,11 +31,12 @@ public actor WebSocketTranscriptionClient {
         do {
             try await task.send(.data(data))
         } catch {
-            // The receive side reports socket failures to the view model.
+            AppLog.realtime.error("Failed to send audio chunk: \(error.localizedDescription, privacy: .public)")
         }
     }
 
     public func stop() async {
+        AppLog.realtime.info("Stopping WebSocket transcription")
         try? await sendJSON(["type": "stop"])
         task?.cancel(with: .normalClosure, reason: nil)
         task = nil
@@ -58,8 +60,10 @@ public actor WebSocketTranscriptionClient {
                     continue
                 }
                 let event = try TranscriptEventDecoder.decode(data)
+                AppLog.realtime.debug("Received transcript event")
                 await onEvent(event)
             } catch {
+                AppLog.realtime.error("WebSocket receive loop failed: \(error.localizedDescription, privacy: .public)")
                 await onError(error.localizedDescription)
                 break
             }

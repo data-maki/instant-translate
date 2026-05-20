@@ -30,6 +30,9 @@ type LandingMessages = {
     ctaPrimaryKicker: string;
     ctaPrimaryLabel: string;
     ctaSecondary: string;
+    ctaMobileTestflight: string;
+    ctaMobileWeb: string;
+    ctaMobileNote: string;
     proofPrimary: string;
     proofSecondary: string;
     specimenBadge: string;
@@ -41,6 +44,10 @@ type LandingMessages = {
     specimenLinePrimary: string[];
     specimenLineSecondaryLang: Locale;
     specimenLineSecondary: string;
+    specimenSayLabel: string;
+    specimenHearLabel: string;
+    specimenBeamLabel: string;
+    specimenFootMark: string;
   };
   stats: { figure: string; title: string; body: string }[];
   phrases: {
@@ -57,7 +64,6 @@ type LandingMessages = {
     bodyLine2: string;
     cite: string;
     aside: string;
-    link: string;
   };
   footer: { copyright: string; languages: string; login: string };
 };
@@ -73,17 +79,17 @@ const ja: Messages = {
       { mark: "·", text: "コード KOTO20 で初月無料" }
     ],
     marquee: [
-      "日本で生まれた",
-      "声のまま訳す",
-      "リアルタイム・同時通訳",
-      "PRIVATE BETA",
-      "MAZIN ・ GO !",
-      "東京発・世界へ"
+      "0.5秒で訳す",
+      "敬語まで訳す",
+      "日本語 ⇄ 英語、リアルタイム",
+      "限定ベータ",
+      "場の空気まで訳す",
+      "学ぶ人のために"
     ],
     nav: { login: "ログイン", cta: "今すぐ起動" },
     toggle: { aria: "言語を切り替え", ja: "日本語", en: "EN" },
     hero: {
-      live: "起動中 ・ 今週 2,318 件の会話が「通じた」",
+      live: "限定ベータ ・ 招待制で公開中",
       h1Line1: "言葉の壁を、",
       h1Line2Em: "撃ち抜け。",
       bodyBefore: "日本語のままで、外国人の同僚・取引先・お客さま・家族と",
@@ -91,39 +97,46 @@ const ja: Messages = {
       bodyAfter: "。会議も、接客も、おもてなしも、声がそのまま伝わる。",
       ctaPrimaryKicker: "無料",
       ctaPrimaryLabel: "今すぐ起動する",
-      ctaSecondary: "English? Start free",
+      ctaSecondary: "Start free in English",
+      ctaMobileTestflight: "TestFlight をリクエスト",
+      ctaMobileWeb: "ブラウザで体験する",
+      ctaMobileNote: "モバイル版は招待制（iOS）。デスクトップ／ブラウザでも今すぐ使えます。",
       proofPrimary: "話せば、通じる。",
       proofSecondary: "Speak it. Be understood.",
-      specimenBadge: "★ DROP · 01 / JA ⇄ EN",
-      specimenStatus: "起動中",
+      specimenBadge: "DROP · 01 / JA ⇄ EN",
+      specimenStatus: "BETA",
       specimenScene: "シーン · 職場",
       specimenGlyphPrimary: "通",
       specimenGlyphSecondary: "Z",
       specimenLinePrimaryLang: "ja",
       specimenLinePrimary: ["納期は", "調整可能です。"],
       specimenLineSecondaryLang: "en",
-      specimenLineSecondary: "↳ We can adjust the deadline."
+      specimenLineSecondary: "We can adjust the deadline.",
+      specimenSayLabel: "あなたの声",
+      specimenHearLabel: "相手の耳に",
+      specimenBeamLabel: "オーバーダブ",
+      specimenFootMark: "リアルタイム音声オーバーダブ"
     },
     stats: [
       {
-        figure: "<0.5秒",
-        title: "起動から声まで",
-        body: "文が終わる前に、相手の言語で響く。部屋に流れるのは、二つの意味と、一つの声。"
+        figure: "0.5秒",
+        title: "会話のテンポは、止めない。",
+        body: "「もう一回？」と言われる前に、翻訳が届く。沈黙も、気まずい間も生まれない。"
       },
       {
-        figure: "23",
-        title: "対応シーン",
-        body: "居酒屋・旅館・診療所・職場・取引先・家族。場の空気と敬語まで訳す。"
+        figure: "敬語",
+        title: "頭の下げ方まで、分かってる。",
+        body: "上司には自然に丁寧に、友達には砕けて。相手と場面に合わせて、声のトーンが変わる。"
       },
       {
-        figure: "100%",
-        title: "タイピング不要",
-        body: "話せばいい。スマホを渡し合う必要はない。キーボードも、翻訳アプリの順番待ちもない。"
+        figure: "声だけ",
+        title: "スマホは、ポケットの中で。",
+        body: "タイピングなし、渡し合いなし、翻訳アプリの順番待ちなし。話せば、相手は相手の言葉で聞ける。"
       },
       {
-        figure: "1:1",
-        title: "完全プライベート",
-        body: "名前も、商談の中身も、家族の話も、端末の外には出ない。"
+        figure: "残らない",
+        title: "話した部屋から、外に出ない。",
+        body: "名前も、商談も、家族の話も。会話は、あなたと相手の間にだけ残る。"
       }
     ],
     phrases: {
@@ -173,16 +186,15 @@ const ja: Messages = {
       ]
     },
     story: {
-      eyebrow: "STORY · 東京 · 2026",
+      eyebrow: "STORY · 2026",
       bodyLine1: "ちょうどいい言葉を、",
       bodyLine2: "ちょうどいい瞬間に。",
-      cite: "— リン, 創業者 · コトノハ",
+      cite: "— ヤン・カルボネル, 創業者 · Kotonoha",
       aside:
-        "訳すのは単語じゃなく、部屋の空気。敬語、関係、アレルギー、家族の名前。日本で、外国人と本当に話す人たちの手で作っています。",
-      link: "はじまりを読む"
+        "本気で日本語を学ぼうとして、最初にぶつかったのが敬語の壁でした。「失礼にあたらないか」を気にしすぎて、言いたいことが言えない。その答えとして作ったのがこのアプリです。学ぶ途中でも、相手に失礼なく伝わる声を。"
     },
     footer: {
-      copyright: "© 2026 コトノハ · 東京",
+      copyright: "© 2026 Kotonoha",
       languages: "日本語 · English",
       login: "ログイン"
     }
@@ -191,65 +203,72 @@ const ja: Messages = {
 
 const en: Messages = {
   landing: {
+    brand: { name: "cottonoha", kanji: "言の葉" },
     perks: [
       { mark: "★", text: "Free during the private beta" },
       { mark: "·", text: "New scenes drop Wed 17:00 JST" },
       { mark: "·", text: "Use KOTO20 — first month on us" }
     ],
     marquee: [
-      "BUILT IN TOKYO",
-      "SPOKEN, NOT TYPED",
-      "REAL-TIME OVERDUB",
+      "<500MS OVERDUB",
+      "KEIGO-AWARE",
+      "REAL-TIME JA ⇄ EN",
       "PRIVATE BETA",
-      "MAZIN · GO !",
-      "JA ⇄ EN, LIVE"
+      "RESPECTS THE ROOM",
+      "BUILT FOR LEARNERS"
     ],
     nav: { login: "Log in", cta: "Get started" },
     toggle: { aria: "Switch language", ja: "日本語", en: "EN" },
     hero: {
-      live: "LIVE · 2,318 rooms decoded this week",
+      live: "PRIVATE BETA · INVITE-ONLY",
       h1Line1: "Two voices,",
       h1Line2Em: "one room.",
       bodyBefore:
         "Real-time voice overdub between Japanese and English. Meetings, hospitality, the in-laws — both sides hear ",
       bodyStrong: "one conversation",
-      bodyAfter: ", not two."
-,
+      bodyAfter: ", not two.",
       ctaPrimaryKicker: "FREE",
       ctaPrimaryLabel: "Try it free",
       ctaSecondary: "日本語ではじめる",
+      ctaMobileTestflight: "Request TestFlight invite",
+      ctaMobileWeb: "Try it in your browser",
+      ctaMobileNote: "iOS app is invite-only. Use it on desktop or in your browser today.",
       proofPrimary: "Speak it. Be understood.",
       proofSecondary: "話せば、通じる。",
-      specimenBadge: "★ DROP · 01 / EN ⇄ JA",
-      specimenStatus: "LIVE",
+      specimenBadge: "DROP · 01 / EN ⇄ JA",
+      specimenStatus: "BETA",
       specimenScene: "SCENE · WORKPLACE",
       specimenGlyphPrimary: "Z",
       specimenGlyphSecondary: "通",
       specimenLinePrimaryLang: "en",
-      specimenLinePrimary: ["We can adjust", "the deadline."],
+      specimenLinePrimary: ["We can adjust the deadline."],
       specimenLineSecondaryLang: "ja",
-      specimenLineSecondary: "↳ 納期は調整可能です。"
+      specimenLineSecondary: "「納期は調整可能です。」",
+      specimenSayLabel: "YOU SAY",
+      specimenHearLabel: "ROOM HEARS",
+      specimenBeamLabel: "OVERDUB",
+      specimenFootMark: "Real-time voice overdub"
     },
     stats: [
       {
-        figure: "<0.5s",
-        title: "Sub-second overdub",
-        body: "Translation lands before the sentence ends. One voice in the room, two meanings carried."
+        figure: "0.5s",
+        title: "Built for the back-and-forth.",
+        body: "Translation lands before the silence does. Conversations keep their rhythm — no mid-sentence pauses, no “one more time?”"
       },
       {
-        figure: "23",
-        title: "Scenes tuned",
-        body: "Workplace, client calls, hospitality, clinics, family. Keigo, register, and the feel of the room — all translated."
+        figure: "敬語",
+        title: "Knows when to bow.",
+        body: "It talks to your boss differently than your best friend — without you thinking about it. Keigo, register, the air of the room."
       },
       {
-        figure: "100%",
-        title: "Spoken, not typed",
-        body: "Just talk. No phone-passing. No keyboards. No waiting your turn in a translation app."
+        figure: "Voice",
+        title: "Phone stays in your pocket.",
+        body: "No typing. No phone-passing. You speak — they hear it in their language. Your hands stay free to actually be in the conversation."
       },
       {
-        figure: "1:1",
-        title: "Private by default",
-        body: "Names, deal terms, family details — they stay on your device. Nothing leaves the session."
+        figure: "Yours",
+        title: "What's said in the room, stays.",
+        body: "Names, deal terms, the things you say to family. Your conversation never leaves the session."
       }
     ],
     phrases: {
@@ -299,16 +318,15 @@ const en: Messages = {
       ]
     },
     story: {
-      eyebrow: "STORY · TOKYO · 2026",
+      eyebrow: "STORY · 2026",
       bodyLine1: "The right word,",
       bodyLine2: "at the right moment.",
-      cite: "— Lin, founder · cottonoha",
+      cite: "— Jan Carbonell, founder · cottonoha",
       aside:
-        "Every translation respects the room — keigo, relationship, allergies, family names. Built in Tokyo, by people who live on both sides of the conversation.",
-      link: "Read the story"
+        "I tried hard to learn Japanese, and the first wall I hit was keigo — worrying I'd be rude meant I couldn't say what I wanted to say. So I built this. The app keeps you respectful while you're still finding the words."
     },
     footer: {
-      copyright: "© 2026 cottonoha · Tokyo",
+      copyright: "© 2026 cottonoha",
       languages: "日本語 · English",
       login: "Log in"
     }

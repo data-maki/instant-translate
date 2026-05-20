@@ -11,8 +11,8 @@ let package = Package(
     ],
     products: [
         .library(
-            name: "CottonohaApp",
-            targets: ["CottonohaApp"]
+            name: "CottonohaCore",
+            targets: ["CottonohaCore"]
         )
     ],
     dependencies: [
@@ -20,10 +20,11 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "CottonohaApp",
+            name: "CottonohaCore",
             dependencies: [
                 .product(name: "BetterAuth", package: "BetterAuthSwift")
             ],
+            path: "Sources/CottonohaApp",
             resources: [
                 .process("Resources")
             ],

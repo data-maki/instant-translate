@@ -23,6 +23,7 @@ public struct CottonohaRootView: View {
             }
         }
         .task {
+            AppLog.app.info("Root view launched. onboardingComplete=\(hasCompletedOnboarding)")
             await auth.refresh()
         }
     }

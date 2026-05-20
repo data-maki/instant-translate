@@ -58,14 +58,18 @@ public actor CottonohaAPIClient {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try encoder.encode(body)
         }
+        AppLog.network.info("API request \(method, privacy: .public) \(path, privacy: .public)")
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
+            AppLog.network.error("API request returned invalid response for \(method, privacy: .public) \(path, privacy: .public)")
             throw APIError.invalidResponse
         }
         guard (200..<300).contains(http.statusCode) else {
             let serverError = try? decoder.decode(ServerError.self, from: data)
+            AppLog.network.error("API request failed \(method, privacy: .public) \(path, privacy: .public) status=\(http.statusCode)")
             throw APIError.server(serverError?.detail ?? "Request failed with status \(http.statusCode).")
         }
+        AppLog.network.info("API request completed \(method, privacy: .public) \(path, privacy: .public) status=\(http.statusCode)")
         return try decoder.decode(T.self, from: data)
     }
 }

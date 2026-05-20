@@ -107,6 +107,9 @@ async def run_transcription_bridge(
     requested_languages = start_message.get("source_languages") or ["en", "ja"]
     target_language = start_message.get("target_language") or "en"
     session = make_session(start_message.get("session_name") or "", requested_languages, target_language)
+    user_id = str(start_message.get("user_id") or "").strip()
+    if user_id:
+        session.user_id = user_id
     context = normalize_start_context(start_message.get("context"))
     session.context = context_summary(context)
     session.expected_speaker_count = parse_expected_speaker_count(start_message.get("expected_speaker_count"))
@@ -241,6 +244,9 @@ async def run_openai_realtime_overdub_bridge(
     requested_languages = start_message.get("source_languages") or ["en", "ja"]
     target_language = start_message.get("target_language") or "en"
     session = make_session(start_message.get("session_name") or "", requested_languages, target_language)
+    user_id = str(start_message.get("user_id") or "").strip()
+    if user_id:
+        session.user_id = user_id
     send_lock = asyncio.Lock()
 
     async def safe_send_event(event: dict[str, Any]) -> None:

@@ -157,6 +157,13 @@ export function websocketUrl() {
   return base.toString();
 }
 
+function withUserHeader(init: RequestInit, userId?: string): RequestInit {
+  if (!userId) return init;
+  const headers = new Headers(init.headers);
+  headers.set("X-User-Id", userId);
+  return { ...init, headers };
+}
+
 async function requestJson<T>(path: string, init: RequestInit, fallbackError: string): Promise<T> {
   const response = await fetch(`${apiBaseUrl()}${path}`, init);
   if (!response.ok) {
@@ -174,11 +181,13 @@ export async function fetchLanguages(): Promise<{
   return requestJson("/languages", { cache: "no-store" }, "Could not load languages");
 }
 
-export async function fetchSessions(options: { limit?: number } = {}): Promise<{ sessions: SessionSummary[]; total: number }> {
+export async function fetchSessions(
+  options: { limit?: number; userId?: string } = {}
+): Promise<{ sessions: SessionSummary[]; total: number }> {
   const query = options.limit ? `?limit=${encodeURIComponent(String(options.limit))}` : "";
   const result = await requestJson<{ sessions: SessionSummary[]; total?: number }>(
     `/sessions${query}`,
-    { cache: "no-store" },
+    withUserHeader({ cache: "no-store" }, options.userId),
     "Could not load sessions"
   );
   return {
@@ -187,57 +196,63 @@ export async function fetchSessions(options: { limit?: number } = {}): Promise<{
   };
 }
 
-export async function fetchSessionDetail(sessionName: string): Promise<SessionDetail> {
-  return requestJson(`/sessions/${encodeURIComponent(sessionName)}`, { cache: "no-store" }, "Could not load session");
+export async function fetchSessionDetail(sessionName: string, userId?: string): Promise<SessionDetail> {
+  return requestJson(
+    `/sessions/${encodeURIComponent(sessionName)}`,
+    withUserHeader({ cache: "no-store" }, userId),
+    "Could not load session"
+  );
 }
 
-export async function renameSession(sessionName: string, title: string): Promise<{ name: string; title: string }> {
-  return requestJson(`/sessions/${encodeURIComponent(sessionName)}`, {
+export async function renameSession(sessionName: string, title: string, userId?: string): Promise<{ name: string; title: string }> {
+  return requestJson(`/sessions/${encodeURIComponent(sessionName)}`, withUserHeader({
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ title })
-  }, "Could not rename session");
+  }, userId), "Could not rename session");
 }
 
-export async function deleteSession(sessionName: string): Promise<{ name: string; deleted: boolean }> {
-  return requestJson(`/sessions/${encodeURIComponent(sessionName)}`, {
+export async function deleteSession(sessionName: string, userId?: string): Promise<{ name: string; deleted: boolean }> {
+  return requestJson(`/sessions/${encodeURIComponent(sessionName)}`, withUserHeader({
     method: "DELETE"
-  }, "Could not delete session");
+  }, userId), "Could not delete session");
 }
 
 export async function saveSessionAdaptation(payload: {
   sessionName: string;
   key: string;
   adaptation: AdaptPhraseResult & { status: "loading" | "ready" | "error" };
+  userId?: string;
 }): Promise<{ session: string; key: string; adaptation: AdaptPhraseResult & { status: string } }> {
-  return requestJson(`/sessions/${encodeURIComponent(payload.sessionName)}/adaptations`, {
+  return requestJson(`/sessions/${encodeURIComponent(payload.sessionName)}/adaptations`, withUserHeader({
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ key: payload.key, adaptation: payload.adaptation })
-  }, "Could not save adaptation");
+  }, payload.userId), "Could not save adaptation");
 }
 
-export async function rediarizeSession(sessionName: string): Promise<RediarizeResult> {
-  return requestJson(`/sessions/${encodeURIComponent(sessionName)}/rediarize`, {
+export async function rediarizeSession(sessionName: string, userId?: string): Promise<RediarizeResult> {
+  return requestJson(`/sessions/${encodeURIComponent(sessionName)}/rediarize`, withUserHeader({
     method: "POST"
-  }, "Could not improve speakers");
+  }, userId), "Could not improve speakers");
 }
 
-export async function retranslateSession(sessionName: string): Promise<RetranslateResult> {
-  return requestJson(`/sessions/${encodeURIComponent(sessionName)}/retranslate`, {
+export async function retranslateSession(sessionName: string, userId?: string): Promise<RetranslateResult> {
+  return requestJson(`/sessions/${encodeURIComponent(sessionName)}/retranslate`, withUserHeader({
     method: "POST"
-  }, "Could not improve translations");
+  }, userId), "Could not improve translations");
 }
 
 export async function saveSpeakerReview(
   sessionName: string,
-  speakers: SpeakerReviewRow[]
+  speakers: SpeakerReviewRow[],
+  userId?: string
 ): Promise<SpeakerReviewResult> {
-  return requestJson(`/sessions/${encodeURIComponent(sessionName)}/speakers`, {
+  return requestJson(`/sessions/${encodeURIComponent(sessionName)}/speakers`, withUserHeader({
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ speakers })
-  }, "Could not save speaker labels");
+  }, userId), "Could not save speaker labels");
 }
 
 export async function fetchPlacesContext(payload: {

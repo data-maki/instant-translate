@@ -41,6 +41,7 @@ public final class AudioRecorder: @unchecked Sendable {
         }
         engine.prepare()
         try engine.start()
+        AppLog.audio.info("Audio recorder started inputRate=\(inputFormat.sampleRate) targetRate=\(targetFormat.sampleRate)")
     }
 
     public func stop() {
@@ -52,6 +53,7 @@ public final class AudioRecorder: @unchecked Sendable {
         #if os(iOS)
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
         #endif
+        AppLog.audio.info("Audio recorder stopped")
     }
 
     private func convertAndEmit(_ buffer: AVAudioPCMBuffer) {
@@ -71,7 +73,12 @@ public final class AudioRecorder: @unchecked Sendable {
             status.pointee = .haveData
             return buffer
         }
-        guard error == nil, let data = converted.int16PCMData else { return }
+        guard error == nil, let data = converted.int16PCMData else {
+            if let error {
+                AppLog.audio.error("Audio conversion failed: \(error.localizedDescription, privacy: .public)")
+            }
+            return
+        }
         onChunk?(data)
     }
 }

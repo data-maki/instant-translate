@@ -3,8 +3,7 @@
 import type { CSSProperties } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { SignOutButton } from "@/components/SignOutButton";
+import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   adaptPhrase,
   createRealtimeTranslationSession,
@@ -218,6 +217,7 @@ type SpeakerEditorDraft = {
 type SessionGroup = {
   label: string;
   sessions: SessionSummary[];
+  collapsedByDefault?: boolean;
 };
 
 const SPEAKER_COLORS = [
@@ -238,6 +238,8 @@ export type TranslatorAppProps = {
   initialSessions?: SessionSummary[];
   initialSourceLanguages?: string[];
   initialTargetLanguage?: string;
+  userId?: string;
+  userName?: string;
 };
 
 export function TranslatorApp({
@@ -246,7 +248,9 @@ export function TranslatorApp({
   initialSessionTotal,
   initialSessions = [],
   initialSourceLanguages = ["ja"],
-  initialTargetLanguage = "en"
+  initialTargetLanguage = "en",
+  userId,
+  userName = ""
 }: TranslatorAppProps) {
   const [languages] = useState<Language[]>(initialLanguages);
   const [sourceALanguages, setSourceALanguages] = useState(() =>
@@ -255,11 +259,21 @@ export function TranslatorApp({
   const [sourceB, setSourceB] = useState(initialTargetLanguage);
   const [expectedSpeakerCount, setExpectedSpeakerCount] = useState("2");
   const [audiencePreset, setAudiencePreset] = useState(DEFAULT_AUDIENCE_PRESET);
-  const [deeplFormality, setDeepLFormality] = useState<DeepLFormality>("auto");
+  const [deeplFormality, setDeepLFormality] = useState<DeepLFormality>(() => {
+    if (typeof window === "undefined") return "auto";
+    try {
+      const saved = window.localStorage.getItem(DEEPL_FORMALITY_STORAGE_KEY);
+      if (isDeepLFormality(saved)) return saved;
+    } catch {
+      // localStorage unavailable
+    }
+    return "auto";
+  });
   const [context, setContext] = useState("");
-  const [travelerProfile, setTravelerProfile] = useState<TravelerProfile>(DEFAULT_PROFILE);
+  const [travelerProfile, setTravelerProfile] = useState<TravelerProfile>(() =>
+    typeof window === "undefined" ? DEFAULT_PROFILE : loadTravelerProfile()
+  );
   const [sessionPlaceContext, setSessionPlaceContext] = useState<SessionPlaceContext>(DEFAULT_SESSION_PLACE_CONTEXT);
-  const [geoStatus, setGeoStatus] = useState("");
   const selectedPreset = getAudiencePreset(audiencePreset);
   const sessionIntent = selectedPreset.intent;
   const contextBundle = useMemo(
@@ -292,7 +306,7 @@ export function TranslatorApp({
   const [sessions, setSessions] = useState<SessionSummary[]>(initialSessions);
   const [sessionTotal, setSessionTotal] = useState(initialSessionTotal ?? initialSessions.length);
   const [sessionsExpanded, setSessionsExpanded] = useState(false);
-  const [sessionsOpen, setSessionsOpen] = useState(false);
+  const [sessionsOpen, setSessionsOpen] = useDrawerState();
   const [loadingSession, setLoadingSession] = useState("");
   const [micCaptureEnabled, setMicCaptureEnabled] = useState(true);
   const [englishToTargetOverdubEnabled, setEnglishToTargetOverdubEnabled] = useState(true);
@@ -374,17 +388,6 @@ export function TranslatorApp({
     return groupDisplayPhrases(visiblePhrases);
   }, [visiblePhrases]);
 
-  useEffect(() => {
-    const timer = window.setTimeout(() => {
-      const savedFormality = window.localStorage.getItem(DEEPL_FORMALITY_STORAGE_KEY);
-      if (isDeepLFormality(savedFormality)) {
-        setDeepLFormality(savedFormality);
-      }
-      setTravelerProfile(loadTravelerProfile());
-    }, 0);
-    return () => window.clearTimeout(timer);
-  }, []);
-
   function setAdaptationsSynced(
     next:
       | Record<string, PhraseAdaptation>
@@ -407,7 +410,7 @@ export function TranslatorApp({
     if (!sessionName || !key || adaptation.status !== "ready") {
       return;
     }
-    void saveSessionAdaptation({ sessionName, key, adaptation }).catch(() => {
+    void saveSessionAdaptation({ sessionName, key, adaptation, userId }).catch(() => {
       // Persistence failure should not block live conversation rendering.
     });
   }
@@ -751,6 +754,7 @@ export function TranslatorApp({
           JSON.stringify({
             type: "start",
             session_name: "",
+            user_id: userId,
             source_languages: [...sourceALanguages, sourceB],
             target_language: sourceB,
             expected_speaker_count: expectedSpeakerCount ? Number(expectedSpeakerCount) : null,
@@ -840,6 +844,7 @@ export function TranslatorApp({
         JSON.stringify({
           type: "start",
           session_name: "",
+          user_id: userId,
           source_languages: [...sourceALanguages, sourceB],
           target_language: sourceB,
           expected_speaker_count: expectedSpeakerCount ? Number(expectedSpeakerCount) : null,
@@ -1005,7 +1010,7 @@ export function TranslatorApp({
 
   async function refreshSessions() {
     try {
-      const result = await fetchSessions({ limit: sessionsExpanded ? undefined : INITIAL_SESSION_LIMIT });
+      const result = await fetchSessions({ limit: sessionsExpanded ? undefined : INITIAL_SESSION_LIMIT, userId });
       setSessions(result.sessions);
       setSessionTotal(result.total);
     } catch {
@@ -1016,7 +1021,7 @@ export function TranslatorApp({
   async function toggleSessionsExpanded() {
     if (!sessionsExpanded && sessions.length < sessionTotal) {
       try {
-        const result = await fetchSessions();
+        const result = await fetchSessions({ userId });
         setSessions(result.sessions);
         setSessionTotal(result.total);
       } catch {
@@ -1033,7 +1038,7 @@ export function TranslatorApp({
     setError("");
     setLoadingSession(name);
     try {
-      const detail = sessionDetailCacheRef.current[name] || await fetchSessionDetail(name);
+      const detail = sessionDetailCacheRef.current[name] || await fetchSessionDetail(name, userId);
       sessionDetailCacheRef.current[name] = detail;
       if (!detail.session) {
         throw new Error("Session not found.");
@@ -1079,7 +1084,7 @@ export function TranslatorApp({
       return;
     }
     try {
-      const result = await renameSavedSession(name, cleanTitle);
+      const result = await renameSavedSession(name, cleanTitle, userId);
       setSessions((current) =>
         current.map((session) => (session.name === result.name ? { ...session, title: result.title } : session))
       );
@@ -1101,7 +1106,7 @@ export function TranslatorApp({
       return;
     }
     try {
-      const result = await deleteSavedSession(name);
+      const result = await deleteSavedSession(name, userId);
       delete sessionDetailCacheRef.current[result.name];
       setSessions((current) => current.filter((session) => session.name !== result.name));
       if (activeSession === result.name) {
@@ -1134,48 +1139,9 @@ export function TranslatorApp({
     setExpectedSpeakerCount("2");
     setContext("");
     setSessionPlaceContext(DEFAULT_SESSION_PLACE_CONTEXT);
-    setGeoStatus("");
     shouldFollowFeedRef.current = true;
     setStatus("idle");
     setSessionsOpen(false);
-  }
-
-  function injectCurrentLocation() {
-    if (typeof navigator === "undefined" || !navigator.geolocation) {
-      setGeoStatus("Location unavailable in this browser.");
-      return;
-    }
-    setGeoStatus("Fetching location...");
-    navigator.geolocation.getCurrentPosition(
-      async (position) => {
-        const lat = position.coords.latitude.toFixed(5);
-        const lng = position.coords.longitude.toFixed(5);
-        setSessionPlaceContext((current) => ({ ...current, location_hint: `${lat}, ${lng}` }));
-        setGeoStatus("Location added. Loading nearby places...");
-        try {
-          const placesContext = await fetchPlacesContext({
-            lat: position.coords.latitude,
-            lng: position.coords.longitude,
-            intent: sessionIntent,
-            poi_type: sessionPlaceContext.poi_type
-          });
-          setSessionPlaceContext((current) => ({
-            ...current,
-            location_hint: `${lat}, ${lng}`,
-            location_context: mergeLineText(current.location_context, placesContext.general),
-            places: mergeListText(current.places, placesContext.places),
-            terms: mergeListText(current.terms, placesContext.terms),
-            translation_preferences: mergeListText(current.translation_preferences, placesContext.translation_terms)
-          }));
-          setGeoStatus(placesContext.places.length ? "Nearby places added." : "Location added; no nearby places found.");
-        } catch (error) {
-          const message = error instanceof Error ? error.message : "Could not load nearby places.";
-          setGeoStatus(message);
-        }
-      },
-      () => setGeoStatus("Location permission blocked. Enable it in browser settings or continue without location."),
-      { enableHighAccuracy: false, timeout: 8000 }
-    );
   }
 
   function toggleSourceLanguage(code: string) {
@@ -1372,7 +1338,7 @@ export function TranslatorApp({
     setRediarizeStatus("Improving speakers...");
     setTranslationStatus("");
     try {
-      const speakerResult = await rediarizeSession(activeSession);
+      const speakerResult = await rediarizeSession(activeSession, userId);
       resetAdaptations();
       setPhrasesAndFollow(speakerResult.phrases);
       setTokenCount(speakerResult.token_count);
@@ -1382,7 +1348,7 @@ export function TranslatorApp({
       setRediarizing(false);
       setTranslating(true);
       setTranslationStatus("Improving translations...");
-      const translationResult = await retranslateSession(activeSession);
+      const translationResult = await retranslateSession(activeSession, userId);
       resetAdaptations();
       setPhrasesAndFollow(translationResult.phrases);
       setTokenCount(translationResult.token_count);
@@ -1495,6 +1461,7 @@ export function TranslatorApp({
           onRename={renameSessionTitle}
           onToggleExpanded={() => void toggleSessionsExpanded()}
           total={sessionTotal}
+          userName={userName}
         />
 
         <section className={`transcriptPanel ${showOnboarding ? "setupMode" : ""}`} aria-label="Live transcript">
@@ -1515,9 +1482,10 @@ export function TranslatorApp({
             <div className="transcriptMeta">
               <label
                 className={`realtimeToggle ${openAIRealtimeEnabled ? "active" : ""}`}
-                title="Use GPT realtime translation candidates"
+                title="GPT realtime: sub-second voice translation via the OpenAI realtime API. Higher cost, lower latency. Off uses the standard transcribe+translate pipeline."
               >
                 <input
+                  aria-describedby="realtime-help"
                   checked={openAIRealtimeEnabled}
                   disabled={isLive}
                   onChange={(event) => changeRealtimeEnabled(event.target.checked)}
@@ -1527,8 +1495,11 @@ export function TranslatorApp({
                   <span />
                 </span>
                 <span>GPT realtime</span>
+                <span className="srOnly" id="realtime-help">
+                  Sub-second voice translation via the OpenAI realtime API. Higher cost, lower latency. When off, uses the standard transcribe-then-translate pipeline.
+                </span>
               </label>
-              <span className="tokenCount">{formatTranscriptStats(transcriptStats)}</span>
+              <span className="tokenCount" aria-label="Conversation duration">{formatTranscriptStats(transcriptStats)}</span>
               {postProcessing && (reviewStatus || translationStatus || rediarizeStatus) ? (
                 <span className="compactStatus">{reviewStatus || translationStatus || rediarizeStatus}</span>
               ) : null}
@@ -1564,16 +1535,12 @@ export function TranslatorApp({
               audiencePreset={audiencePreset}
               canStart={canStart && hasLanguagePair}
               context={context}
-              deeplFormality={deeplFormality}
               disabled={isLive}
               error={error}
               expectedSpeakerCount={expectedSpeakerCount}
-              geoStatus={geoStatus}
               onAudienceChange={changeAudiencePreset}
               onContextChange={setContext}
               onContextExample={appendContextExample}
-              onDeepLFormalityChange={changeDeepLFormality}
-              onLocation={injectCurrentLocation}
               onSpeakerCountChange={setExpectedSpeakerCount}
               onStart={() => start(false)}
               preset={selectedPreset}
@@ -1877,16 +1844,12 @@ function ConversationOnboarding({
   audiencePreset,
   canStart,
   context,
-  deeplFormality,
   disabled,
   error,
   expectedSpeakerCount,
-  geoStatus,
   onAudienceChange,
   onContextChange,
   onContextExample,
-  onDeepLFormalityChange,
-  onLocation,
   onSpeakerCountChange,
   onStart,
   preset
@@ -1894,16 +1857,12 @@ function ConversationOnboarding({
   audiencePreset: string;
   canStart: boolean;
   context: string;
-  deeplFormality: DeepLFormality;
   disabled: boolean;
   error: string;
   expectedSpeakerCount: string;
-  geoStatus: string;
   onAudienceChange: (presetId: string) => void;
   onContextChange: (value: string) => void;
   onContextExample: (example: string) => void;
-  onDeepLFormalityChange: (value: DeepLFormality) => void;
-  onLocation: () => void;
   onSpeakerCountChange: (count: string) => void;
   onStart: () => void;
   preset: typeof AUDIENCE_PRESETS[number];
@@ -1913,20 +1872,11 @@ function ConversationOnboarding({
       <div className="quickStartFields">
         <AudiencePicker disabled={disabled} onChange={onAudienceChange} value={audiencePreset} />
         <SpeakerCountPicker disabled={disabled} onChange={onSpeakerCountChange} value={expectedSpeakerCount} />
-        <div className="gpsField">
-          <button className="secondaryButton" onClick={onLocation} disabled={disabled} type="button">
-            Use current location
-          </button>
-          {geoStatus ? <span className="hint">{geoStatus}</span> : null}
-        </div>
       </div>
 
-      <ToneSummary deeplFormality={deeplFormality} preset={preset} />
+      <ToneSummary preset={preset} />
       <details className="advancedSetup">
-        <summary>Tone override and optional note</summary>
-        <div className="startFields">
-          <DeepLFormalityPicker disabled={disabled} onChange={onDeepLFormalityChange} value={deeplFormality} />
-        </div>
+        <summary>Add a note (optional)</summary>
         <div className="startFields contextFields">
           <label className="contextField">
             Useful detail for this conversation
@@ -1934,8 +1884,9 @@ function ConversationOnboarding({
               value={context}
               onChange={(event) => onContextChange(event.target.value)}
               disabled={disabled}
-              placeholder="Only add something special, like a reservation name, a thing you are buying, a medical concern, or a phrase you want to say gently."
+              placeholder="e.g. reservation name, an allergy, a phrase to say gently"
             />
+            <span className="hint">Names, allergies, places, or anything else the translator should keep in mind.</span>
           </label>
           <div className="contextExampleRow" aria-label="Context examples">
             {NOTE_EXAMPLES.map((example) => (
@@ -2031,11 +1982,12 @@ function LiveCanvas({
 }) {
   const shortTitle = transcriptShortTitle(sourceLanguages, targetLanguage, languageMap);
   const fullTitle = transcriptTitle(sourceLanguages, targetLanguage, languageMap);
-  const headline = isLive
-    ? micCaptureEnabled
-      ? "Listening"
-      : "Microphone paused"
-    : "Ready to listen";
+  const liveHeadline = micCaptureEnabled ? (
+    <>Listening<span className="listeningDots" aria-hidden="true" /></>
+  ) : (
+    "Microphone paused"
+  );
+  const headline = isLive ? liveHeadline : "Ready to listen";
   const detail = isLive
     ? openAIRealtimeEnabled
       ? "Realtime overdub is on. Speak naturally and subtitles will appear here."
@@ -2062,10 +2014,6 @@ function LiveCanvas({
         <span>{shortTitle}</span>
         <small>{fullTitle}</small>
       </div>
-      <div className="livePlaceholderBubbles" aria-hidden="true">
-        <span />
-        <span />
-      </div>
       <p>{detail}</p>
     </section>
   );
@@ -2085,7 +2033,8 @@ function SessionSidebar({
   onNew,
   onRename,
   onToggleExpanded,
-  total
+  total,
+  userName
 }: {
   activeSession: string;
   activeSessionTitle: string;
@@ -2101,6 +2050,7 @@ function SessionSidebar({
   onRename: (name: string, title: string) => Promise<void>;
   onToggleExpanded: () => void;
   total: number;
+  userName: string;
 }) {
   const [openMenuSession, setOpenMenuSession] = useState("");
   const [renamingSession, setRenamingSession] = useState("");
@@ -2125,10 +2075,10 @@ function SessionSidebar({
   return (
     <aside className={`sessionPanel ${isOpen ? "open" : ""}`} aria-label="Sessions">
       <div className="sessionPanelHeader">
-        <div className="sidebarBrand">
+        <Link aria-label="cottonoha, home" className="sidebarBrand" href="/" prefetch={false}>
           <BrandMark compact />
           <strong>cottonoha</strong>
-        </div>
+        </Link>
         <div className="sessionHeaderActions">
           <button aria-label="Close sessions" className="drawerCloseButton" onClick={onClose} type="button">
             ×
@@ -2151,12 +2101,16 @@ function SessionSidebar({
           </section>
         ) : null}
         {groups.length === 0 && !activeSession ? (
-          <p className="hint">Past conversations will appear here after a session.</p>
+          <div className="sessionEmpty">
+            <p className="sessionEmptyTitle">Your first translation will show up here.</p>
+            <button className="sessionEmptyExample" onClick={onNew} type="button">
+              <NewChatIcon />
+              <span>Start a translation</span>
+            </button>
+          </div>
         ) : (
-          groups.map((group) => (
-            <section className="sessionGroup" key={group.label}>
-              <h3>{group.label}</h3>
-              {group.sessions.map((session) => {
+          groups.map((group) => {
+            const rows = group.sessions.map((session) => {
                 const menuOpen = openMenuSession === session.name;
                 const isRenaming = renamingSession === session.name;
                 return (
@@ -2172,6 +2126,7 @@ function SessionSidebar({
                     </button>
                     <button
                       aria-expanded={menuOpen}
+                      aria-haspopup="menu"
                       aria-label={`Chat options for ${session.title || session.name}`}
                       className="sessionMenuButton"
                       onClick={() => {
@@ -2183,7 +2138,7 @@ function SessionSidebar({
                       }}
                       type="button"
                     >
-                      <span aria-hidden="true">•••</span>
+                      <KebabIcon />
                     </button>
                     {menuOpen ? (
                       <div className="sessionMenu" role="menu">
@@ -2255,9 +2210,22 @@ function SessionSidebar({
                     ) : null}
                   </div>
                 );
-              })}
-            </section>
-          ))
+              });
+            if (group.collapsedByDefault) {
+              return (
+                <details className="sessionGroup sessionGroupCollapsible" key={group.label}>
+                  <summary>{group.label}</summary>
+                  {rows}
+                </details>
+              );
+            }
+            return (
+              <section className="sessionGroup" key={group.label}>
+                <h3>{group.label}</h3>
+                {rows}
+              </section>
+            );
+          })
         )}
       </div>
 
@@ -2268,15 +2236,70 @@ function SessionSidebar({
       ) : null}
 
       <div className="sidebarBottom">
-        <div className="sidebarBottomActions">
-          <Link className="sidebarIconButton" href="/profile" prefetch={false}>
-            <ProfileIcon />
-            <span>profile</span>
-          </Link>
-          <SignOutButton className="sidebarIconButton" />
-        </div>
+        <Link className="sidebarProfileChip" href="/profile" prefetch={false}>
+          <span aria-hidden="true" className="sidebarAvatar">{userInitials(userName)}</span>
+          <span className="sidebarProfileName">{userName || "Profile"}</span>
+        </Link>
       </div>
     </aside>
+  );
+}
+
+const DRAWER_CHANGE_EVENT = "cottonoha:drawer-change";
+
+function subscribeDrawer(notify: () => void): () => void {
+  window.addEventListener("popstate", notify);
+  window.addEventListener(DRAWER_CHANGE_EVENT, notify);
+  return () => {
+    window.removeEventListener("popstate", notify);
+    window.removeEventListener(DRAWER_CHANGE_EVENT, notify);
+  };
+}
+
+function snapshotDrawer(): boolean {
+  return new URLSearchParams(window.location.search).get("sidebar") === "open";
+}
+
+function useDrawerState(): [boolean, (next: boolean) => void] {
+  const open = useSyncExternalStore(subscribeDrawer, snapshotDrawer, () => false);
+
+  function setOpen(next: boolean) {
+    if (typeof window === "undefined") return;
+    const query = new URLSearchParams(window.location.search);
+    const isOpenInUrl = query.get("sidebar") === "open";
+    if (next && !isOpenInUrl) {
+      query.set("sidebar", "open");
+      window.history.pushState(null, "", `${window.location.pathname}?${query.toString()}`);
+    } else if (!next && isOpenInUrl) {
+      query.delete("sidebar");
+      const qs = query.toString();
+      window.history.replaceState(null, "", qs ? `${window.location.pathname}?${qs}` : window.location.pathname);
+    } else {
+      return;
+    }
+    // pushState/replaceState don't fire popstate, so emit our own event for the subscriber.
+    window.dispatchEvent(new Event(DRAWER_CHANGE_EVENT));
+  }
+
+  return [open, setOpen];
+}
+
+function userInitials(name: string): string {
+  const cleaned = name.trim();
+  if (!cleaned) return "·";
+  const parts = cleaned.split(/\s+/);
+  const first = parts[0]?.[0] || "";
+  const last = parts.length > 1 ? parts[parts.length - 1][0] : "";
+  return (first + last).toUpperCase() || cleaned[0].toUpperCase();
+}
+
+function KebabIcon() {
+  return (
+    <svg aria-hidden="true" className="kebabIcon" viewBox="0 0 16 16">
+      <circle cx="3" cy="8" r="1.5" fill="currentColor" />
+      <circle cx="8" cy="8" r="1.5" fill="currentColor" />
+      <circle cx="13" cy="8" r="1.5" fill="currentColor" />
+    </svg>
   );
 }
 
@@ -2301,17 +2324,8 @@ function LanguagePicker({
   const [query, setQuery] = useState("");
   const [sourceDraft, setSourceDraft] = useState(sourceLanguages);
   const [targetDraft, setTargetDraft] = useState(targetLanguage);
-
-  useEffect(() => {
-    if (!openMenu) {
-      return;
-    }
-    const previous = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = previous;
-    };
-  }, [openMenu]);
+  const triggerRef = useRef<HTMLElement | null>(null);
+  const sheetCleanupRef = useRef<(() => void) | null>(null);
 
   const filteredLanguages = languages.filter((language) => {
     const needle = query.trim().toLowerCase();
@@ -2323,16 +2337,36 @@ function LanguagePicker({
 
   function closeSheet() {
     setOpenMenu("");
+    sheetCleanupRef.current?.();
+    sheetCleanupRef.current = null;
+    triggerRef.current?.focus();
   }
 
-  function openSheet(menu: "source" | "target") {
+  function openSheet(menu: "source" | "target", event: React.MouseEvent<HTMLButtonElement>) {
     if (disabled) {
       return;
     }
+    triggerRef.current = event.currentTarget;
     setSourceDraft(sourceLanguages);
     setTargetDraft(targetLanguage);
     setQuery("");
     setOpenMenu(menu);
+
+    // Side effects owned by this user action — explicit setup + teardown via the cleanup ref.
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        closeSheet();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    sheetCleanupRef.current?.();
+    sheetCleanupRef.current = () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", onKeyDown);
+    };
   }
 
   function toggleDraftSource(code: string) {
@@ -2373,20 +2407,26 @@ function LanguagePicker({
 
   return (
     <>
-      <button className="languageMenuButton" disabled={disabled} onClick={() => openSheet("source")} type="button">
+      <button className="languageMenuButton" disabled={disabled} onClick={(event) => openSheet("source", event)} type="button">
         <span>
           <span>Spoken</span>
           <strong>{sourceLanguages.map((code) => languageLabel(languageMap, code)).join(", ")}</strong>
         </span>
       </button>
-      <button className="languageMenuButton" disabled={disabled} onClick={() => openSheet("target")} type="button">
+      <button className="languageMenuButton" disabled={disabled} onClick={(event) => openSheet("target", event)} type="button">
         <span>
           <span>Translate to</span>
           <strong>{languageLabel(languageMap, targetLanguage)}</strong>
         </span>
       </button>
       {openMenu ? (
-        <div className="languageSheetBackdrop" role="presentation">
+        <div
+          className="languageSheetBackdrop"
+          role="presentation"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) closeSheet();
+          }}
+        >
           <section className="languageSheet" aria-label={sheetTitle} aria-modal="true" role="dialog">
             <div className="languageSheetHeader">
               <div>
@@ -2456,15 +2496,11 @@ function LanguagePicker({
   );
 }
 
-function ToneSummary({ deeplFormality, preset }: { deeplFormality: DeepLFormality; preset: typeof AUDIENCE_PRESETS[number] }) {
-  const effective = effectiveDeepLFormality(deeplFormality, preset);
+function ToneSummary({ preset }: { preset: typeof AUDIENCE_PRESETS[number] }) {
   return (
     <section className="toneSummary" aria-label="Translation tone">
-      <div>
-        <p className="panelKicker">Tone</p>
-        <strong>{preset.tone}</strong>
-      </div>
-      <span>Tone: {formalityLabel(effective)}</span>
+      <strong>Tone · {preset.tone}</strong>
+      <span className="toneSummaryFrom">From &ldquo;{preset.label}&rdquo;</span>
     </section>
   );
 }
@@ -2556,15 +2592,6 @@ function BrandMark({ compact = false }: { compact?: boolean }) {
     <span className={`brandMark ${compact ? "compact" : ""}`} aria-hidden="true">
       <Image alt="" height={34} src="/favicon.svg" width={34} />
     </span>
-  );
-}
-
-function ProfileIcon() {
-  return (
-    <svg aria-hidden="true" className="sidebarIcon" viewBox="0 0 16 16">
-      <circle cx="8" cy="5" r="3" />
-      <path d="M3 14c.8-2.8 2.4-4 5-4s4.2 1.2 5 4" />
-    </svg>
   );
 }
 
@@ -3148,8 +3175,8 @@ function recentDialogueForRewrite(
   return turns.slice(-10);
 }
 
-function formatTranscriptStats(stats: { durationSeconds: number | null; words: number; tokens: number }): string {
-  return `${formatDuration(stats.durationSeconds)}, ${stats.words} words, ${stats.tokens} tokens`;
+function formatTranscriptStats(stats: { durationSeconds: number | null }): string {
+  return formatDuration(stats.durationSeconds);
 }
 
 function formatDuration(seconds: number | null | undefined): string {
@@ -3533,25 +3560,47 @@ function dedupeTail(values: string[], limit: number): string[] {
   return result;
 }
 
+const MONTH_FORMATTER = new Intl.DateTimeFormat(undefined, { month: "long", year: "numeric" });
+
 function groupSessions(sessions: SessionSummary[]): SessionGroup[] {
-  const now = Date.now();
   const todayStart = new Date();
   todayStart.setHours(0, 0, 0, 0);
-  const groups = new Map<string, SessionSummary[]>();
+  const yesterdayStart = todayStart.getTime() - 24 * 60 * 60 * 1000;
+  const sevenDaysStart = todayStart.getTime() - 7 * 24 * 60 * 60 * 1000;
+  const thirtyDaysStart = todayStart.getTime() - 30 * 24 * 60 * 60 * 1000;
+
+  const fixedOrder: string[] = ["Today", "Yesterday", "Previous 7 days", "Previous 30 days"];
+  const buckets = new Map<string, SessionSummary[]>();
+  const monthLabels: string[] = [];
 
   for (const session of [...sessions].sort((a, b) => sessionUpdatedMs(b) - sessionUpdatedMs(a))) {
     const updated = session.updated ? new Date(session.updated).getTime() : 0;
-    const label = updated >= todayStart.getTime()
-      ? "Today"
-      : now - updated <= 7 * 24 * 60 * 60 * 1000
-        ? "Last week"
-        : "Older";
-    groups.set(label, [...(groups.get(label) || []), session]);
+    let label: string;
+    if (updated >= todayStart.getTime()) {
+      label = "Today";
+    } else if (updated >= yesterdayStart) {
+      label = "Yesterday";
+    } else if (updated >= sevenDaysStart) {
+      label = "Previous 7 days";
+    } else if (updated >= thirtyDaysStart) {
+      label = "Previous 30 days";
+    } else {
+      label = MONTH_FORMATTER.format(new Date(updated || Date.now()));
+      if (!monthLabels.includes(label)) monthLabels.push(label);
+    }
+    buckets.set(label, [...(buckets.get(label) || []), session]);
   }
 
-  return ["Today", "Last week", "Older"]
-    .map((label) => ({ label, sessions: groups.get(label) || [] }))
-    .filter((group) => group.sessions.length > 0);
+  const ordered: SessionGroup[] = [];
+  for (const label of fixedOrder) {
+    const rows = buckets.get(label);
+    if (rows && rows.length > 0) ordered.push({ label, sessions: rows });
+  }
+  for (const label of monthLabels) {
+    const rows = buckets.get(label);
+    if (rows && rows.length > 0) ordered.push({ label, sessions: rows, collapsedByDefault: true });
+  }
+  return ordered;
 }
 
 function sessionUpdatedMs(session: SessionSummary): number {

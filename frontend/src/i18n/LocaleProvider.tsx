@@ -1,9 +1,10 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, useCallback, useContext, useMemo, useSyncExternalStore } from "react";
 import { DEFAULT_LOCALE, Locale, messages, type Messages } from "./messages";
 
 const STORAGE_KEY = "cottonoha-locale";
+const LOCALE_CHANGE_EVENT = "cottonoha:locale-change";
 
 interface LocaleContextValue {
   locale: Locale;
@@ -14,46 +15,47 @@ interface LocaleContextValue {
 
 const LocaleContext = createContext<LocaleContextValue | null>(null);
 
+function readStoredLocale(): Locale {
+  try {
+    const stored = window.localStorage.getItem(STORAGE_KEY);
+    if (stored === "ja" || stored === "en") return stored;
+  } catch {
+    // localStorage unavailable
+  }
+  return DEFAULT_LOCALE;
+}
+
+function subscribeLocale(notify: () => void): () => void {
+  window.addEventListener(LOCALE_CHANGE_EVENT, notify);
+  window.addEventListener("storage", notify);
+  return () => {
+    window.removeEventListener(LOCALE_CHANGE_EVENT, notify);
+    window.removeEventListener("storage", notify);
+  };
+}
+
+function persistLocale(l: Locale): void {
+  try {
+    window.localStorage.setItem(STORAGE_KEY, l);
+  } catch {
+    // localStorage unavailable
+  }
+  if (typeof document !== "undefined") {
+    document.documentElement.lang = l;
+  }
+  window.dispatchEvent(new Event(LOCALE_CHANGE_EVENT));
+}
+
 export function LocaleProvider({ children }: { children: React.ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>(DEFAULT_LOCALE);
-
-  useEffect(() => {
-    try {
-      const stored = window.localStorage.getItem(STORAGE_KEY);
-      if (stored === "ja" || stored === "en") {
-        setLocaleState(stored);
-      }
-    } catch {
-      // localStorage unavailable — ignore
-    }
-  }, []);
-
-  useEffect(() => {
-    if (typeof document !== "undefined") {
-      document.documentElement.lang = locale;
-    }
-  }, [locale]);
+  const locale = useSyncExternalStore(subscribeLocale, readStoredLocale, () => DEFAULT_LOCALE);
 
   const setLocale = useCallback((l: Locale) => {
-    setLocaleState(l);
-    try {
-      window.localStorage.setItem(STORAGE_KEY, l);
-    } catch {
-      // localStorage unavailable — ignore
-    }
+    persistLocale(l);
   }, []);
 
   const toggleLocale = useCallback(() => {
-    setLocaleState((prev) => {
-      const next = prev === "ja" ? "en" : "ja";
-      try {
-        window.localStorage.setItem(STORAGE_KEY, next);
-      } catch {
-        // localStorage unavailable — ignore
-      }
-      return next;
-    });
-  }, []);
+    persistLocale(locale === "ja" ? "en" : "ja");
+  }, [locale]);
 
   const value = useMemo<LocaleContextValue>(
     () => ({ locale, setLocale, toggleLocale, t: messages[locale] }),

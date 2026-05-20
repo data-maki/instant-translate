@@ -39,7 +39,7 @@ def sanitize_session_name(name: str | None) -> str:
     return "-".join(safe.split())[:80] or "web-session"
 
 
-def list_sessions() -> list[dict[str, Any]]:
+def list_sessions(user_id: str | None = None) -> list[dict[str, Any]]:
     output_dir = shared.REPO_ROOT / "output"
     if not output_dir.exists():
         return []
@@ -50,6 +50,8 @@ def list_sessions() -> list[dict[str, Any]]:
             continue
         state = read_session_state(path.name)
         if not state:
+            continue
+        if user_id is not None and state.get("user_id") != user_id:
             continue
         title = session_display_title(path, state)
         updated = session_updated_iso(path, state.get("updated"))
@@ -63,6 +65,15 @@ def list_sessions() -> list[dict[str, Any]]:
             "target_language": state.get("target_language"),
         })
     return sorted(sessions, key=lambda session: session_sort_time(output_dir / session["name"], session), reverse=True)
+
+
+def session_belongs_to(state: dict[str, Any] | None, user_id: str | None) -> bool:
+    """Returns True when there's no user scope to enforce, or it matches."""
+    if user_id is None:
+        return True
+    if not isinstance(state, dict):
+        return False
+    return state.get("user_id") == user_id
 
 
 def session_updated_iso(session_dir: Path, updated: Any) -> str | None:
@@ -99,8 +110,6 @@ def session_display_title(session_dir: Path, state: dict[str, Any] | None) -> st
     summary = read_session_summary(session_dir)
     if summary and summary.get("title"):
         return str(summary["title"])[:48]
-    if state and state.get("tokens"):
-        return fallback_session_title_from_tokens(state.get("tokens", [])) or fallback_session_title(session_dir.name)
     return "New chat"
 
 

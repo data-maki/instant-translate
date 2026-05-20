@@ -52,13 +52,16 @@ public final class TranslatorViewModel: ObservableObject {
     }
 
     public func loadInitialData() async {
+        AppLog.app.info("Loading initial translator data")
         do {
             let response = try await api.fetchLanguages()
             languages = response.languages
             sourceLanguages = response.defaultSourceLanguages
             targetLanguage = response.defaultTargetLanguage
             try await refreshSessions()
+            AppLog.app.info("Loaded initial data languages=\(response.languages.count) sessions=\(self.sessions.count)")
         } catch {
+            AppLog.app.error("Initial data load failed: \(error.localizedDescription, privacy: .public)")
             errorMessage = friendlyError(error)
             status = .error
         }
@@ -108,6 +111,7 @@ public final class TranslatorViewModel: ObservableObject {
     }
 
     public func start() async {
+        AppLog.realtime.info("Starting translation session realtime=\(self.realtimeEnabled) sourceLanguages=\(self.sourceLanguages.joined(separator: ","), privacy: .public) targetLanguage=\(self.targetLanguage, privacy: .public)")
         errorMessage = ""
         phrases = []
         activeSessionTitle = realtimeEnabled ? "Realtime overdub" : "New chat"
@@ -146,13 +150,16 @@ public final class TranslatorViewModel: ObservableObject {
                 }
             }
             status = .listening
+            AppLog.realtime.info("Translation session listening")
         } catch {
+            AppLog.realtime.error("Translation session failed to start: \(error.localizedDescription, privacy: .public)")
             fail(friendlyError(error))
             await stop()
         }
     }
 
     public func stop() async {
+        AppLog.realtime.info("Stopping translation session")
         status = .stopping
         recorder?.stop()
         recorder = nil
@@ -161,6 +168,7 @@ public final class TranslatorViewModel: ObservableObject {
         player.stop()
         status = .stopped
         try? await refreshSessions()
+        AppLog.realtime.info("Translation session stopped")
     }
 
     public func toggleMicrophone() {
@@ -234,6 +242,7 @@ public final class TranslatorViewModel: ObservableObject {
     }
 
     private func fail(_ message: String) {
+        AppLog.app.error("Translator entered error state: \(message, privacy: .public)")
         errorMessage = message
         status = .error
     }

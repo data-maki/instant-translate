@@ -3,12 +3,12 @@
 	archiveVersion = 1;
 	classes = {
 	};
-	objectVersion = 56;
+	objectVersion = 60;
 	objects = {
 
 /* Begin PBXBuildFile section */
 		A10000000000000000000001 /* CottonohaIOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000002 /* CottonohaIOSApp.swift */; };
-		A10000000000000000000003 /* CottonohaApp in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000004 /* CottonohaApp */; };
+		A10000000000000000000003 /* CottonohaCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000004 /* CottonohaCore */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -22,7 +22,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				A10000000000000000000003 /* CottonohaApp in Frameworks */,
+				A10000000000000000000003 /* CottonohaCore in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -71,7 +71,7 @@
 			);
 			name = Cottonoha;
 			packageProductDependencies = (
-				A10000000000000000000004 /* CottonohaApp */,
+				A10000000000000000000004 /* CottonohaCore */,
 			);
 			productName = Cottonoha;
 			productReference = A10000000000000000000006 /* Cottonoha.app */;
@@ -255,7 +255,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = X95828B7PG;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = CottonohaApp/Info.plist;
@@ -281,7 +281,7 @@
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_ASSET_PATHS = "";
-				DEVELOPMENT_TEAM = "";
+				DEVELOPMENT_TEAM = X95828B7PG;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = CottonohaApp/Info.plist;
@@ -304,20 +304,20 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
-		A10000000000000000000010 /* Build configuration list for PBXProject "CottonohaApp" */ = {
-			isa = XCConfigurationList;
-			buildConfigurations = (
-				A10000000000000000000012 /* Debug */,
-				A10000000000000000000013 /* Release */,
-			);
-			defaultConfigurationIsVisible = 0;
-			defaultConfigurationName = Release;
-		};
 		A1000000000000000000000C /* Build configuration list for PBXNativeTarget "Cottonoha" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				A10000000000000000000014 /* Debug */,
 				A10000000000000000000015 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A10000000000000000000010 /* Build configuration list for PBXProject "CottonohaApp" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A10000000000000000000012 /* Debug */,
+				A10000000000000000000013 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
@@ -332,10 +332,10 @@
 /* End XCLocalSwiftPackageReference section */
 
 /* Begin XCSwiftPackageProductDependency section */
-		A10000000000000000000004 /* CottonohaApp */ = {
+		A10000000000000000000004 /* CottonohaCore */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = A10000000000000000000011 /* XCLocalSwiftPackageReference "../Cottonoha" */;
-			productName = CottonohaApp;
+			productName = CottonohaCore;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

@@ -3,7 +3,7 @@ import { LocaleProvider } from "@/i18n/LocaleProvider";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "cottonoha · コトノハ",
+  title: "Kotonoha 言の葉 · cottonoha",
   description: "日本語のままで、外国人と通じる。Voice-first JA ⇄ EN translation, built in Tokyo.",
   icons: {
     icon: "/favicon.svg"

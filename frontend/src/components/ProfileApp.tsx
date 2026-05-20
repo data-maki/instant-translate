@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { SignOutButton } from "@/components/SignOutButton";
 import { fetchNameKatakanaOptions, importGoogleMapsList, type NameKatakanaOption } from "@/lib/api";
 import {
@@ -58,7 +58,9 @@ const FOOD_ACCESS_PROFILE_FIELDS = PROFILE_FIELDS.filter((field) =>
 const SAVE_ACK_MS = 2200;
 
 export function ProfileApp() {
-  const [profile, setProfile] = useState<TravelerProfile>(DEFAULT_PROFILE);
+  const [profile, setProfile] = useState<TravelerProfile>(() =>
+    typeof window === "undefined" ? DEFAULT_PROFILE : loadTravelerProfile()
+  );
   const [saveStatus, setSaveStatus] = useState("Saved in this browser");
   const [saveAck, setSaveAck] = useState(false);
   const saveAckTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -68,13 +70,6 @@ export function ProfileApp() {
   const [mapsListUrl, setMapsListUrl] = useState("");
   const [mapsImportStatus, setMapsImportStatus] = useState("");
   const [mapsImporting, setMapsImporting] = useState(false);
-
-  useEffect(() => {
-    const frame = window.requestAnimationFrame(() => {
-      setProfile(loadTravelerProfile());
-    });
-    return () => window.cancelAnimationFrame(frame);
-  }, []);
 
   function clearSaveAck() {
     if (saveAckTimer.current) {
