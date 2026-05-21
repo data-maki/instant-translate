@@ -536,6 +536,7 @@ def test_sessions_endpoint_can_limit_initial_history_payload(tmp_path, monkeypat
                 "tokens": [],
                 "source_languages": ["en", "ja"],
                 "target_language": "en",
+                "user_id": "test-user",
             }),
             encoding="utf-8",
         )

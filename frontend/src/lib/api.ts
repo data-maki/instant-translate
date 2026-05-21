@@ -156,19 +156,34 @@ export function apiBaseUrl() {
   return process.env.NEXT_PUBLIC_API_BASE_URL || DEFAULT_API_BASE_URL;
 }
 
-export function websocketUrl() {
+export function websocketUrl(token?: string) {
   const base = new URL(apiBaseUrl());
   base.protocol = base.protocol === "https:" ? "wss:" : "ws:";
   base.pathname = "/ws/transcribe";
+  if (token) {
+    base.searchParams.set("token", token);
+  }
   return base.toString();
 }
 
-function withUserHeader(init: RequestInit, userId?: string): RequestInit {
-  if (!userId) return init;
+/**
+ * Attach the BetterAuth bearer token. The token is the same one the server
+ * issues on sign-in (BetterAuth bearer plugin) and is the only credential the
+ * FastAPI backend will accept — clients never claim an identity by themselves,
+ * the backend forwards this token to /api/auth/get-session for resolution.
+ *
+ * The legacy `withUserHeader` name was misleading (it implied the client
+ * decides who it is); keep `userId` as the parameter alias for now to avoid
+ * touching every callsite in a single sweep, but treat it as a bearer token.
+ */
+function withAuthHeader(init: RequestInit, token?: string): RequestInit {
+  if (!token) return init;
   const headers = new Headers(init.headers);
-  headers.set("X-User-Id", userId);
+  headers.set("Authorization", `Bearer ${token}`);
   return { ...init, headers };
 }
+
+const withUserHeader = withAuthHeader;
 
 async function requestJson<T>(path: string, init: RequestInit, fallbackError: string): Promise<T> {
   const response = await fetch(`${apiBaseUrl()}${path}`, init);
@@ -286,22 +301,22 @@ export async function fetchPlacesContext(payload: {
   lng: number;
   intent: string;
   poi_type?: string;
-}): Promise<PlacesContextResult> {
-  return requestJson("/context/places", {
+}, userId?: string): Promise<PlacesContextResult> {
+  return requestJson("/context/places", withUserHeader({
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
-  }, "Could not load nearby places");
+  }, userId), "Could not load nearby places");
 }
 
 export async function createRealtimeTranslationSession(payload: {
   target_language: string;
-}): Promise<RealtimeTranslationSession> {
-  return requestJson("/realtime/translation-session", {
+}, userId?: string): Promise<RealtimeTranslationSession> {
+  return requestJson("/realtime/translation-session", withUserHeader({
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
-  }, "Could not start GPT realtime translation");
+  }, userId), "Could not start GPT realtime translation");
 }
 
 export async function adaptPhrase(payload: {
@@ -310,12 +325,12 @@ export async function adaptPhrase(payload: {
   source_text: string;
   draft_translation?: string;
   rewrite_context: Record<string, unknown>;
-}): Promise<AdaptPhraseResult> {
-  return requestJson("/context/rewrite", {
+}, userId?: string): Promise<AdaptPhraseResult> {
+  return requestJson("/context/rewrite", withUserHeader({
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
-  }, "Could not adapt phrase");
+  }, userId), "Could not adapt phrase");
 }
 
 export async function translatePhrase(payload: {
@@ -324,12 +339,31 @@ export async function translatePhrase(payload: {
   source_text: string;
   draft_translation?: string;
   rewrite_context: Record<string, unknown>;
-}): Promise<TranslatePhraseResult> {
-  return requestJson("/context/translate", {
+}, userId?: string): Promise<TranslatePhraseResult> {
+  return requestJson("/context/translate", withUserHeader({
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
-  }, "Could not translate phrase");
+  }, userId), "Could not translate phrase");
+}
+
+export type TtsResult = {
+  audio_base64: string;
+  mime_type: string;
+  voice_id: string;
+  model_id: string;
+};
+
+export async function generateTts(payload: {
+  text: string;
+  target_language: string;
+  voice_id?: string;
+}, userId?: string): Promise<TtsResult> {
+  return requestJson("/tts/speak", withUserHeader({
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  }, userId), "Could not synthesize speech");
 }
 
 export type NameKatakanaOption = {
@@ -359,12 +393,12 @@ export type MapsListImportResult = {
   places: MapsListPlace[];
 };
 
-export async function importGoogleMapsList(payload: { url: string }): Promise<MapsListImportResult> {
-  const raw = await requestJson<MapsListImportResult>("/context/maps-list", {
+export async function importGoogleMapsList(payload: { url: string }, userId?: string): Promise<MapsListImportResult> {
+  const raw = await requestJson<MapsListImportResult>("/context/maps-list", withUserHeader({
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
-  }, "Could not import Google Maps list");
+  }, userId), "Could not import Google Maps list");
   return {
     title: String(raw.title || "").trim(),
     source_url: String(raw.source_url || payload.url).trim(),
@@ -385,12 +419,12 @@ export async function importGoogleMapsList(payload: { url: string }): Promise<Ma
 export async function fetchNameKatakanaOptions(payload: {
   first_name: string;
   last_name: string;
-}): Promise<NameKatakanaResult> {
-  const raw = await requestJson<{ options?: unknown }>("/context/name-katakana", {
+}, userId?: string): Promise<NameKatakanaResult> {
+  const raw = await requestJson<{ options?: unknown }>("/context/name-katakana", withUserHeader({
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
-  }, "Could not load katakana suggestions");
+  }, userId), "Could not load katakana suggestions");
   const rows = Array.isArray(raw.options) ? raw.options : [];
   const options: NameKatakanaOption[] = [];
   for (const row of rows) {

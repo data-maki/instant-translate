@@ -1,17 +1,17 @@
 "use client";
 
-import type { CSSProperties } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   adaptPhrase,
-  autoTitleSession,
   createRealtimeTranslationSession,
   deleteSession as deleteSavedSession,
   fetchPlacesContext,
   fetchSessionDetail,
   fetchSessions,
+  generateTts,
   Language,
   Phrase,
   rediarizeSession,
@@ -26,12 +26,15 @@ import {
 } from "@/lib/api";
 import type { PcmAudioPlayer, RecorderHandle } from "@/lib/audio";
 import {
-  DEFAULT_PROFILE,
+  getServerProfileSnapshot,
   loadTravelerProfile,
   profileKatakanaFullDisplay,
   profileWesternFullName,
+  subscribeTravelerProfile,
   TravelerProfile
 } from "@/lib/profile";
+import { ProfileMenu } from "@/components/ProfileMenu";
+import { playTtsThroughAec, type TtsPlayback } from "@/lib/tts-playback";
 
 type AppStatus =
   | "idle"
@@ -191,7 +194,12 @@ type RealtimeCaptionDraft = {
 };
 
 const DEEPL_FORMALITY_STORAGE_KEY = "mil-decoder-deepl-formality-v1";
+const TTS_MODE_STORAGE_KEY = "mil-decoder-tts-mode-v1";
+
+type TtsMode = "push" | "auto";
+type TtsPlaybackState = "loading" | "playing" | "error";
 const DISPLAY_GROUP_PAUSE_SECONDS = 10;
+const AUTO_IMPROVE_DELAY_MS = 2 * 60 * 1000;
 const INITIAL_SESSION_LIMIT = 24;
 const SESSION_PAGE_SIZE = 24;
 const DEFAULT_SESSION_PLACE_CONTEXT: SessionPlaceContext = {
@@ -272,8 +280,10 @@ export function TranslatorApp({
     return "auto";
   });
   const [context, setContext] = useState("");
-  const [travelerProfile, setTravelerProfile] = useState<TravelerProfile>(() =>
-    typeof window === "undefined" ? DEFAULT_PROFILE : loadTravelerProfile()
+  const travelerProfile = useSyncExternalStore(
+    subscribeTravelerProfile,
+    loadTravelerProfile,
+    getServerProfileSnapshot
   );
   const [sessionPlaceContext, setSessionPlaceContext] = useState<SessionPlaceContext>(DEFAULT_SESSION_PLACE_CONTEXT);
   const selectedPreset = getAudiencePreset(audiencePreset);
@@ -313,10 +323,25 @@ export function TranslatorApp({
   const [micCaptureEnabled, setMicCaptureEnabled] = useState(true);
   const [englishToTargetOverdubEnabled, setEnglishToTargetOverdubEnabled] = useState(true);
   const [targetToEnglishOverdubEnabled, setTargetToEnglishOverdubEnabled] = useState(true);
+  const [ttsMode, setTtsMode] = useState<TtsMode>(() => {
+    if (typeof window === "undefined") return "push";
+    try {
+      const saved = window.localStorage.getItem(TTS_MODE_STORAGE_KEY);
+      if (saved === "push" || saved === "auto") return saved;
+    } catch {
+      // localStorage unavailable
+    }
+    return "push";
+  });
+  const [ttsStatus, setTtsStatus] = useState<Record<string, TtsPlaybackState>>({});
 
   const wsRef = useRef<WebSocket | null>(null);
   const recorderRef = useRef<RecorderHandle | null>(null);
   const audioPlayerRef = useRef<PcmAudioPlayer | null>(null);
+  const ttsAudioRef = useRef<TtsPlayback | null>(null);
+  const ttsSpokenKeysRef = useRef<Set<string>>(new Set());
+  const ttsModeRef = useRef<TtsMode>("push");
+  const ttsLatencyRef = useRef<TranscriptLatencyMode>("fast");
   const realtimeSessionsRef = useRef<Record<RealtimeDirection, RealtimeWebRTCSession | null>>({
     english_to_target: null,
     target_to_english: null
@@ -338,6 +363,12 @@ export function TranslatorApp({
   const providerSignalsRef = useRef<ProviderSignals>({ transcripts: [], translations: [] });
   const durationTimerRef = useRef<number | null>(null);
   const stopFallbackTimerRef = useRef<number | null>(null);
+  const autoImproveTimerRef = useRef<number | null>(null);
+
+  ttsModeRef.current = ttsMode;
+  ttsLatencyRef.current = transcriptLatencyMode;
+
+  const ttsSpeakLanguage = englishOverdubTargetLanguage(sourceALanguages, sourceB);
 
   const sourceA = sourceALanguages[0] || (sourceB === "en" ? "ja" : "en");
   const canStart = status === "idle" || status === "stopped" || status === "error";
@@ -452,6 +483,7 @@ export function TranslatorApp({
     if (options.requestAdaptations !== false) {
       requestAdaptationsFor(next);
     }
+    maybeAutoSpeakPhrases(next, adaptationsRef.current);
   }
 
   function upsertRealtimePhrase(phrase: Phrase) {
@@ -552,6 +584,89 @@ export function TranslatorApp({
     }
   }
 
+  function changeTtsMode(mode: TtsMode) {
+    setTtsMode(mode);
+    if (typeof window !== "undefined") {
+      try {
+        window.localStorage.setItem(TTS_MODE_STORAGE_KEY, mode);
+      } catch {
+        // localStorage unavailable
+      }
+    }
+  }
+
+  function setTtsStatusFor(key: string, value: TtsPlaybackState | null) {
+    if (!key) return;
+    setTtsStatus((current) => {
+      if (value === null) {
+        if (!(key in current)) return current;
+        const next = { ...current };
+        delete next[key];
+        return next;
+      }
+      if (current[key] === value) return current;
+      return { ...current, [key]: value };
+    });
+  }
+
+  async function speakPhraseText(key: string, text: string, languageCode: string) {
+    const cleanText = (text || "").replace(/\s+/g, " ").trim();
+    if (!cleanText) return;
+    const language = (languageCode || "").trim().toLowerCase() || ttsSpeakLanguage;
+    setTtsStatusFor(key, "loading");
+    try {
+      const previous = ttsAudioRef.current;
+      if (previous) previous.stop();
+      const profileVoice = travelerProfile.tts_voice_id?.trim();
+      // Profile voice is curated for Japanese; use it only when speaking Japanese.
+      const requestVoice = language === "ja" && profileVoice ? profileVoice : undefined;
+      const result = await generateTts({
+        text: cleanText,
+        target_language: language,
+        voice_id: requestVoice
+      }, userId);
+      // Route through a local WebRTC loopback so the browser's AEC (already
+      // engaged on the mic stream via echoCancellation: true) subtracts the
+      // TTS audio from the captured mic signal. See lib/tts-playback.ts.
+      const playback = await playTtsThroughAec(
+        `data:${result.mime_type};base64,${result.audio_base64}`
+      );
+      ttsAudioRef.current = playback;
+      setTtsStatusFor(key, "playing");
+      playback.done.then(() => {
+        if (ttsAudioRef.current === playback) {
+          ttsAudioRef.current = null;
+        }
+        setTtsStatusFor(key, null);
+      });
+    } catch {
+      setTtsStatusFor(key, "error");
+    }
+  }
+
+  function ttsKeyForPhrase(phrase: Phrase, language: string): string {
+    return `tts:${phrase.id}:${language}`;
+  }
+
+  function maybeAutoSpeakPhrases(
+    phrasesToCheck: Phrase[],
+    adaptationsSnapshot: Record<string, PhraseAdaptation>
+  ) {
+    if (ttsModeRef.current !== "auto") return;
+    const language = ttsSpeakLanguage;
+    if (!language) return;
+    const latency = ttsLatencyRef.current;
+    for (const phrase of phrasesToCheck) {
+      if (!phraseSpeakReady(phrase, adaptationsSnapshot, language, latency)) continue;
+      const text = phraseTargetText(phrase, language, adaptationsSnapshot);
+      if (!text.trim()) continue;
+      const key = ttsKeyForPhrase(phrase, language);
+      if (ttsSpokenKeysRef.current.has(key)) continue;
+      ttsSpokenKeysRef.current.add(key);
+      void speakPhraseText(key, text, language);
+    }
+  }
+
   function requestAdaptationsFor(phrasesToInspect: Phrase[], targetLanguage = activeLeftLanguage) {
     const phrasesForRewrite = phrasesToInspect;
 
@@ -591,7 +706,7 @@ export function TranslatorApp({
             tone: contextBundle.rewriteTone,
             recent_dialogue: recentDialogueForRewrite(phrasesForRewrite, adaptationsRef.current, translationKey, target)
           }
-        })
+        }, userId)
           .then((result) => {
             const nextAdaptation = {
               source_rewrite: adaptationsRef.current[translationKey]?.source_rewrite || "",
@@ -603,6 +718,7 @@ export function TranslatorApp({
               ...current,
               [translationKey]: nextAdaptation
             }));
+            maybeAutoSpeakPhrases([phrase], adaptationsRef.current);
           })
           .catch(() => {
             setAdaptationsSynced((current) => ({
@@ -642,7 +758,7 @@ export function TranslatorApp({
         source_text: sourceText,
         draft_translation: draftTranslation,
         rewrite_context: baseRewriteContext
-      })
+      }, userId)
         .then((result) => {
           const nextAdaptation = {
             source_rewrite: adaptationsRef.current[key]?.source_rewrite || "",
@@ -654,6 +770,7 @@ export function TranslatorApp({
             ...current,
             [key]: nextAdaptation
           }));
+          maybeAutoSpeakPhrases([phrase], adaptationsRef.current);
         })
         .catch(() => {
           // Keep Soniox's provisional translation if the fast DeepL pass misses.
@@ -681,7 +798,7 @@ export function TranslatorApp({
               ...signals.translations.slice(-4)
             ]
           }
-        })
+        }, userId)
           .then((result) => {
             const nextAdaptation = { ...result, status: "ready" as const };
             persistAdaptation(key, nextAdaptation);
@@ -705,30 +822,41 @@ export function TranslatorApp({
   }
 
   async function start(forceRealtime = openAIRealtimeEnabled) {
+    cancelAutoImprove();
+    const resumeSessionName = activeSessionRef.current;
+    const isResuming = Boolean(resumeSessionName);
     setError("");
-    setSavedPath("");
-    setActiveSessionSynced("");
-    setActiveSessionTitle("New chat");
     setRediarizeStatus("");
     setTranslationStatus("");
     setReviewStatus("");
-    setSpeakerDrafts({});
-    setEditingSpeaker(null);
-    setSpeakerEditorDraft(null);
-    setPhrases([]);
-    resetAdaptations();
     clearProviderSignals();
     clearRealtimeCaptionDrafts();
-    setTokenCount(0);
-    setActiveDurationSeconds(0);
-    startDurationTimer(Date.now());
+    if (!isResuming) {
+      setSavedPath("");
+      setActiveSessionSynced("");
+      setActiveSessionTitle("New chat");
+      setSpeakerDrafts({});
+      setEditingSpeaker(null);
+      setSpeakerEditorDraft(null);
+      setPhrases([]);
+      resetAdaptations();
+      setTokenCount(0);
+      setActiveDurationSeconds(0);
+      startDurationTimer(Date.now());
+    } else {
+      // Resume: keep existing transcript, adaptations, title, and token count.
+      // Continue the duration timer from where it left off so the displayed
+      // length keeps accumulating instead of restarting at zero.
+      const elapsedSeconds = activeDurationSeconds ?? durationFromPhrases(phrases) ?? 0;
+      startDurationTimer(Date.now() - Math.max(0, elapsedSeconds) * 1000);
+    }
     shouldFollowFeedRef.current = true;
     setStatus("requesting microphone");
 
     try {
       if (forceRealtime) {
         await startRealtimeOverdub();
-        await startRealtimeTranscriptBridge();
+        await startRealtimeTranscriptBridge(resumeSessionName);
         return;
       }
       const { startPcmRecorder } = await import("@/lib/audio");
@@ -741,7 +869,7 @@ export function TranslatorApp({
       recorderRef.current = recorder;
 
       setStatus("connecting");
-      const socket = new WebSocket(websocketUrl());
+      const socket = new WebSocket(websocketUrl(userId));
       socket.binaryType = "arraybuffer";
       wsRef.current = socket;
 
@@ -749,7 +877,7 @@ export function TranslatorApp({
         socket.send(
           JSON.stringify({
             type: "start",
-            session_name: "",
+            session_name: resumeSessionName,
             user_id: userId,
             source_languages: [...sourceALanguages, sourceB],
             target_language: sourceB,
@@ -787,9 +915,6 @@ export function TranslatorApp({
 
   function changeRealtimeEnabled(enabled: boolean) {
     setOpenAIRealtimeEnabled(enabled);
-    if (enabled && showOnboarding && canStart && hasLanguagePair) {
-      void start(true);
-    }
   }
 
   async function startRealtimeOverdub() {
@@ -815,7 +940,7 @@ export function TranslatorApp({
     setStatus("listening");
   }
 
-  async function startRealtimeTranscriptBridge() {
+  async function startRealtimeTranscriptBridge(resumeSessionName = "") {
     realtimeTranscriptBridgeActiveRef.current = true;
     sonioxRealtimePhraseCountRef.current = 0;
     const { startPcmRecorder } = await import("@/lib/audio");
@@ -831,7 +956,7 @@ export function TranslatorApp({
     });
     recorderRef.current = recorder;
 
-    const socket = new WebSocket(websocketUrl());
+    const socket = new WebSocket(websocketUrl(userId));
     socket.binaryType = "arraybuffer";
     wsRef.current = socket;
 
@@ -839,7 +964,7 @@ export function TranslatorApp({
       socket.send(
         JSON.stringify({
           type: "start",
-          session_name: "",
+          session_name: resumeSessionName,
           user_id: userId,
           source_languages: [...sourceALanguages, sourceB],
           target_language: sourceB,
@@ -878,7 +1003,7 @@ export function TranslatorApp({
     const targetLanguage = direction === "english_to_target"
       ? englishOverdubTargetLanguage(sourceALanguages, sourceB)
       : ENGLISH_LANGUAGE;
-    const secret = await createRealtimeTranslationSession({ target_language: targetLanguage });
+    const secret = await createRealtimeTranslationSession({ target_language: targetLanguage }, userId);
     const clientSecret = secret.value || secret.client_secret?.value;
     if (!clientSecret) {
       throw new Error("OpenAI realtime session response did not include a client secret.");
@@ -1010,7 +1135,6 @@ export function TranslatorApp({
       const result = await fetchSessions({ limit: desired, userId });
       setSessions(result.sessions);
       setSessionTotal(result.total);
-      autoTitleMissingSessions(result.sessions);
     } catch {
       // The main health/language load already exposes backend connection errors.
     }
@@ -1033,7 +1157,6 @@ export function TranslatorApp({
         return next.length ? [...current, ...next] : current;
       });
       setSessionTotal(result.total);
-      autoTitleMissingSessions(result.sessions);
     } catch {
       // Leave what we have; the sentinel will retry on next intersection.
     } finally {
@@ -1218,7 +1341,14 @@ export function TranslatorApp({
     }
     if (message.type === "session") {
       setActiveSessionSynced(message.session.name);
-      setActiveSessionTitle(message.session.title || "New chat");
+      const incomingTitle = (message.session.title || "").trim();
+      // On resume, the backend re-emits "New chat" before the saved title is
+      // restored — don't clobber a real title we already have on screen.
+      if (incomingTitle && incomingTitle.toLowerCase() !== "new chat") {
+        setActiveSessionTitle(incomingTitle);
+      } else if (!activeSessionTitle.trim()) {
+        setActiveSessionTitle("New chat");
+      }
       setTokenCount(message.session.token_count);
       return;
     }
@@ -1252,7 +1382,12 @@ export function TranslatorApp({
     }
     if (message.type === "saved") {
       setActiveSessionSynced(message.session);
-      setActiveSessionTitle(message.title || "New chat");
+      const savedTitle = String(message.title || "").trim();
+      if (savedTitle && savedTitle.toLowerCase() !== "new chat") {
+        setActiveSessionTitle(savedTitle);
+      } else if (!activeSessionTitle.trim()) {
+        setActiveSessionTitle("New chat");
+      }
       setSavedPath(message.path);
       setPhrasesAndFollow(message.phrases);
       clearProviderSignals();
@@ -1288,9 +1423,11 @@ export function TranslatorApp({
 
   function stop() {
     setStatus("stopping");
+    const sessionToImprove = activeSessionRef.current;
     if (openAIRealtimeEnabled) {
       cleanup();
       setStatus("stopped");
+      scheduleAutoImprove(sessionToImprove);
       return;
     }
     recorderRef.current?.stop();
@@ -1312,6 +1449,7 @@ export function TranslatorApp({
         return current;
       });
     }, 45_000);
+    scheduleAutoImprove(sessionToImprove);
   }
 
   function toggleMicCapture() {
@@ -1354,40 +1492,35 @@ export function TranslatorApp({
     realtimeSessionsRef.current[direction] = null;
   }
 
-  async function improveSpeakersAndTranslations() {
-    if (!activeSession) {
-      return;
-    }
-    setError("");
-    setImprovingAll(true);
-    setRediarizing(true);
-    setTranslating(false);
-    setRediarizeStatus("Improving speakers...");
-    setTranslationStatus("");
+  // Silent, fire-and-forget improve. Runs in the background after a chat stops.
+  // Backend only overwrites artifacts on success; failures leave the chat untouched.
+  // No UI state is mutated — the polished transcript appears the next time the session is loaded.
+  async function runAutoImproveSilently(sessionName: string) {
+    if (!sessionName) return;
     try {
-      const speakerResult = await rediarizeSession(activeSession, userId);
-      resetAdaptations();
-      setPhrasesAndFollow(speakerResult.phrases);
-      setTokenCount(speakerResult.token_count);
-      setSavedPath(speakerResult.path);
-      setRediarizeStatus(`Improved: ${speakerResult.speaker_count} speakers`);
+      await rediarizeSession(sessionName, userId);
+      await retranslateSession(sessionName, userId);
+      // Drop any cached detail so the next load fetches the freshly polished version.
+      delete sessionDetailCacheRef.current[sessionName];
+    } catch {
+      // Best-effort: swallow errors. Original chat is preserved by the backend.
+    }
+  }
 
-      setRediarizing(false);
-      setTranslating(true);
-      setTranslationStatus("Improving translations...");
-      const translationResult = await retranslateSession(activeSession, userId);
-      resetAdaptations();
-      setPhrasesAndFollow(translationResult.phrases);
-      setTokenCount(translationResult.token_count);
-      setSavedPath(translationResult.path);
-      setTranslationStatus(`Improved: ${translationResult.translation_count} translations`);
-      setReviewStatus("Ready for speaker review");
-    } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Could not improve transcript.");
-    } finally {
-      setRediarizing(false);
-      setTranslating(false);
-      setImprovingAll(false);
+  function scheduleAutoImprove(sessionName: string) {
+    cancelAutoImprove();
+    if (!sessionName) return;
+    if (!travelerProfile.auto_improve) return;
+    autoImproveTimerRef.current = window.setTimeout(() => {
+      autoImproveTimerRef.current = null;
+      void runAutoImproveSilently(sessionName);
+    }, AUTO_IMPROVE_DELAY_MS);
+  }
+
+  function cancelAutoImprove() {
+    if (autoImproveTimerRef.current !== null) {
+      clearTimeout(autoImproveTimerRef.current);
+      autoImproveTimerRef.current = null;
     }
   }
 
@@ -1488,6 +1621,7 @@ export function TranslatorApp({
           onRename={renameSessionTitle}
           total={sessionTotal}
           userName={userName}
+          userId={userId}
         />
 
         <section className={`transcriptPanel ${showOnboarding ? "setupMode" : ""}`} aria-label="Live transcript">
@@ -1516,48 +1650,43 @@ export function TranslatorApp({
                   />
                 </div>
               ) : (
-                <TranscriptTitle languageMap={languageMap} sourceLanguages={sourceALanguages} targetLanguage={sourceB} />
+                <HeaderLanguagePill
+                  languageMap={languageMap}
+                  sourceLanguages={sourceALanguages}
+                  targetLanguage={sourceB}
+                  leftLanguageOptions={leftLanguageOptions}
+                  leftLanguageSelection={leftLanguageSelection}
+                  onLeftLanguageChange={changeLeftLanguageSelection}
+                />
               )}
             </div>
-            <div className="transcriptMeta">
-              <label
-                className={`realtimeToggle ${openAIRealtimeEnabled ? "active" : ""}`}
-                title="GPT realtime: sub-second voice translation via the OpenAI realtime API. Higher cost, lower latency. Off uses the standard transcribe+translate pipeline."
-              >
-                <input
-                  aria-describedby="realtime-help"
-                  checked={openAIRealtimeEnabled}
-                  disabled={isLive}
-                  onChange={(event) => changeRealtimeEnabled(event.target.checked)}
-                  type="checkbox"
+            {!showOnboarding && !openAIRealtimeEnabled ? (
+              <div className="transcriptMeta">
+                <DualLabelToggle
+                  leftLabel="fast"
+                  rightLabel="slow"
+                  rightSelected={transcriptLatencyMode === "slow"}
+                  onChange={(slow) => setTranscriptLatencyMode(slow ? "slow" : "fast")}
+                  title="Slow mode waits for the AI to polish the wording and translation before showing the bubble. Fast skips the polish step."
                 />
-                <span className="realtimeSwitch" aria-hidden="true">
-                  <span />
-                </span>
-                <span>GPT realtime</span>
-                <span className="srOnly" id="realtime-help">
-                  Sub-second voice translation via the OpenAI realtime API. Higher cost, lower latency. When off, uses the standard transcribe-then-translate pipeline.
-                </span>
-              </label>
-              <span className="tokenCount" aria-label="Conversation duration">{formatTranscriptStats(transcriptStats)}</span>
-              {postProcessing && (reviewStatus || translationStatus || rediarizeStatus) ? (
-                <span className="compactStatus">{reviewStatus || translationStatus || rediarizeStatus}</span>
-              ) : null}
-              {hasFinishedSession ? (
-                <button className="secondaryButton compactButton" disabled={postProcessing} onClick={improveSpeakersAndTranslations} type="button">
-                  {postProcessing ? "Improving..." : "Improve"}
-                </button>
-              ) : null}
-            </div>
+                <DualLabelToggle
+                  leftLabel="original"
+                  rightLabel="enhanced"
+                  rightSelected={showEnhancedEnglish}
+                  onChange={setShowEnhancedEnglish}
+                  title="Enhanced shows the AI-polished English so the translation reads naturally. Original shows the verbatim transcript."
+                />
+                <DualLabelToggle
+                  leftLabel="push"
+                  rightLabel="autospeak"
+                  rightSelected={ttsMode === "auto"}
+                  onChange={(autospeak) => changeTtsMode(autospeak ? "auto" : "push")}
+                  title="Autospeak reads every finalized translation out loud automatically. Push keeps it manual — tap the voice icon on a bubble to play it."
+                />
+              </div>
+            ) : null}
           </div>
-          {showOnboarding && openAIRealtimeEnabled ? (
-            <RealtimeStartPanel
-              canStart={canStart && hasLanguagePair}
-              disabled={isLive}
-              error={error}
-              onStart={() => start(true)}
-            />
-          ) : showOnboarding ? (
+          {showOnboarding ? (
             <ConversationOnboarding
               audiencePreset={audiencePreset}
               canStart={canStart && hasLanguagePair}
@@ -1568,23 +1697,14 @@ export function TranslatorApp({
               onAudienceChange={changeAudiencePreset}
               onContextChange={setContext}
               onContextExample={appendContextExample}
+              onRealtimeChange={changeRealtimeEnabled}
               onSpeakerCountChange={setExpectedSpeakerCount}
-              onStart={() => start(false)}
+              onStart={() => start(openAIRealtimeEnabled)}
+              openAIRealtimeEnabled={openAIRealtimeEnabled}
               preset={selectedPreset}
             />
           ) : error ? (
             <FeedbackBanner message={error} />
-          ) : null}
-          {phrases.length > 0 && !openAIRealtimeEnabled ? (
-            <ChatDisplayToggle
-              enhanced={showEnhancedEnglish}
-              latencyMode={transcriptLatencyMode}
-              leftLanguageOptions={leftLanguageOptions}
-              leftLanguageSelection={leftLanguageSelection}
-              onEnhancedChange={setShowEnhancedEnglish}
-              onLeftLanguageChange={changeLeftLanguageSelection}
-              onLatencyModeChange={setTranscriptLatencyMode}
-            />
           ) : null}
           <div className="feed" onScroll={handleFeedScroll} ref={feedRef}>
             {phrases.length === 0 ? (
@@ -1608,13 +1728,17 @@ export function TranslatorApp({
                   adaptations={adaptations}
                   activeLeftLanguage={activeLeftLanguage}
                   editingSpeaker={editingSpeaker}
+                  latencyMode={transcriptLatencyMode}
                   leftLanguageSelection={leftLanguageSelection}
                   languageMap={languageMap}
                   onEditSpeaker={openSpeakerEditor}
+                  onSpeak={speakPhraseText}
                   phrases={phraseGroup}
+                  speakLanguage={ttsSpeakLanguage}
                   speakerDrafts={speakerDrafts}
                   showEnhancedEnglish={showEnhancedEnglish}
                   targetLanguage={sourceB}
+                  ttsStatus={ttsStatus}
                 />
               ))
             )}
@@ -1628,20 +1752,25 @@ export function TranslatorApp({
             />
           ) : null}
           {!showOnboarding ? (
-            <ComposerBar
+            <ControlsStrip
               canStart={canStart && hasLanguagePair}
+              durationLabel={formatTranscriptStats(transcriptStats)}
               englishTargetLabel={languageShortLabel(englishOverdubTargetLanguage(sourceALanguages, sourceB), languageMap)}
               englishToTargetOverdubEnabled={englishToTargetOverdubEnabled}
               isLive={isLive}
               micCaptureEnabled={micCaptureEnabled}
               onStart={() => start(openAIRealtimeEnabled)}
               onStop={stop}
-              onSubmit={submitTypedText}
               onToggleEnglishToTarget={() => toggleRealtimeDirection("english_to_target")}
               onToggleMicCapture={toggleMicCapture}
               onToggleTargetToEnglish={() => toggleRealtimeDirection("target_to_english")}
               openAIRealtimeEnabled={openAIRealtimeEnabled}
               targetToEnglishOverdubEnabled={targetToEnglishOverdubEnabled}
+            />
+          ) : null}
+          {!showOnboarding ? (
+            <ComposerBar
+              onSubmit={submitTypedText}
               text={typedText}
               onTextChange={setTypedText}
             />
@@ -1652,169 +1781,15 @@ export function TranslatorApp({
   );
 }
 
-function ChatDisplayToggle({
-  enhanced,
-  latencyMode,
-  leftLanguageOptions,
-  leftLanguageSelection,
-  onEnhancedChange,
-  onLeftLanguageChange,
-  onLatencyModeChange
-}: {
-  enhanced: boolean;
-  latencyMode: TranscriptLatencyMode;
-  leftLanguageOptions: Array<{ code: string; flag: string; name: string }>;
-  leftLanguageSelection: LeftLanguageSelection;
-  onEnhancedChange: (value: boolean) => void;
-  onLeftLanguageChange: (value: LeftLanguageSelection) => void;
-  onLatencyModeChange: (value: TranscriptLatencyMode) => void;
-}) {
-  return (
-    <div className="chatDisplayBar" aria-label="Chat display mode">
-      <div className="leftLanguageToggle" role="group" aria-label="Left-side language">
-        <button
-          aria-pressed={leftLanguageSelection === "all"}
-          className={leftLanguageSelection === "all" ? "active" : ""}
-          onClick={() => onLeftLanguageChange("all")}
-          title="Show all detected languages"
-          type="button"
-        >
-          🌐
-        </button>
-        {leftLanguageOptions.map((language) => (
-          <button
-            aria-pressed={leftLanguageSelection === language.code}
-            className={leftLanguageSelection === language.code ? "active" : ""}
-            key={language.code}
-            onClick={() => onLeftLanguageChange(language.code)}
-            title={language.name}
-            type="button"
-          >
-            {language.flag}
-          </button>
-        ))}
-      </div>
-      <div className="chatDisplayActions">
-      <div className="englishModeToggle" role="group" aria-label="Transcript speed">
-        <button
-          aria-pressed={latencyMode === "fast"}
-          className={latencyMode === "fast" ? "active" : ""}
-          onClick={() => onLatencyModeChange("fast")}
-          title="Fast mode"
-          type="button"
-        >
-          🐇
-        </button>
-        <button
-          aria-pressed={latencyMode === "slow"}
-          className={latencyMode === "slow" ? "active" : ""}
-          onClick={() => onLatencyModeChange("slow")}
-          title="Slow mode"
-          type="button"
-        >
-          🐢
-        </button>
-      </div>
-      <div className="englishModeToggle" role="group" aria-label="English wording">
-        <button
-          aria-pressed={!enhanced}
-          className={!enhanced ? "active" : ""}
-          onClick={() => onEnhancedChange(false)}
-          title="Original English"
-          type="button"
-        >
-          📝
-        </button>
-        <button
-          aria-pressed={enhanced}
-          className={enhanced ? "active" : ""}
-          onClick={() => onEnhancedChange(true)}
-          title="Enhanced English"
-          type="button"
-        >
-          ✨
-        </button>
-      </div>
-      </div>
-    </div>
-  );
-}
-
 function ComposerBar({
-  canStart,
-  englishTargetLabel,
-  englishToTargetOverdubEnabled,
-  isLive,
-  micCaptureEnabled,
-  onStart,
-  onStop,
   onSubmit,
-  onToggleEnglishToTarget,
-  onToggleMicCapture,
-  onToggleTargetToEnglish,
   onTextChange,
-  openAIRealtimeEnabled,
-  targetToEnglishOverdubEnabled,
   text
 }: {
-  canStart: boolean;
-  englishTargetLabel: string;
-  englishToTargetOverdubEnabled: boolean;
-  isLive: boolean;
-  micCaptureEnabled: boolean;
-  onStart: () => void;
-  onStop: () => void;
   onSubmit: () => void;
-  onToggleEnglishToTarget: () => void;
-  onToggleMicCapture: () => void;
-  onToggleTargetToEnglish: () => void;
   onTextChange: (value: string) => void;
-  openAIRealtimeEnabled: boolean;
-  targetToEnglishOverdubEnabled: boolean;
   text: string;
 }) {
-  if (isLive && openAIRealtimeEnabled) {
-    return (
-      <div className="realtimeControlBar" aria-label="Realtime controls">
-        <button
-          aria-label={`Toggle English to ${englishTargetLabel} speaker overdub`}
-          aria-pressed={englishToTargetOverdubEnabled}
-          className={`realtimeControlButton ${englishToTargetOverdubEnabled ? "active" : ""}`}
-          onClick={onToggleEnglishToTarget}
-          title={`English to ${englishTargetLabel}`}
-          type="button"
-        >
-          <SpeakerIcon />
-          <span>EN → {englishTargetLabel}</span>
-        </button>
-        <button
-          aria-label={micCaptureEnabled ? "Pause microphone capture" : "Resume microphone capture"}
-          aria-pressed={micCaptureEnabled}
-          className={`realtimeMicButton ${micCaptureEnabled ? "active" : ""}`}
-          onClick={onToggleMicCapture}
-          title={micCaptureEnabled ? "Pause microphone" : "Resume microphone"}
-          type="button"
-        >
-          <MicIcon />
-        </button>
-        <button
-          aria-label={`Toggle ${englishTargetLabel} to English speaker overdub`}
-          aria-pressed={targetToEnglishOverdubEnabled}
-          className={`realtimeControlButton ${targetToEnglishOverdubEnabled ? "active" : ""}`}
-          onClick={onToggleTargetToEnglish}
-          title={`${englishTargetLabel} to English`}
-          type="button"
-        >
-          <span>{englishTargetLabel} → EN</span>
-          <SpeakerIcon />
-        </button>
-        <button className="transportButton realtimeStopButton recording" onClick={onStop} type="button">
-          Stop
-        </button>
-      </div>
-    );
-  }
-
   return (
     <form
       className="composerBar"
@@ -1827,31 +1802,121 @@ function ComposerBar({
         aria-label="Type a phrase"
         className="composerInput"
         onChange={(event) => onTextChange(event.target.value)}
-        placeholder="Type something to translate..."
+        placeholder="Type a phrase to translate..."
         value={text}
       />
       <button className="sendButton" disabled={!text.trim()} type="submit">
         Send
       </button>
-      <button
-        aria-label={isLive ? "Stop transcription" : "Start transcription"}
-        className={`transportButton ${isLive ? "recording" : ""}`}
-        disabled={!isLive && !canStart}
-        onClick={isLive ? onStop : onStart}
-        type="button"
-      >
-        {isLive ? "■" : "▶"}
-      </button>
     </form>
   );
 }
 
-function SpeakerIcon() {
+function ControlsStrip({
+  canStart,
+  durationLabel,
+  englishTargetLabel,
+  englishToTargetOverdubEnabled,
+  isLive,
+  micCaptureEnabled,
+  onStart,
+  onStop,
+  onToggleEnglishToTarget,
+  onToggleMicCapture,
+  onToggleTargetToEnglish,
+  openAIRealtimeEnabled,
+  targetToEnglishOverdubEnabled
+}: {
+  canStart: boolean;
+  durationLabel: string;
+  englishTargetLabel: string;
+  englishToTargetOverdubEnabled: boolean;
+  isLive: boolean;
+  micCaptureEnabled: boolean;
+  onStart: () => void;
+  onStop: () => void;
+  onToggleEnglishToTarget: () => void;
+  onToggleMicCapture: () => void;
+  onToggleTargetToEnglish: () => void;
+  openAIRealtimeEnabled: boolean;
+  targetToEnglishOverdubEnabled: boolean;
+}) {
+  return (
+    <div className="controlsStrip" aria-label="Session controls">
+      <button
+        aria-label={isLive ? "Stop session" : "Start session"}
+        className={`stripTransportButton ${isLive ? "recording" : ""}`}
+        disabled={!isLive && !canStart}
+        onClick={isLive ? onStop : onStart}
+        type="button"
+      >
+        <span aria-hidden="true" className="stripTransportGlyph">{isLive ? "■" : "▶"}</span>
+        <span>{isLive ? "Stop" : "Start"}</span>
+      </button>
+      {openAIRealtimeEnabled && isLive ? (
+        <div className="controlsStripToggles">
+          <MuteButton
+            label="mic"
+            enabled={micCaptureEnabled}
+            icon={<MicIcon />}
+            onToggle={onToggleMicCapture}
+          />
+          <MuteButton
+            label={`voice ${englishTargetLabel}`}
+            enabled={englishToTargetOverdubEnabled}
+            icon={<VoiceIcon />}
+            onToggle={onToggleEnglishToTarget}
+          />
+          <MuteButton
+            label="voice EN"
+            enabled={targetToEnglishOverdubEnabled}
+            icon={<VoiceIcon />}
+            onToggle={onToggleTargetToEnglish}
+          />
+        </div>
+      ) : null}
+      <span className="controlsStripDuration" aria-label="Conversation duration">{durationLabel}</span>
+    </div>
+  );
+}
+
+function MuteButton({
+  enabled,
+  icon,
+  label,
+  onToggle,
+  disabled = false
+}: {
+  enabled: boolean;
+  icon: ReactNode;
+  label: string;
+  onToggle: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      aria-label={`${enabled ? "Mute" : "Unmute"} ${label}`}
+      aria-pressed={!enabled}
+      className={`muteButton ${enabled ? "" : "muted"}`}
+      disabled={disabled}
+      onClick={onToggle}
+      title={`${enabled ? "Mute" : "Unmute"} ${label}`}
+      type="button"
+    >
+      <span className="muteButtonIcon" aria-hidden="true">{icon}</span>
+      <span className="muteButtonLabel">{label}</span>
+    </button>
+  );
+}
+
+function VoiceIcon() {
   return (
     <svg aria-hidden="true" className="controlIcon" viewBox="0 0 24 24">
-      <path d="M4 9v6h4l5 4V5L8 9H4Z" />
-      <path d="M16 8c1.2 1 1.8 2.4 1.8 4s-.6 3-1.8 4" />
-      <path d="M18.8 5.5A9 9 0 0 1 21 12a9 9 0 0 1-2.2 6.5" />
+      <rect x="3" y="10" width="2.4" height="4" rx="1" />
+      <rect x="7.2" y="7" width="2.4" height="10" rx="1" />
+      <rect x="11.4" y="4" width="2.4" height="16" rx="1" />
+      <rect x="15.6" y="7" width="2.4" height="10" rx="1" />
+      <rect x="19.8" y="10" width="2.4" height="4" rx="1" />
     </svg>
   );
 }
@@ -1877,8 +1942,10 @@ function ConversationOnboarding({
   onAudienceChange,
   onContextChange,
   onContextExample,
+  onRealtimeChange,
   onSpeakerCountChange,
   onStart,
+  openAIRealtimeEnabled,
   preset
 }: {
   audiencePreset: string;
@@ -1890,8 +1957,10 @@ function ConversationOnboarding({
   onAudienceChange: (presetId: string) => void;
   onContextChange: (value: string) => void;
   onContextExample: (example: string) => void;
+  onRealtimeChange: (enabled: boolean) => void;
   onSpeakerCountChange: (count: string) => void;
   onStart: () => void;
+  openAIRealtimeEnabled: boolean;
   preset: typeof AUDIENCE_PRESETS[number];
 }) {
   return (
@@ -1907,36 +1976,51 @@ function ConversationOnboarding({
         >
           <HeroMicIcon />
         </button>
-        <p className="chatHeroSubhead">Who are you speaking to?</p>
-        <div className="chatHeroChips" role="group" aria-label="Who are you speaking to?">
-          {AUDIENCE_PRESETS.map((option) => (
-            <button
-              aria-pressed={audiencePreset === option.id}
-              className={`chatHeroChip ${audiencePreset === option.id ? "active" : ""}`}
-              disabled={disabled}
-              key={option.id}
-              onClick={() => onAudienceChange(option.id)}
-              type="button"
-            >
-              {option.label}
-            </button>
-          ))}
+        <div className="chatHeroEngine" role="group" aria-label="Translation engine">
+          <DualLabelToggle
+            leftLabel="standard"
+            rightLabel="gpt realtime"
+            rightSelected={openAIRealtimeEnabled}
+            onChange={onRealtimeChange}
+            disabled={disabled}
+            title="GPT realtime: sub-second voice translation via the OpenAI realtime API. Higher cost, lower latency. Standard uses the transcribe+translate pipeline. Cannot be changed once the session starts."
+          />
         </div>
-        <div className="chatHeroSpeakers" role="group" aria-label="Expected speakers">
-          <span className="chatHeroSpeakersLabel">Speakers</span>
-          {SPEAKER_COUNT_OPTIONS.map((count) => (
-            <button
-              aria-pressed={expectedSpeakerCount === count}
-              className={`chatHeroSpeakerOption ${expectedSpeakerCount === count ? "active" : ""}`}
-              disabled={disabled}
-              key={count}
-              onClick={() => onSpeakerCountChange(count)}
-              type="button"
-            >
-              {count === "6" ? "6+" : count}
-            </button>
-          ))}
-        </div>
+        {openAIRealtimeEnabled ? null : (
+          <>
+            <p className="chatHeroSubhead">Who are you speaking to?</p>
+            <div className="chatHeroChips" role="group" aria-label="Who are you speaking to?">
+              {AUDIENCE_PRESETS.map((option) => (
+                <button
+                  aria-pressed={audiencePreset === option.id}
+                  className={`chatHeroChip ${audiencePreset === option.id ? "active" : ""}`}
+                  disabled={disabled}
+                  key={option.id}
+                  onClick={() => onAudienceChange(option.id)}
+                  type="button"
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+            <div className="chatHeroSpeakers" role="group" aria-label="Expected speakers">
+              <span className="chatHeroSpeakersLabel">Speakers</span>
+              {SPEAKER_COUNT_OPTIONS.map((count) => (
+                <button
+                  aria-pressed={expectedSpeakerCount === count}
+                  className={`chatHeroSpeakerOption ${expectedSpeakerCount === count ? "active" : ""}`}
+                  disabled={disabled}
+                  key={count}
+                  onClick={() => onSpeakerCountChange(count)}
+                  type="button"
+                >
+                  {count === "6" ? "6+" : count}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+        {error ? <div className="errorBox chatHeroError">{error}</div> : null}
       </div>
       {/*<details className="advancedSetup">
         <summary>Add a note (optional)</summary>
@@ -1966,8 +2050,6 @@ function ConversationOnboarding({
           </div>
         </div>
       </details>*/}
-
-      {error ? <div className="errorBox chatHeroError">{error}</div> : null}
     </section>
   );
 }
@@ -1983,29 +2065,57 @@ function HeroMicIcon() {
   );
 }
 
-function RealtimeStartPanel({
-  canStart,
-  disabled,
-  error,
-  onStart
+function DualLabelToggle({
+  leftLabel,
+  rightLabel,
+  rightSelected,
+  onChange,
+  disabled = false,
+  title
 }: {
-  canStart: boolean;
-  disabled: boolean;
-  error: string;
-  onStart: () => void;
+  leftLabel: string;
+  rightLabel: string;
+  rightSelected: boolean;
+  onChange: (rightSelected: boolean) => void;
+  disabled?: boolean;
+  title?: string;
 }) {
   return (
-    <section className="startPanel realtimeStartPanel" aria-label="Start realtime conversation">
-      <p className="realtimeStartHint">
-        Realtime uses the selected spoken and target languages only.
-      </p>
-      <div className="startPanelFooter">
-        <button className="primaryButton" onClick={onStart} disabled={disabled || !canStart} type="button">
-          Start realtime
-        </button>
-      </div>
-      {error ? <FeedbackBanner message={error} /> : null}
-    </section>
+    <div
+      className="appleSwitch dualLabel"
+      role="group"
+      aria-label={`${leftLabel} or ${rightLabel}`}
+      title={title}
+    >
+      <button
+        aria-pressed={!rightSelected}
+        className={`appleSwitchOption ${rightSelected ? "" : "selected"}`}
+        disabled={disabled}
+        onClick={() => onChange(false)}
+        type="button"
+      >
+        {leftLabel}
+      </button>
+      <button
+        aria-label={`Toggle ${leftLabel} / ${rightLabel}`}
+        className="appleSwitchTrack"
+        data-checked={rightSelected ? "true" : "false"}
+        disabled={disabled}
+        onClick={() => onChange(!rightSelected)}
+        type="button"
+      >
+        <span />
+      </button>
+      <button
+        aria-pressed={rightSelected}
+        className={`appleSwitchOption ${rightSelected ? "selected" : ""}`}
+        disabled={disabled}
+        onClick={() => onChange(true)}
+        type="button"
+      >
+        {rightLabel}
+      </button>
+    </div>
   );
 }
 
@@ -2026,6 +2136,89 @@ function TranscriptTitle({
       </span>
     </h2>
   );
+}
+
+function HeaderLanguagePill({
+  languageMap,
+  sourceLanguages,
+  targetLanguage,
+  leftLanguageOptions,
+  leftLanguageSelection,
+  onLeftLanguageChange
+}: {
+  languageMap: Map<string, Language>;
+  sourceLanguages: string[];
+  targetLanguage: string;
+  leftLanguageOptions: Array<{ code: string; flag: string; name: string }>;
+  leftLanguageSelection: LeftLanguageSelection;
+  onLeftLanguageChange: (value: LeftLanguageSelection) => void;
+}) {
+  const cycleOptions: LeftLanguageSelection[] = ["all", ...leftLanguageOptions.map((l) => l.code)];
+  const canCycle = cycleOptions.length > 1;
+  const currentIndex = Math.max(0, cycleOptions.indexOf(leftLanguageSelection));
+  const sourceDisplay = leftPillDisplay(leftLanguageSelection, leftLanguageOptions, sourceLanguages, languageMap);
+  const target = languageMap.get(targetLanguage);
+  const targetCode = (target?.code || targetLanguage || "en").slice(0, 2).toUpperCase();
+  const targetFlag = target?.flag || "🏳";
+  const targetName = target?.name || targetCode;
+
+  function advance() {
+    if (!canCycle) return;
+    const next = cycleOptions[(currentIndex + 1) % cycleOptions.length];
+    onLeftLanguageChange(next!);
+  }
+
+  return (
+    <h2 className="transcriptTitle headerLanguagePill" aria-label={`${sourceDisplay.name} to ${targetName}`}>
+      <button
+        type="button"
+        className={`headerLanguagePillChip headerLanguagePillChip--interactive${canCycle ? "" : " is-static"}`}
+        onClick={advance}
+        disabled={!canCycle}
+        aria-label={`Source display: ${sourceDisplay.name}. ${canCycle ? "Click to switch." : ""}`}
+        title={canCycle ? `${sourceDisplay.name} — click to switch` : sourceDisplay.name}
+      >
+        <span className="headerLanguagePillFlag" aria-hidden>{sourceDisplay.flag}</span>
+        <span className="headerLanguagePillCode">{sourceDisplay.code}</span>
+      </button>
+      <span className="headerLanguagePillArrow" aria-hidden>→</span>
+      <span
+        className="headerLanguagePillChip"
+        aria-label={`Target language: ${targetName}`}
+        title={targetName}
+      >
+        <span className="headerLanguagePillFlag" aria-hidden>{targetFlag}</span>
+        <span className="headerLanguagePillCode">{targetCode}</span>
+      </span>
+    </h2>
+  );
+}
+
+function leftPillDisplay(
+  selection: LeftLanguageSelection,
+  options: Array<{ code: string; flag: string; name: string }>,
+  sourceLanguages: string[],
+  languageMap: Map<string, Language>
+): { flag: string; code: string; name: string } {
+  if (selection === "all") {
+    const count = options.length || sourceLanguages.length;
+    return { flag: "🌐", code: "ALL", name: count > 1 ? `All languages (${count})` : "All languages" };
+  }
+  const match = options.find((opt) => opt.code === selection)
+    || (() => {
+      const lang = languageMap.get(selection);
+      return lang ? { code: lang.code, flag: lang.flag, name: lang.name } : null;
+    })();
+  if (match) {
+    return { flag: match.flag, code: match.code.slice(0, 2).toUpperCase(), name: match.name };
+  }
+  const fallback = sourceLanguages[0] || "";
+  const lang = languageMap.get(fallback);
+  return {
+    flag: lang?.flag || "🏳",
+    code: (lang?.code || fallback || "??").slice(0, 2).toUpperCase(),
+    name: lang?.name || fallback || "Source"
+  };
 }
 
 function FeedbackBanner({ message }: { message: string }) {
@@ -2102,7 +2295,8 @@ function SessionSidebar({
   onNew,
   onRename,
   total,
-  userName
+  userName,
+  userId
 }: {
   activeSession: string;
   activeSessionTitle: string;
@@ -2118,6 +2312,7 @@ function SessionSidebar({
   onRename: (name: string, title: string) => Promise<void>;
   total: number;
   userName: string;
+  userId?: string;
 }) {
   const [openMenuSession, setOpenMenuSession] = useState("");
   const [renamingSession, setRenamingSession] = useState("");
@@ -2343,10 +2538,7 @@ function SessionSidebar({
       </div>
 
       <div className="sidebarBottom">
-        <Link className="sidebarProfileChip" href="/profile" prefetch={false}>
-          <span aria-hidden="true" className="sidebarAvatar">{userInitials(userName)}</span>
-          <span className="sidebarProfileName">{userName || "Profile"}</span>
-        </Link>
+        <ProfileMenu userName={userName} userId={userId} />
       </div>
     </aside>
   );
@@ -2389,15 +2581,6 @@ function useDrawerState(): [boolean, (next: boolean) => void] {
   }
 
   return [open, setOpen];
-}
-
-function userInitials(name: string): string {
-  const cleaned = name.trim();
-  if (!cleaned) return "·";
-  const parts = cleaned.split(/\s+/);
-  const first = parts[0]?.[0] || "";
-  const last = parts.length > 1 ? parts[parts.length - 1][0] : "";
-  return (first + last).toUpperCase() || cleaned[0].toUpperCase();
 }
 
 function KebabIcon() {
@@ -2789,24 +2972,32 @@ function PhraseCard({
   activeLeftLanguage,
   adaptations,
   editingSpeaker,
+  latencyMode,
   leftLanguageSelection,
   languageMap,
   onEditSpeaker,
+  onSpeak,
   phrases,
+  speakLanguage,
   speakerDrafts,
   showEnhancedEnglish,
-  targetLanguage
+  targetLanguage,
+  ttsStatus
 }: {
   activeLeftLanguage: string;
   adaptations: Record<string, PhraseAdaptation>;
   editingSpeaker: string | null;
+  latencyMode: TranscriptLatencyMode;
   leftLanguageSelection: LeftLanguageSelection;
   languageMap: Map<string, Language>;
   onEditSpeaker: (speakerId: string, label: string) => void;
+  onSpeak: (key: string, text: string, language: string) => void;
   phrases: Phrase[];
+  speakLanguage: string;
   speakerDrafts: Record<string, SpeakerDraft>;
   showEnhancedEnglish: boolean;
   targetLanguage: string;
+  ttsStatus: Record<string, TtsPlaybackState>;
 }) {
   const phrase = phrases[0]!;
   const color = speakerColor(speakerKey(phrase.speaker));
@@ -2835,12 +3026,38 @@ function PhraseCard({
     : "";
   const loading = phrases.some((item) => adaptations[adaptationKey(item, activeLeftLanguage)]?.status === "loading");
 
+  const firstPhrase = phrases[0]!;
+  // The speaker icon always lives on the source-side bubble (above the avatar).
+  // Speak language is the non-English language in the pair. For English-source
+  // bubbles we speak the *translation* (English → JP). For native-target-source
+  // bubbles (e.g. someone spoke Japanese) we speak the *same* text so the user
+  // can rehearse pronunciation.
+  const sourceSpeakText = isTargetSource
+    ? joinDisplayLines(phrases.map((item) => phraseTargetText(item, speakLanguage, adaptations)))
+    : joinDisplayLines(phrases.map((item) => item.texts[speakLanguage] || ""));
+  const sourceSpeakKey = speakLanguage ? `tts:${firstPhrase.id}:${speakLanguage}` : "";
+  const sourceSpeakable =
+    Boolean(speakLanguage) &&
+    sourceSpeakText.trim().length > 0 &&
+    phrases.every((item) => phraseSpeakReady(item, adaptations, speakLanguage, latencyMode));
+  const sourceOnSpeak = sourceSpeakable
+    ? () => onSpeak(sourceSpeakKey, sourceSpeakText, speakLanguage)
+    : undefined;
+  const sourceTtsState = sourceSpeakable ? ttsStatus[sourceSpeakKey] : undefined;
+
   return (
     <article className={`phrase ${isTargetSource ? "fromEnglish" : "fromOther"}`} style={style}>
       <div className="conversationLanes">
         <div className="languageLane leftLanguageLane">
           {isTargetSource ? (
-            <TranslationLine code={leftLanguage} enhanced={hasEnhancedEnglish} label={leftLabel} text={leftText} />
+            <TranslationLine
+              code={leftLanguage}
+              enhanced={hasEnhancedEnglish}
+              label={leftLabel}
+              text={leftText}
+              onSpeak={sourceOnSpeak}
+              ttsState={sourceTtsState}
+            />
           ) : (
             <BubbleWithSpeaker
               code={leftLanguage}
@@ -2852,6 +3069,8 @@ function PhraseCard({
               speakerInitials={speakerInitials}
               speakerLabel={speakerLabel}
               text={leftText}
+              ttsState={sourceTtsState}
+              onSpeak={sourceOnSpeak}
             />
           )}
         </div>
@@ -2870,7 +3089,12 @@ function PhraseCard({
               text={shownTargetText || targetText}
             />
           ) : (
-            <TranslationLine code={targetLanguage} enhanced={phrases.some((item) => Boolean(adaptations[adaptationKey(item, targetLanguage)]?.target_translation))} label={targetLabel} text={targetText} />
+            <TranslationLine
+              code={targetLanguage}
+              enhanced={phrases.some((item) => Boolean(adaptations[adaptationKey(item, targetLanguage)]?.target_translation))}
+              label={targetLabel}
+              text={targetText}
+            />
           )}
         </div>
       </div>
@@ -2885,11 +3109,13 @@ function BubbleWithSpeaker({
   label,
   loading = false,
   onEditSpeaker,
+  onSpeak,
   romaji = "",
   speakerId,
   speakerInitials,
   speakerLabel,
-  text
+  text,
+  ttsState
 }: {
   code: string;
   editingSpeaker: boolean;
@@ -2897,11 +3123,13 @@ function BubbleWithSpeaker({
   label: string;
   loading?: boolean;
   onEditSpeaker: (speakerId: string, label: string) => void;
+  onSpeak?: () => void;
   romaji?: string;
   speakerId: string;
   speakerInitials: string;
   speakerLabel: string;
   text: string;
+  ttsState?: TtsPlaybackState;
 }) {
   return (
     <div className={`bubbleWithSpeaker ${editingSpeaker ? "editingSpeaker" : ""}`}>
@@ -2910,7 +3138,16 @@ function BubbleWithSpeaker({
         onOpen={() => onEditSpeaker(speakerId, speakerLabel)}
       />
       <div className="speechBubbleHighlight">
-        <SpeechBubble code={code} enhanced={enhanced} label={label} loading={loading} romaji={romaji} text={text} />
+        <SpeechBubble
+          code={code}
+          enhanced={enhanced}
+          label={label}
+          loading={loading}
+          onSpeak={onSpeak}
+          romaji={romaji}
+          text={text}
+          ttsState={ttsState}
+        />
       </div>
     </div>
   );
@@ -2990,34 +3227,75 @@ function SpeechBubble({
   enhanced = false,
   label,
   loading = false,
+  onSpeak,
   romaji = "",
-  text
+  text,
+  ttsState
 }: {
   code: string;
   enhanced?: boolean;
   label: string;
   loading?: boolean;
+  onSpeak?: () => void;
   romaji?: string;
   text: string;
+  ttsState?: TtsPlaybackState;
 }) {
   const pairedJapanese = code === "ja" && romaji ? pairJapaneseRomaji(text, romaji) : [];
   return (
     <div className={`speechBubble ${code === "ja" ? "japanese" : ""} ${enhanced ? "aiEnhanced" : ""}`} dir="auto" lang={code} title={label}>
-      {pairedJapanese.length ? (
-        <span className="lineText japaneseLines">
-          {pairedJapanese.map((line, index) => (
-            <span className="japaneseLine" key={`${line.text}-${index}`}>
-              <span className="japaneseOriginal">{line.text || "..."}</span>
-              {line.romaji ? <span className="inlineRomaji">({line.romaji})</span> : null}
-            </span>
-          ))}
-        </span>
-      ) : (
-        <span className="lineText">{text || "..."}</span>
-      )}
+      <div className="speechBubbleBody">
+        {pairedJapanese.length ? (
+          <span className="lineText japaneseLines">
+            {pairedJapanese.map((line, index) => (
+              <span className="japaneseLine" key={`${line.text}-${index}`}>
+                <span className="japaneseOriginal">{line.text || "..."}</span>
+                {line.romaji ? <span className="inlineRomaji">({line.romaji})</span> : null}
+              </span>
+            ))}
+          </span>
+        ) : (
+          <span className="lineText">{text || "..."}</span>
+        )}
+        {onSpeak ? <TtsSpeakerButton onSpeak={onSpeak} state={ttsState} /> : null}
+      </div>
       {loading ? <span className="romaji">Adapting...</span> : null}
       {romaji && !pairedJapanese.length ? <span className="romaji">{romaji}</span> : null}
     </div>
+  );
+}
+
+function TtsSpeakerButton({
+  disabled = false,
+  onSpeak,
+  state
+}: {
+  disabled?: boolean;
+  onSpeak: () => void;
+  state?: TtsPlaybackState;
+}) {
+  const label =
+    state === "loading"
+      ? "Loading speech"
+      : state === "playing"
+        ? "Playing"
+        : state === "error"
+          ? "Speech failed (tap to retry)"
+          : "Play translation";
+  return (
+    <button
+      aria-label={label}
+      className={`ttsSpeakerButton ${state || ""}`}
+      disabled={disabled || state === "loading"}
+      onClick={(event) => {
+        event.stopPropagation();
+        onSpeak();
+      }}
+      title={label}
+      type="button"
+    >
+      {state === "loading" ? "..." : state === "playing" ? "🔊" : state === "error" ? "⚠︎" : "🔈"}
+    </button>
   );
 }
 
@@ -3093,10 +3371,25 @@ function phraseShownTargetText(
   return showEnhancedEnglish && adaptation?.source_rewrite ? adaptation.source_rewrite : original;
 }
 
-function TranslationLine({ code, enhanced = false, label, text }: { code: string; enhanced?: boolean; label: string; text: string }) {
+function TranslationLine({
+  code,
+  enhanced = false,
+  label,
+  text,
+  onSpeak,
+  ttsState
+}: {
+  code: string;
+  enhanced?: boolean;
+  label: string;
+  text: string;
+  onSpeak?: () => void;
+  ttsState?: TtsPlaybackState;
+}) {
   return (
     <div className={`translationLine ${code === "ja" ? "japanese" : ""} ${enhanced ? "aiEnhanced" : ""}`} dir="auto" lang={code} title={label}>
       <span className="lineText">{text || "..."}</span>
+      {onSpeak ? <TtsSpeakerButton onSpeak={onSpeak} state={ttsState} /> : null}
     </div>
   );
 }
@@ -3250,6 +3543,37 @@ function adaptationKey(phrase: Phrase, targetLanguage = ""): string {
     return "";
   }
   return targetLanguage ? `${phrase.id}:${targetLanguage}:${source}` : `${phrase.id}:${source}`;
+}
+
+function phraseSpeakReady(
+  phrase: Phrase,
+  adaptations: Record<string, PhraseAdaptation>,
+  speakLanguage: string,
+  latencyMode: TranscriptLatencyMode
+): boolean {
+  if (!phrase.is_final) return false;
+  if (!speakLanguage) return false;
+  const sourceLang = phrase.source_lang || firstNonEnglishTextLanguage(phrase) || speakLanguage;
+  // Native text in the speak language — no AI step to wait for.
+  if (sourceLang === speakLanguage) {
+    return Boolean(phrase.texts[speakLanguage]?.trim());
+  }
+  const adaptation = adaptations[adaptationKey(phrase, speakLanguage)];
+  if (!adaptation?.target_translation?.trim() && !phrase.texts[speakLanguage]?.trim()) {
+    return false;
+  }
+  if (latencyMode === "slow") {
+    // English-source phrases run a two-stage pipeline: fast translate, then a
+    // polish/adapt pass that fills in source_rewrite. Wait for the polish.
+    if (sourceLang === "en") {
+      if (adaptation?.status !== "ready" || !adaptation.source_rewrite?.trim()) {
+        return false;
+      }
+    } else if (adaptation?.status !== "ready") {
+      return false;
+    }
+  }
+  return true;
 }
 
 function phraseReadyForSlowMode(

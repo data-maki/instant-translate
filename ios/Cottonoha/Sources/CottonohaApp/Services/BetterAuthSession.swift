@@ -9,6 +9,10 @@ public final class BetterAuthSession: ObservableObject {
     @Published public private(set) var displayName = ""
     @Published public private(set) var errorMessage = ""
     @Published public private(set) var isBusy = false
+    /// Bearer token issued by the BetterAuth bearer plugin. Sent as
+    /// `Authorization: Bearer <token>` to the FastAPI backend so the backend
+    /// can resolve identity by calling /api/auth/get-session itself.
+    @Published public private(set) var bearerToken: String?
 
     public init(configuration: AppConfiguration) {
         self.client = BetterAuthClient(baseURL: configuration.authBaseURL, scheme: configuration.authScheme)
@@ -59,10 +63,12 @@ public final class BetterAuthSession: ObservableObject {
         if let user = client.session.data?.user {
             isAuthenticated = true
             displayName = user.name
+            bearerToken = client.session.data?.session.token
             AppLog.auth.info("Auth session active")
         } else {
             isAuthenticated = false
             displayName = ""
+            bearerToken = nil
             AppLog.auth.info("No active auth session")
         }
     }

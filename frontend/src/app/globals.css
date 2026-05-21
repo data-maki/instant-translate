@@ -1890,6 +1890,12 @@ textarea:focus-visible {
   text-transform: uppercase;
 }
 
+.chatHeroEngine {
+  display: flex;
+  justify-content: center;
+  margin-top: 4px;
+}
+
 .chatHeroMic {
   display: inline-flex;
   align-items: center;
@@ -2065,6 +2071,73 @@ textarea:focus-visible {
   display: none;
 }
 
+.headerLanguagePill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 4px 6px;
+  border-radius: 999px;
+  background: var(--surface-muted);
+  border: 1px solid var(--color-border-muted);
+  font-size: 0.85rem;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.headerLanguagePillChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  letter-spacing: 0.04em;
+  cursor: default;
+}
+
+.headerLanguagePillChip--interactive {
+  cursor: pointer;
+  background: var(--surface-strong);
+  box-shadow: 0 0 0 1px var(--color-border-muted) inset;
+}
+
+.headerLanguagePillChip--interactive:hover:not(:disabled),
+.headerLanguagePillChip--interactive:focus-visible {
+  background: var(--accent-soft);
+  color: var(--color-action-text-subtle);
+  box-shadow: 0 0 0 1px var(--color-action-border-subtle) inset;
+  outline: none;
+}
+
+.headerLanguagePillChip.is-static,
+.headerLanguagePillChip--interactive:disabled {
+  cursor: default;
+  box-shadow: none;
+  background: transparent;
+}
+
+.headerLanguagePillFlag {
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.headerLanguagePillCode {
+  font-variant-caps: all-small-caps;
+  letter-spacing: 0.06em;
+  font-weight: 800;
+}
+
+.headerLanguagePillArrow {
+  color: var(--muted);
+  font-weight: 700;
+  font-size: 0.78rem;
+  padding: 0 2px;
+}
+
 .panelKicker {
   margin: 0 0 2px;
   color: var(--accent);
@@ -2092,11 +2165,129 @@ textarea:focus-visible {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 22px;
   min-width: 0;
 }
 
-.realtimeToggle {
+.controlsStrip {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--line);
+  background: var(--surface-soft, transparent);
+  min-height: 48px;
+  flex-wrap: wrap;
+}
+
+.controlsStripToggles {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.controlsStripDuration {
+  margin-left: auto;
+  color: var(--muted);
+  font-family: var(--font-geist-mono), monospace;
+  font-size: 0.78rem;
+  min-width: 38px;
+  text-align: right;
+}
+
+.stripTransportButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-strong);
+  color: var(--foreground);
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.stripTransportButton:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+}
+
+.stripTransportButton:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.stripTransportButton.recording {
+  background: rgba(220, 60, 60, 0.12);
+  border-color: rgba(220, 60, 60, 0.6);
+  color: rgba(190, 40, 40, 1);
+}
+
+.stripTransportGlyph {
+  font-size: 0.7rem;
+  line-height: 1;
+}
+
+.muteButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-strong);
+  color: var(--foreground);
+  font-size: 0.78rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity 140ms ease, color 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.muteButton:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+}
+
+.muteButton.muted {
+  color: var(--muted);
+  opacity: 0.55;
+  background: transparent;
+}
+
+.muteButton.muted .muteButtonIcon {
+  position: relative;
+}
+
+.muteButton.muted .muteButtonIcon::after {
+  content: "";
+  position: absolute;
+  inset: 50% 0 auto 0;
+  height: 1.5px;
+  background: currentColor;
+  transform: rotate(-20deg) translateY(-1px);
+}
+
+.muteButtonIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+}
+
+.muteButtonIcon .controlIcon {
+  width: 16px;
+  height: 16px;
+}
+
+.muteButtonLabel {
+  white-space: nowrap;
+}
+
+.realtimeToggle,
+.appleSwitch {
   position: relative;
   display: inline-flex;
   align-items: center;
@@ -2113,11 +2304,61 @@ textarea:focus-visible {
   white-space: nowrap;
 }
 
-.realtimeToggle.active {
+.realtimeToggle.active,
+.appleSwitch.active {
   color: var(--foreground);
 }
 
-.realtimeToggle input {
+.appleSwitch.dualLabel {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--muted);
+}
+
+.appleSwitch.dualLabel .appleSwitchOption {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: inherit;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  line-height: 1;
+  cursor: pointer;
+  transition: color 140ms ease;
+}
+
+.appleSwitch.dualLabel .appleSwitchOption.selected {
+  color: var(--foreground);
+}
+
+.appleSwitch.dualLabel .appleSwitchOption:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+button.appleSwitchTrack {
+  padding: 0;
+  cursor: pointer;
+}
+
+button.appleSwitchTrack:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.appleSwitchTrack[data-checked="true"] {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.appleSwitchTrack[data-checked="true"] span {
+  transform: translateX(14px);
+}
+
+.realtimeToggle input,
+.appleSwitch input {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -2126,7 +2367,8 @@ textarea:focus-visible {
   pointer-events: none;
 }
 
-.realtimeSwitch {
+.realtimeSwitch,
+.appleSwitchTrack {
   position: relative;
   display: inline-flex;
   flex: 0 0 auto;
@@ -2138,7 +2380,8 @@ textarea:focus-visible {
   transition: background 140ms ease, border-color 140ms ease;
 }
 
-.realtimeSwitch span {
+.realtimeSwitch span,
+.appleSwitchTrack span {
   position: absolute;
   top: 2px;
   left: 2px;
@@ -2150,21 +2393,25 @@ textarea:focus-visible {
   transition: transform 140ms ease;
 }
 
-.realtimeToggle input:focus-visible + .realtimeSwitch {
+.realtimeToggle input:focus-visible + .realtimeSwitch,
+.appleSwitch input:focus-visible + .appleSwitchTrack {
   outline: 2px solid var(--color-info-ring);
   outline-offset: 2px;
 }
 
-.realtimeToggle input:checked + .realtimeSwitch {
+.realtimeToggle input:checked + .realtimeSwitch,
+.appleSwitch input:checked + .appleSwitchTrack {
   border-color: var(--accent);
   background: var(--accent);
 }
 
-.realtimeToggle input:checked + .realtimeSwitch span {
+.realtimeToggle input:checked + .realtimeSwitch span,
+.appleSwitch input:checked + .appleSwitchTrack span {
   transform: translateX(14px);
 }
 
-.realtimeToggle:has(input:disabled) {
+.realtimeToggle:has(input:disabled),
+.appleSwitch:has(input:disabled) {
   cursor: default;
   opacity: 0.62;
 }
@@ -2664,124 +2911,454 @@ textarea:focus-visible {
   flex: 0 0 auto;
 }
 
-.profilePage {
+.profileMenuRoot {
+  position: relative;
+  display: block;
+}
+
+button.sidebarProfileChip {
+  appearance: none;
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+}
+
+.sidebarProfileChip--open {
+  background: var(--surface-muted);
+  border-color: var(--color-border-muted);
+}
+
+.profileMenuChevron {
+  margin-left: auto;
+  display: inline-flex;
+  color: var(--muted);
+  transition: transform var(--motion-fast) var(--motion-easing);
+}
+
+.sidebarProfileChip--open .profileMenuChevron {
+  transform: rotate(180deg);
+}
+
+.profileMenuPopover {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 30;
   display: grid;
-  gap: 16px;
-  width: min(980px, calc(100vw - 28px));
-  margin: 0 auto;
-  padding: 28px 0;
-}
-
-.profileHeader,
-.profileEditor {
+  gap: 2px;
+  padding: 6px;
   border: 1px solid var(--line);
-  border-radius: var(--radius-panel);
+  border-radius: var(--radius-control);
   background: var(--surface-strong);
-  box-shadow: var(--shadow);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  box-shadow: var(--shadow-panel);
 }
 
-.profileHeader {
+.profileMenuItem {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 18px;
+  gap: 10px;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-compact);
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 0.86rem;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
 }
 
-.profileHeader h1 {
+.profileMenuItem:hover,
+.profileMenuItem:focus-visible {
+  background: var(--surface-muted);
+  outline: none;
+}
+
+.profileMenuItem--danger {
+  color: var(--color-danger-text);
+}
+
+.profileMenuItem--danger:hover {
+  background: var(--color-danger-bg);
+}
+
+.profileMenuDivider {
+  height: 1px;
+  margin: 4px 4px;
+  background: var(--color-border-muted);
+}
+
+.profileModalBackdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--color-dialog-backdrop);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  animation: profileModalFadeIn 140ms var(--motion-easing);
+}
+
+@keyframes profileModalFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.profileModalDialog {
+  width: min(920px, 100%);
+  height: min(620px, calc(100dvh - 48px));
+  display: grid;
+  grid-template-columns: 220px minmax(0, 1fr);
+  background: var(--surface-strong);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-panel);
+  box-shadow: var(--shadow-panel);
+  overflow: hidden;
+  animation: profileModalPop 180ms var(--motion-easing);
+}
+
+@keyframes profileModalPop {
+  from { transform: translateY(6px) scale(0.99); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+
+.profileModalNav {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 10px;
+  background: var(--surface-strong);
+  border-right: 1px solid var(--color-divider-soft);
+}
+
+.profileModalClose {
+  align-self: flex-start;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  margin: 0 4px 6px;
+  border: 0;
+  border-radius: var(--radius-compact);
+  background: transparent;
+  color: var(--foreground);
+  cursor: pointer;
+}
+
+.profileModalClose:hover {
+  background: var(--color-neutral-active-bg);
+}
+
+.profileModalNavList {
+  list-style: none;
   margin: 0;
-  font-size: 1.65rem;
+  padding: 0;
+  display: grid;
+  gap: 2px;
 }
 
-.profileBackLink {
+.profileModalNavItem {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: var(--radius-compact);
+  background: transparent;
+  color: var(--foreground);
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+}
+
+.profileModalNavItem:hover,
+.profileModalNavItem:focus-visible {
+  background: var(--surface-muted);
+  outline: none;
+}
+
+.profileModalNavItem--active {
+  background: var(--color-action-bg-muted);
+  box-shadow: inset 0 0 0 1px var(--color-action-border-subtle);
+}
+
+.profileModalPane {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-height: 0;
+}
+
+.profileModalPaneHeader {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 18px 22px 12px;
+  border-bottom: 1px solid var(--color-divider-soft);
+}
+
+.profileModalTitle {
+  margin: 0;
+  font-size: 1.15rem;
+  font-weight: 800;
+  letter-spacing: -0.005em;
+}
+
+.profileModalDescription {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 0.83rem;
+  line-height: 1.4;
+  max-width: 480px;
+}
+
+.profileSavedPill {
   display: inline-flex;
   align-items: center;
-  padding: 0 14px;
-  text-decoration: none;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--motion-easing);
+  pointer-events: none;
 }
 
-.profileEditor {
-  display: grid;
+.profileSavedPill--on {
+  opacity: 1;
+  background: rgba(23, 96, 56, 0.1);
+  color: var(--color-success-text);
+}
+
+.profileModalPaneBody {
+  padding: 18px 22px 22px;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.profileFormStack {
+  display: flex;
+  flex-direction: column;
   gap: 14px;
-  padding: 18px;
+  min-height: 100%;
 }
 
-.profileIntro h2 {
-  margin: 0 0 6px;
-  font-size: 1.08rem;
+.profileFormStack > label.contextField:has(textarea) {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
-.profileIntro p {
-  max-width: 700px;
+.profileFormStack .contextField textarea {
+  flex: 1 1 auto;
+  min-height: 160px;
+  max-height: none;
+  resize: vertical;
+}
+
+.profileHelperText {
   margin: 0;
   color: var(--muted);
-  font-size: 0.9rem;
+  font-size: 0.82rem;
   line-height: 1.45;
 }
 
-.profileGrid {
+.profileFieldRow {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
 }
 
-.profileGrid textarea {
-  min-height: 112px;
-}
-
-.profileSection {
-  grid-column: 1 / -1;
+.profileSubsection {
   display: grid;
-  gap: 12px;
-  padding: 12px;
-  border: 1px solid var(--line);
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--color-border-muted);
   border-radius: var(--radius-control);
-  background: var(--surface-muted);
+  background: var(--surface);
 }
 
-.profileSection summary {
-  cursor: pointer;
-  color: var(--foreground);
-  font-size: 0.95rem;
-  font-weight: 850;
-  list-style-position: outside;
+.profileToggleRow {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
 }
 
-.profileSectionGrid {
+.profileToggleRowText {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 2px;
+}
+
+.profileToggleRow .appleSwitch {
+  flex-shrink: 0;
+}
+
+.profileSubsectionHeader {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
   gap: 10px;
 }
 
-.profileNameBlock {
-  grid-column: 1 / -1;
-  display: grid;
-  gap: 12px;
-}
-
-.profilePlacesBlock {
-  grid-column: 1 / -1;
-  display: grid;
-  gap: 10px;
-  padding: 12px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius-control);
-  background: var(--surface-muted);
-}
-
-.profilePlacesHeader h3 {
-  margin: 0 0 4px;
-  font-size: 1rem;
-}
-
-.profilePlacesHeader p {
-  max-width: 680px;
+.profileSubsectionTitle {
   margin: 0;
+  font-size: 0.92rem;
+  font-weight: 800;
+}
+
+.profileSubsectionHint {
+  margin: 2px 0 0;
   color: var(--muted);
-  font-size: 0.86rem;
+  font-size: 0.78rem;
   line-height: 1.4;
+}
+
+.profileSuggestButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 12px;
+  font-size: 0.82rem;
+}
+
+.profileFieldError {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--color-danger-text);
+}
+
+.profileVoiceList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.profileVoiceRow {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--foreground);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.profileVoiceRow:hover {
+  border-color: var(--color-border-strong);
+}
+
+.profileVoiceRow--active {
+  border-color: var(--color-action-border-strong);
+  background: var(--accent-soft);
+  box-shadow: 0 0 0 1px var(--color-action-border-subtle);
+}
+
+.profileVoiceAvatar {
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  flex: 0 0 46px;
+  border-radius: 50%;
+  background: var(--surface-muted);
+  border: 1px solid var(--line);
+  font-family: var(--font-jp, inherit), "Hiragino Sans", "Yu Gothic", sans-serif;
+  font-size: 1.12rem;
+  font-weight: 700;
+  color: var(--foreground);
+}
+
+.profileVoiceRow--active .profileVoiceAvatar {
+  background: var(--surface-strong);
+  border-color: var(--color-action-border-strong);
+  color: var(--color-action-text-subtle);
+}
+
+.profileVoiceBody {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.profileVoiceName {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 0.92rem;
+  font-weight: 800;
+}
+
+.profileVoiceKana {
+  font-family: var(--font-jp, inherit), "Hiragino Sans", "Yu Gothic", sans-serif;
+  font-size: 0.76rem;
+  font-weight: 500;
+  color: var(--muted);
+  letter-spacing: 0.04em;
+}
+
+.profileVoiceDescription {
+  font-size: 0.78rem;
+  color: var(--muted);
+  line-height: 1.35;
+}
+
+.profileVoiceCheck {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 1.5px solid var(--color-border-muted);
+  background: var(--surface);
+  color: var(--color-text-on-action);
+  flex: 0 0 auto;
+}
+
+.profileVoiceCheck--on {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.profileExternalLink {
+  color: var(--color-action-text-subtle);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.profileExternalLink:hover {
+  text-decoration: underline;
 }
 
 .profileMapsImport {
@@ -2796,10 +3373,18 @@ textarea:focus-visible {
   padding: 0 14px;
 }
 
-.profileNamePair {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+.profileSpinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 1.5px solid var(--color-border-muted);
+  border-top-color: var(--color-action-text-subtle);
+  animation: profileSpin 700ms linear infinite;
+  display: inline-block;
+}
+
+@keyframes profileSpin {
+  to { transform: rotate(360deg); }
 }
 
 .profileKatakana {
@@ -2923,17 +3508,6 @@ textarea:focus-visible {
   font-family: var(--font-jp, inherit), "Hiragino Sans", "Yu Gothic", sans-serif;
 }
 
-.profileActions {
-  display: flex;
-  justify-content: flex-end;
-  gap: 10px;
-  align-items: center;
-}
-
-.profileActions .hint {
-  margin-right: auto;
-}
-
 @keyframes profileSaveHintPop {
   from {
     transform: translateY(1px);
@@ -2966,7 +3540,7 @@ textarea:focus-visible {
   }
 }
 
-.profileActions .primaryButton--savedAck {
+.primaryButton--savedAck {
   animation: profileSaveBtnPulse 0.75s ease-out;
 }
 
@@ -3026,7 +3600,7 @@ textarea:focus-visible {
 .englishModeToggle button,
 .leftLanguageToggle button {
   width: auto;
-  min-width: 42px;
+  min-width: 36px;
   min-height: 28px;
   padding: 0 9px;
   border: 0;
@@ -3035,16 +3609,26 @@ textarea:focus-visible {
   color: var(--muted);
   font-size: 0.72rem;
   font-weight: 720;
+  opacity: 0.7;
+  transition: background 120ms ease, color 120ms ease, opacity 120ms ease;
 }
 
-.leftLanguageToggle button {
-  min-width: 36px;
+.englishModeToggle button:not(.active):hover,
+.leftLanguageToggle button:not(.active):hover {
+  opacity: 1;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  color: var(--foreground);
 }
 
 .englishModeToggle button.active,
 .leftLanguageToggle button.active {
-  background: var(--color-neutral-active-bg);
-  color: var(--foreground);
+  background: var(--accent);
+  color: #fff;
+  opacity: 1;
+}
+
+.chatDisplayActions {
+  align-items: center;
 }
 
 .speakerReview {
@@ -3473,6 +4057,60 @@ textarea:focus-visible {
   border-radius: 10px;
   background: var(--color-chat-bubble-bg);
   box-shadow: 0 8px 18px var(--shadow-chat-bubble);
+  position: relative;
+}
+
+.speakerStack {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 34px;
+}
+
+.ttsSpeakerButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  font-size: 10px;
+  line-height: 1;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--speaker-color, var(--muted)) 28%, var(--line));
+  background: var(--surface-strong);
+  color: var(--foreground);
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 120ms ease, background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.ttsSpeakerButton:hover:not(:disabled) {
+  opacity: 1;
+  background: color-mix(in srgb, var(--accent) 10%, var(--surface-strong));
+}
+
+.ttsSpeakerButton:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
+.ttsSpeakerButton.loading {
+  opacity: 1;
+}
+
+.ttsSpeakerButton.playing {
+  opacity: 1;
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.ttsSpeakerButton.error {
+  opacity: 1;
+  background: rgba(220, 60, 60, 0.18);
+  border-color: rgba(220, 60, 60, 0.45);
 }
 
 .bubbleWithSpeaker .speechBubble {
@@ -3491,7 +4129,7 @@ textarea:focus-visible {
   grid-template-columns: minmax(0, auto) 34px;
 }
 
-.fromEnglish .englishLane .bubbleWithSpeaker .speakerTag {
+.fromEnglish .englishLane .bubbleWithSpeaker .speakerStack {
   grid-column: 2;
   grid-row: 1;
 }
@@ -3589,6 +4227,21 @@ textarea:focus-visible {
 .translationLine {
   padding: 7px 2px;
   color: var(--muted);
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.translationLine .lineText {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.translationLine .ttsSpeakerButton {
+  flex: 0 0 auto;
+  align-self: flex-end;
+  margin-bottom: 1px;
 }
 
 .lineText {
@@ -3867,8 +4520,8 @@ textarea:focus-visible {
   .audienceOptions,
   .contextFields,
   .profileFields,
-  .profileGrid,
   .profileSectionGrid,
+  .profileVoiceGrid,
   .conversationLanes,
   .languageRail,
   .speakerRow {
@@ -3894,33 +4547,57 @@ textarea:focus-visible {
   .profilePage {
     gap: 10px;
     width: 100%;
-    padding: max(10px, env(safe-area-inset-top)) 10px max(18px, env(safe-area-inset-bottom));
+    padding: max(10px, env(safe-area-inset-top)) 10px max(120px, env(safe-area-inset-bottom));
   }
 
-  .profileHeader,
-  .profileEditor {
+  .profileHero {
+    grid-template-columns: 1fr;
+    padding: 16px;
+    gap: 12px;
+  }
+
+  .profileHeroActions {
+    justify-content: flex-end;
+  }
+
+  .profileHeroName {
+    font-size: 1.35rem;
+  }
+
+  .profileHeroAvatar {
+    width: 52px;
+    height: 52px;
+    flex: 0 0 52px;
+    font-size: 1.15rem;
+  }
+
+  .profileCard {
+    padding: 16px;
     border-radius: var(--radius-panel);
   }
 
-  .profileHeader {
-    gap: 10px;
-    padding: 14px;
+  .profileActionBar {
+    position: sticky;
+    bottom: 10px;
+    padding: 12px;
+    flex-direction: column;
+    align-items: stretch;
   }
 
-  .profileHeader h1 {
-    font-size: 1.28rem;
+  .profileActionBar .profileSaveHint {
+    flex: initial;
+    text-align: center;
   }
 
-  .profileEditor {
-    gap: 12px;
-    padding: 14px;
+  .profileActionBarButtons {
+    margin-left: 0;
+    flex-direction: column-reverse;
   }
 
-  .profileBackLink,
-  .profileActions .primaryButton,
-  .profileActions .secondaryButton {
-    justify-content: center;
+  .profileActionBarButtons .primaryButton,
+  .profileActionBarButtons .secondaryButton {
     width: 100%;
+    min-width: 0;
   }
 
   .languageRail {
@@ -4141,11 +4818,6 @@ textarea:focus-visible {
     background: transparent;
   }
 
-  .profileHeader,
-  .profileActions {
-    align-items: stretch;
-    flex-direction: column;
-  }
 
   .landingNav {
     gap: 12px;

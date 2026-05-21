@@ -94,9 +94,108 @@ public struct SessionsResponse: Codable, Sendable {
     public var total: Int
 }
 
+public struct AudiencePreset: Identifiable, Hashable, Sendable {
+    public let id: String
+    public let label: String
+    public let tone: String
+
+    public static let all: [AudiencePreset] = [
+        AudiencePreset(id: "service-staff", label: "staff", tone: "Polite customer speech"),
+        AudiencePreset(id: "polite-stranger", label: "strangers", tone: "Soft polite speech"),
+        AudiencePreset(id: "close-people", label: "friends", tone: "Warm casual speech"),
+        AudiencePreset(id: "work-school", label: "work", tone: "Professional spoken speech"),
+        AudiencePreset(id: "official-care", label: "official", tone: "Precise polite speech")
+    ]
+
+    public static let `default` = "polite-stranger"
+
+    public static func find(_ id: String) -> AudiencePreset {
+        all.first { $0.id == id } ?? all.first { $0.id == `default` }!
+    }
+}
+
 public struct SessionDetailResponse: Codable, Sendable {
     public var session: SessionDetail?
     public var phrases: [Phrase]?
+    public var adaptations: [String: PhraseAdaptation]?
+}
+
+/// AI-polished rewrite of a phrase. The backend keys these on
+/// "<phrase_id>:<target_lang>" (see `adaptation_key()` in the desktop code).
+/// When present, prefer `source_rewrite` / `target_translation` over the raw
+/// `phrase.texts[...]` for that target language.
+public struct PhraseAdaptation: Codable, Hashable, Sendable {
+    public var sourceRewrite: String
+    public var targetTranslation: String
+    public var status: String
+
+    enum CodingKeys: String, CodingKey {
+        case sourceRewrite = "source_rewrite"
+        case targetTranslation = "target_translation"
+        case status
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        sourceRewrite = (try? container.decode(String.self, forKey: .sourceRewrite)) ?? ""
+        targetTranslation = (try? container.decode(String.self, forKey: .targetTranslation)) ?? ""
+        status = (try? container.decode(String.self, forKey: .status)) ?? "ready"
+    }
+
+    public init(sourceRewrite: String = "", targetTranslation: String = "", status: String = "ready") {
+        self.sourceRewrite = sourceRewrite
+        self.targetTranslation = targetTranslation
+        self.status = status
+    }
+}
+
+public struct TtsResult: Decodable, Sendable {
+    public var audioBase64: String
+    public var mimeType: String
+
+    enum CodingKeys: String, CodingKey {
+        case audioBase64 = "audio_base64"
+        case mimeType = "mime_type"
+    }
+}
+
+public struct NameKatakanaOption: Decodable, Hashable, Sendable {
+    public var firstKatakana: String
+    public var lastKatakana: String
+    public var firstReadingEn: String
+    public var lastReadingEn: String
+
+    enum CodingKeys: String, CodingKey {
+        case firstKatakana = "first_katakana"
+        case lastKatakana = "last_katakana"
+        case firstReadingEn = "first_reading_en"
+        case lastReadingEn = "last_reading_en"
+    }
+}
+
+public struct NameKatakanaResult: Decodable, Sendable {
+    public var options: [NameKatakanaOption]
+}
+
+public struct MapsListPlace: Decodable, Hashable, Sendable {
+    public var name: String
+    public var address: String?
+}
+
+public struct MapsListImportResult: Decodable, Sendable {
+    public var title: String
+    public var places: [MapsListPlace]
+
+    enum CodingKeys: String, CodingKey {
+        case title
+        case places
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        title = (try? container.decode(String.self, forKey: .title)) ?? ""
+        places = (try? container.decode([MapsListPlace].self, forKey: .places)) ?? []
+    }
 }
 
 public struct SessionDetail: Codable, Sendable {

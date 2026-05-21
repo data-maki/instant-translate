@@ -1,6 +1,35 @@
 import Foundation
 import Combine
 
+/// Lets the view model read the BetterAuth bearer token without owning the
+/// auth session. Implementations must be safe to read from any actor — the
+/// API client calls this on its own actor before issuing a request.
+public protocol BearerTokenSource: Sendable {
+    func currentToken() async -> String?
+}
+
+public struct NoBearerToken: BearerTokenSource {
+    public init() {}
+    public func currentToken() async -> String? { nil }
+}
+
+/// Reads `bearerToken` from a `BetterAuthSession` on the main actor.
+public struct AuthSessionTokenSource: BearerTokenSource {
+    private let read: @Sendable () async -> String?
+
+    public init(_ session: BetterAuthSession) {
+        // Capture the session by reference but hop to the main actor to read
+        // its @Published bearerToken safely.
+        self.read = { [weak session] in
+            await MainActor.run { session?.bearerToken }
+        }
+    }
+
+    public func currentToken() async -> String? {
+        await read()
+    }
+}
+
 @MainActor
 public final class TranslatorViewModel: ObservableObject {
     public enum Status: String, Sendable {
@@ -16,31 +45,52 @@ public final class TranslatorViewModel: ObservableObject {
     @Published public var sourceLanguages: [String] = ["ja"]
     @Published public var targetLanguage = "en"
     @Published public var expectedSpeakerCount = 2
+    @Published public var audiencePresetID = AudiencePreset.default
     @Published public var context = ""
     @Published public var profile = TravelerProfile()
     @Published public private(set) var phrases: [Phrase] = []
+    @Published public private(set) var adaptations: [String: PhraseAdaptation] = [:]
     @Published public private(set) var sessions: [SessionSummary] = []
+    @Published public private(set) var activeSessionName = ""
     @Published public private(set) var activeSessionTitle = "New chat"
     @Published public private(set) var tokenCount = 0
     @Published public private(set) var status: Status = .idle
     @Published public private(set) var errorMessage = ""
+    @Published public private(set) var speakingPhraseId: String?
+    @Published public private(set) var katakanaSuggestions: [NameKatakanaOption] = []
+    @Published public private(set) var katakanaSuggestStatus = ""
+    @Published public private(set) var mapsImportStatus = ""
     @Published public var realtimeEnabled = true
     @Published public var microphoneEnabled = true
     @Published public var englishToTargetSpeakerEnabled = true
     @Published public var targetToEnglishSpeakerEnabled = true
 
+    private static let autoImproveDelay: UInt64 = 2 * 60 * 1_000_000_000
+
     private let configuration: AppConfiguration
     private let api: CottonohaAPIClient
     private let profileStore = TravelerProfileStore()
     private let player = PCMPlayer()
+    private let ttsPlayer = TTSPlayer()
     private var socket: WebSocketTranscriptionClient?
     private var recorder: AudioRecorder?
     private var shouldSendAudio = true
+    private var autoImproveTask: Task<Void, Never>?
 
-    public init(configuration: AppConfiguration) {
+    private let tokenSource: BearerTokenSource
+
+    public init(configuration: AppConfiguration, tokenSource: BearerTokenSource = NoBearerToken()) {
         self.configuration = configuration
-        self.api = CottonohaAPIClient(configuration: configuration)
+        self.tokenSource = tokenSource
+        self.api = CottonohaAPIClient(
+            configuration: configuration,
+            tokenProvider: { await tokenSource.currentToken() }
+        )
         self.profile = profileStore.load()
+    }
+
+    fileprivate func currentBearerToken() async -> String? {
+        await tokenSource.currentToken()
     }
 
     public var isLive: Bool {
@@ -73,9 +123,12 @@ public final class TranslatorViewModel: ObservableObject {
     }
 
     public func loadSession(_ session: SessionSummary) async {
+        cancelAutoImprove()
         do {
             let detail = try await api.fetchSessionDetail(session.name)
             phrases = detail.phrases ?? []
+            adaptations = detail.adaptations ?? [:]
+            activeSessionName = detail.session?.name ?? session.name
             activeSessionTitle = detail.session?.title ?? session.title
             sourceLanguages = detail.session?.sourceLanguages ?? session.sourceLanguages ?? sourceLanguages
             targetLanguage = detail.session?.targetLanguage ?? session.targetLanguage ?? targetLanguage
@@ -83,6 +136,124 @@ public final class TranslatorViewModel: ObservableObject {
         } catch {
             errorMessage = friendlyError(error)
         }
+    }
+
+    /// Build the same adaptation key the desktop uses so the polished text
+    /// from `/sessions/{name}` lines up with each phrase bubble.
+    public func adaptation(for phrase: Phrase, targetLang: String) -> PhraseAdaptation? {
+        let key = "\(phrase.id):\(targetLang)"
+        return adaptations[key]
+    }
+
+    /// Text we'd actually want to *speak* — prefer the AI-enhanced rewrite
+    /// when available, fall back to whatever the live pipeline produced.
+    public func bestText(for phrase: Phrase, language: String) -> String {
+        if language == phrase.sourceLanguage,
+           let adaptation = adaptation(for: phrase, targetLang: targetLanguage),
+           !adaptation.sourceRewrite.isEmpty {
+            return adaptation.sourceRewrite
+        }
+        if let adaptation = adaptation(for: phrase, targetLang: language),
+           !adaptation.targetTranslation.isEmpty {
+            return adaptation.targetTranslation
+        }
+        return phrase.texts[language] ?? ""
+    }
+
+    public func speakPhrase(_ phrase: Phrase, language: String) async {
+        let text = bestText(for: phrase, language: language).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        speakingPhraseId = phrase.id
+        defer { speakingPhraseId = nil }
+        // The voice picker is Japanese-only — only forward it when speaking ja.
+        let voiceId = (language == "ja" && !profile.ttsVoiceId.isEmpty) ? profile.ttsVoiceId : nil
+        do {
+            let result = try await api.generateTts(
+                text: text,
+                targetLanguage: language,
+                voiceId: voiceId
+            )
+            ttsPlayer.play(base64: result.audioBase64)
+        } catch {
+            errorMessage = friendlyError(error)
+        }
+    }
+
+    public func suggestKatakana() async {
+        let first = profile.firstName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let last = profile.lastName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !first.isEmpty || !last.isEmpty else {
+            katakanaSuggestStatus = "Add your first or last name first."
+            katakanaSuggestions = []
+            return
+        }
+        katakanaSuggestStatus = "Looking up…"
+        do {
+            let result = try await api.fetchNameKatakanaOptions(firstName: first, lastName: last)
+            katakanaSuggestions = result.options
+            katakanaSuggestStatus = result.options.isEmpty
+                ? "No suggestions returned."
+                : ""
+        } catch {
+            katakanaSuggestions = []
+            katakanaSuggestStatus = friendlyError(error)
+        }
+    }
+
+    public func applyKatakanaOption(_ option: NameKatakanaOption) {
+        profile.firstNameKatakana = option.firstKatakana
+        profile.lastNameKatakana = option.lastKatakana
+        saveProfile()
+    }
+
+    public func importGoogleMapsList(url: String) async {
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            mapsImportStatus = "Paste a Google Maps list link first."
+            return
+        }
+        mapsImportStatus = "Importing…"
+        do {
+            let result = try await api.importGoogleMapsList(url: trimmed)
+            let lines = result.places.map { place -> String in
+                if let addr = place.address, !addr.isEmpty {
+                    return "\(place.name) — \(addr)"
+                }
+                return place.name
+            }
+            profile.savedPlaces = Self.mergeLines(existing: profile.savedPlaces, additions: lines)
+            saveProfile()
+            mapsImportStatus = "Imported \(result.places.count) places\(result.title.isEmpty ? "" : " from \(result.title)")."
+        } catch {
+            mapsImportStatus = friendlyError(error)
+        }
+    }
+
+    private static func mergeLines(existing: String, additions: [String]) -> String {
+        var seen = Set<String>()
+        var result: [String] = []
+        for raw in (existing.components(separatedBy: .newlines) + additions) {
+            let line = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { continue }
+            let key = line.lowercased()
+            if seen.insert(key).inserted {
+                result.append(line)
+            }
+        }
+        return result.joined(separator: "\n")
+    }
+
+    /// Reset the workspace so the next `start()` begins a brand-new session
+    /// instead of extending the previous one. Equivalent to the desktop
+    /// "New chat" button.
+    public func newChat() {
+        cancelAutoImprove()
+        activeSessionName = ""
+        activeSessionTitle = "New chat"
+        phrases = []
+        tokenCount = 0
+        errorMessage = ""
+        status = .idle
     }
 
     public func toggleSourceLanguage(_ code: String) {
@@ -111,11 +282,16 @@ public final class TranslatorViewModel: ObservableObject {
     }
 
     public func start() async {
-        AppLog.realtime.info("Starting translation session realtime=\(self.realtimeEnabled) sourceLanguages=\(self.sourceLanguages.joined(separator: ","), privacy: .public) targetLanguage=\(self.targetLanguage, privacy: .public)")
+        cancelAutoImprove()
+        let resumeSessionName = activeSessionName
+        let isResuming = !resumeSessionName.isEmpty
+        AppLog.realtime.info("Starting translation session realtime=\(self.realtimeEnabled) resume=\(isResuming) sourceLanguages=\(self.sourceLanguages.joined(separator: ","), privacy: .public) targetLanguage=\(self.targetLanguage, privacy: .public)")
         errorMessage = ""
-        phrases = []
-        activeSessionTitle = realtimeEnabled ? "Realtime overdub" : "New chat"
-        tokenCount = 0
+        if !isResuming {
+            phrases = []
+            activeSessionTitle = realtimeEnabled ? "Realtime overdub" : "New chat"
+            tokenCount = 0
+        }
         shouldSendAudio = microphoneEnabled
         status = .connecting
 
@@ -123,16 +299,19 @@ public final class TranslatorViewModel: ObservableObject {
             let socket = WebSocketTranscriptionClient(url: configuration.websocketURL)
             self.socket = socket
 
-            let startMessage = StartTranscriptionMessage(
+            var startMessage = StartTranscriptionMessage(
                 sourceLanguages: Array(dictUniquing(sourceLanguages + [targetLanguage])),
                 targetLanguage: targetLanguage,
                 expectedSpeakerCount: expectedSpeakerCount,
                 enableOpenAIRealtime: realtimeEnabled,
                 context: mergedContext
             )
+            startMessage.sessionName = resumeSessionName
 
+            let token = await currentBearerToken()
             try await socket.connect(
                 startMessage: startMessage,
+                bearerToken: token,
                 onEvent: { [weak self] event in
                     await self?.handle(event)
                 },
@@ -168,7 +347,37 @@ public final class TranslatorViewModel: ObservableObject {
         player.stop()
         status = .stopped
         try? await refreshSessions()
+        scheduleAutoImprove(for: activeSessionName)
         AppLog.realtime.info("Translation session stopped")
+    }
+
+    private func scheduleAutoImprove(for sessionName: String) {
+        cancelAutoImprove()
+        guard profile.autoImprove, !sessionName.isEmpty else { return }
+        let api = self.api
+        autoImproveTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: TranslatorViewModel.autoImproveDelay)
+            if Task.isCancelled { return }
+            do {
+                try await api.rediarizeSession(sessionName)
+                if Task.isCancelled { return }
+                try await api.retranslateSession(sessionName)
+                AppLog.realtime.info("Auto-improve completed for session=\(sessionName, privacy: .public)")
+            } catch {
+                // Best-effort: a failure leaves the saved chat untouched.
+                AppLog.realtime.warning("Auto-improve skipped for session=\(sessionName, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+            await self?.clearAutoImproveTask()
+        }
+    }
+
+    private func cancelAutoImprove() {
+        autoImproveTask?.cancel()
+        autoImproveTask = nil
+    }
+
+    private func clearAutoImproveTask() {
+        autoImproveTask = nil
     }
 
     public func toggleMicrophone() {
@@ -201,7 +410,8 @@ public final class TranslatorViewModel: ObservableObject {
         case .status(let value):
             status = value == "listening" ? .listening : .stopped
         case .session(let session):
-            activeSessionTitle = session.title ?? "New chat"
+            activeSessionName = session.name
+            applyIncomingTitle(session.title)
             tokenCount = session.tokenCount
         case .transcript(let nextPhrases, let finalTokenCount):
             phrases = nextPhrases
@@ -212,13 +422,25 @@ public final class TranslatorViewModel: ObservableObject {
             guard realtimeEnabled else { return }
             player.playBase64PCM16(audio.audio, sampleRate: audio.sampleRate)
         case .saved(let saved):
-            activeSessionTitle = saved.title ?? "New chat"
+            activeSessionName = saved.session
+            applyIncomingTitle(saved.title)
             phrases = saved.phrases
             tokenCount = saved.tokenCount
             status = .stopped
             try? await refreshSessions()
         case .error(let message):
             fail(message)
+        }
+    }
+
+    private func applyIncomingTitle(_ incoming: String?) {
+        let candidate = (incoming ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        // On resume the backend re-emits "New chat" before the saved title is
+        // restored — don't overwrite a real title we already have on screen.
+        if !candidate.isEmpty, candidate.lowercased() != "new chat" {
+            activeSessionTitle = candidate
+        } else if activeSessionTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            activeSessionTitle = "New chat"
         }
     }
 

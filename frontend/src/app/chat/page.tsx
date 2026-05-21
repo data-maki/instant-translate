@@ -18,6 +18,11 @@ export default async function ChatPage() {
 
   const userId = session.user.id;
   const userName = session.user.name || session.user.email || "";
+  // The BetterAuth bearer plugin makes this token usable as
+  // `Authorization: Bearer <token>` against any service that calls
+  // /api/auth/get-session to validate it. We forward it to the FastAPI
+  // backend instead of letting the client claim an identity.
+  const authToken = session.session.token;
   let initialLanguages: Language[] = [];
   let initialSourceLanguages = ["ja"];
   let initialTargetLanguage = "en";
@@ -28,7 +33,7 @@ export default async function ChatPage() {
   try {
     const [languageResult, sessionResult] = await Promise.all([
       fetchLanguages(),
-      fetchSessions({ limit: INITIAL_SESSION_LIMIT, userId })
+      fetchSessions({ limit: INITIAL_SESSION_LIMIT, userId: authToken })
     ]);
     initialLanguages = languageResult.languages;
     initialSourceLanguages = languageResult.default_source_languages;
@@ -47,7 +52,7 @@ export default async function ChatPage() {
       initialSessions={initialSessions}
       initialSourceLanguages={initialSourceLanguages}
       initialTargetLanguage={initialTargetLanguage}
-      userId={userId}
+      userId={authToken}
       userName={userName}
     />
   );

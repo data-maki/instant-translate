@@ -13,8 +13,10 @@ import urllib.request
 from typing import Any
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Header, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+
+from .auth import require_user, resolve_user_from_token
 
 from .languages import DEFAULT_SOURCE_LANGUAGES, DEFAULT_TARGET_LANGUAGE, list_languages
 from . import shared
@@ -75,6 +77,7 @@ def health() -> dict[str, Any]:
         "has_deepl_key": bool(os.environ.get("DEEPL_API_KEY")),
         "has_deepgram_key": bool(os.environ.get("DEEPGRAM_API_KEY")),
         "has_openai_key": bool(os.environ.get("OPENAI_API_KEY")),
+        "has_elevenlabs_key": bool(os.environ.get("ELEVENLABS_API_KEY")),
         "has_google_maps_api_key": bool(_google_maps_api_key()),
         "audio": {
             "sample_rate": SAMPLE_RATE,
@@ -89,7 +92,10 @@ def health() -> dict[str, Any]:
 
 
 @app.post("/context/places")
-def places_context(payload: dict[str, Any]) -> dict[str, Any]:
+def places_context(
+    payload: dict[str, Any],
+    user_id: str = Depends(require_user),
+) -> dict[str, Any]:
     api_key = _google_maps_api_key()
     if not api_key:
         raise HTTPException(status_code=400, detail="Missing GOOGLE_MAPS_API_KEY for Google Places enrichment.")
@@ -112,7 +118,10 @@ def places_context(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 @app.post("/context/maps-list")
-def maps_list_context(payload: dict[str, Any]) -> dict[str, Any]:
+def maps_list_context(
+    payload: dict[str, Any],
+    user_id: str = Depends(require_user),
+) -> dict[str, Any]:
     url = str(payload.get("url") or "").strip()
     if not url:
         raise HTTPException(status_code=400, detail="Expected a Google Maps shared list URL.")
@@ -123,7 +132,10 @@ def maps_list_context(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 @app.post("/context/rewrite")
-def rewrite_context(payload: dict[str, Any]) -> dict[str, str]:
+def rewrite_context(
+    payload: dict[str, Any],
+    user_id: str = Depends(require_user),
+) -> dict[str, str]:
     api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
         raise HTTPException(status_code=400, detail="Missing GROQ_API_KEY for phrase adaptation.")
@@ -158,7 +170,10 @@ def rewrite_context(payload: dict[str, Any]) -> dict[str, str]:
 
 
 @app.post("/context/translate")
-def translate_context(payload: dict[str, Any]) -> dict[str, str]:
+def translate_context(
+    payload: dict[str, Any],
+    user_id: str = Depends(require_user),
+) -> dict[str, str]:
     api_key = os.environ.get("DEEPL_API_KEY")
     if not api_key:
         raise HTTPException(status_code=400, detail="Missing DEEPL_API_KEY for phrase translation.")
@@ -298,7 +313,10 @@ def _openai_name_katakana_options(api_key: str, first_name: str, last_name: str)
 
 
 @app.post("/context/name-katakana")
-def name_katakana_context(payload: dict[str, Any]) -> dict[str, Any]:
+def name_katakana_context(
+    payload: dict[str, Any],
+    user_id: str = Depends(require_user),
+) -> dict[str, Any]:
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         raise HTTPException(status_code=400, detail="Missing OPENAI_API_KEY.")
@@ -317,7 +335,10 @@ def name_katakana_context(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 @app.post("/realtime/translation-session")
-def realtime_translation_session(payload: dict[str, Any]) -> dict[str, Any]:
+def realtime_translation_session(
+    payload: dict[str, Any],
+    user_id: str = Depends(require_user),
+) -> dict[str, Any]:
     import requests
 
     api_key = os.environ.get("OPENAI_API_KEY")
@@ -362,6 +383,188 @@ def languages() -> dict[str, Any]:
         "default_source_languages": DEFAULT_SOURCE_LANGUAGES,
         "default_target_language": DEFAULT_TARGET_LANGUAGE,
         "languages": list_languages(),
+    }
+
+
+# ElevenLabs voice / language coverage map.
+#
+# `eleven_v3` is our primary model (~70 languages). We keep
+# `eleven_multilingual_v2` as a fallback for the rare case where a voice is not
+# yet enrolled in v3. Any v3 voice speaks every supported language — the model
+# auto-detects from the text — so we just need one good multilingual male voice
+# (Adam) plus a curated Japanese voice (Shohei).
+ELEVENLABS_PRIMARY_MODEL = "eleven_v3"
+ELEVENLABS_FALLBACK_MODEL = "eleven_multilingual_v2"
+# Soniox languages eleven_v3 still does not cover well. The fallback model will
+# not rescue these either.
+ELEVENLABS_V3_UNSUPPORTED = {"eu"}  # Basque
+
+ELEVENLABS_DEFAULT_VOICE_ID = "pNInz6obpgDQGcFmaJgB"  # Adam — multilingual male
+_ADAM = ELEVENLABS_DEFAULT_VOICE_ID
+_SHOHEI = "NO5A3b3sSzDyJQF7MiNS"  # Curated Japanese voice (matches the profile picker)
+
+# Officially supported by eleven_multilingual_v2 (29 languages). For the remaining
+# Soniox languages we still send the request, but TTS quality may be poor or
+# pronounce text as if it were English.
+ELEVENLABS_LANGUAGE_DEFAULT_VOICES: dict[str, str] = {
+    "ar": _ADAM,  # Arabic
+    "bg": _ADAM,  # Bulgarian
+    "cs": _ADAM,  # Czech
+    "da": _ADAM,  # Danish
+    "de": _ADAM,  # German
+    "el": _ADAM,  # Greek
+    "en": _ADAM,  # English
+    "es": _ADAM,  # Spanish
+    "fi": _ADAM,  # Finnish
+    "fr": _ADAM,  # French
+    "hi": _ADAM,  # Hindi
+    "hr": _ADAM,  # Croatian
+    "id": _ADAM,  # Indonesian
+    "it": _ADAM,  # Italian
+    "ja": _SHOHEI,  # Japanese (curated)
+    "ko": _ADAM,  # Korean
+    "ms": _ADAM,  # Malay
+    "nl": _ADAM,  # Dutch
+    "pl": _ADAM,  # Polish
+    "pt": _ADAM,  # Portuguese
+    "ro": _ADAM,  # Romanian
+    "ru": _ADAM,  # Russian
+    "sk": _ADAM,  # Slovak
+    "sv": _ADAM,  # Swedish
+    "ta": _ADAM,  # Tamil
+    "tl": _ADAM,  # Tagalog/Filipino
+    "tr": _ADAM,  # Turkish
+    "uk": _ADAM,  # Ukrainian
+    "zh": _ADAM,  # Chinese
+    # Soniox languages NOT officially in eleven_multilingual_v2's 29-language set.
+    # They are still routable to Adam; output may be mispronounced or rendered as
+    # if English. ElevenLabs `eleven_v3` (alpha) covers most of these but is not
+    # yet wired up here.
+    "bs": _ADAM,  # Bosnian
+    "ca": _ADAM,  # Catalan
+    "et": _ADAM,  # Estonian
+    "eu": _ADAM,  # Basque (no ElevenLabs voice known to support this)
+    "fa": _ADAM,  # Persian (Farsi)
+    "gl": _ADAM,  # Galician
+    "gu": _ADAM,  # Gujarati
+    "he": _ADAM,  # Hebrew
+    "hu": _ADAM,  # Hungarian
+    "lt": _ADAM,  # Lithuanian
+    "lv": _ADAM,  # Latvian
+    "mk": _ADAM,  # Macedonian
+    "ml": _ADAM,  # Malayalam
+    "mr": _ADAM,  # Marathi
+    "my": _ADAM,  # Burmese
+    "no": _ADAM,  # Norwegian
+    "pa": _ADAM,  # Punjabi
+    "sl": _ADAM,  # Slovenian
+    "sr": _ADAM,  # Serbian
+    "te": _ADAM,  # Telugu
+    "th": _ADAM,  # Thai
+    "ur": _ADAM,  # Urdu
+    "vi": _ADAM,  # Vietnamese
+}
+
+# Languages eleven_v3 still does not cover well — we surface this so the UI can
+# warn the user. (Basque is the only Soniox language with no known ElevenLabs
+# voice trained on its phonology.)
+ELEVENLABS_UNSUPPORTED_LANGUAGES = set(ELEVENLABS_V3_UNSUPPORTED)
+
+
+@app.get("/tts/voices")
+def tts_voices() -> dict[str, Any]:
+    """Report which languages have a configured male voice and which do not."""
+    return {
+        "default_voice_id": ELEVENLABS_DEFAULT_VOICE_ID,
+        "primary_model_id": ELEVENLABS_PRIMARY_MODEL,
+        "fallback_model_id": ELEVENLABS_FALLBACK_MODEL,
+        "language_voices": dict(ELEVENLABS_LANGUAGE_DEFAULT_VOICES),
+        "officially_supported_languages": sorted(
+            code
+            for code in ELEVENLABS_LANGUAGE_DEFAULT_VOICES
+            if code not in ELEVENLABS_UNSUPPORTED_LANGUAGES
+        ),
+        "best_effort_languages": sorted(ELEVENLABS_UNSUPPORTED_LANGUAGES),
+    }
+
+
+def _elevenlabs_request(
+    api_key: str,
+    voice_id: str,
+    text: str,
+    model_id: str,
+) -> "requests.Response":  # type: ignore[name-defined]
+    import requests
+
+    settings = {"stability": 0.5, "similarity_boost": 0.75}
+
+    return requests.post(
+        f"https://api.elevenlabs.io/v1/text-to-speech/{urllib.parse.quote(voice_id)}",
+        headers={
+            "xi-api-key": api_key,
+            "Content-Type": "application/json",
+            "Accept": "audio/mpeg",
+        },
+        json={"text": text, "model_id": model_id, "voice_settings": settings},
+        timeout=30,
+    )
+
+
+@app.post("/tts/speak")
+def tts_speak(
+    payload: dict[str, Any],
+    user_id: str = Depends(require_user),
+) -> dict[str, Any]:
+    import base64
+    import requests
+
+    api_key = os.environ.get("ELEVENLABS_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Missing ELEVENLABS_API_KEY.")
+
+    text = str(payload.get("text") or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Expected non-empty text.")
+    if len(text) > 1500:
+        text = text[:1500]
+
+    target_language = str(payload.get("target_language") or "").strip().lower()
+    requested_voice = str(payload.get("voice_id") or "").strip()
+    voice_id = (
+        requested_voice
+        or ELEVENLABS_LANGUAGE_DEFAULT_VOICES.get(target_language)
+        or ELEVENLABS_DEFAULT_VOICE_ID
+    )
+
+    requested_model = str(payload.get("model_id") or "").strip() or ELEVENLABS_PRIMARY_MODEL
+    candidates: list[str] = [requested_model]
+    if ELEVENLABS_FALLBACK_MODEL not in candidates:
+        candidates.append(ELEVENLABS_FALLBACK_MODEL)
+
+    attempted: list[tuple[str, int, str]] = []
+    used_model: str | None = None
+    response = None
+    try:
+        for candidate in candidates:
+            attempt = _elevenlabs_request(api_key, voice_id, text, candidate)
+            if attempt.status_code < 400:
+                response = attempt
+                used_model = candidate
+                break
+            attempted.append((candidate, attempt.status_code, attempt.text[:160]))
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail=f"ElevenLabs request failed: {exc}") from exc
+
+    if response is None or used_model is None:
+        detail = "; ".join(f"{m}: {s} {t}" for m, s, t in attempted) or "no response"
+        raise HTTPException(status_code=502, detail=f"ElevenLabs TTS failed ({detail})")
+
+    audio_b64 = base64.b64encode(response.content).decode("ascii")
+    return {
+        "audio_base64": audio_b64,
+        "mime_type": "audio/mpeg",
+        "voice_id": voice_id,
+        "model_id": used_model,
     }
 
 
@@ -603,7 +806,12 @@ def _dedupe(values: list[str]) -> list[str]:
     return result
 
 
-def _require_owner(state: dict[str, Any] | None, user_id: str | None) -> None:
+def _require_owner(state: dict[str, Any] | None, user_id: str) -> None:
+    """Enforce that the authenticated user owns this session. The user_id here
+    always comes from a verified BetterAuth session — never from a client
+    header — so we don't accept `None`. Sessions without a stored owner are
+    treated as not-yours-to-see; that's a conservative default that avoids the
+    pre-auth backdoor."""
     if state is None:
         return
     if not session_belongs_to(state, user_id):
@@ -614,9 +822,9 @@ def _require_owner(state: dict[str, Any] | None, user_id: str | None) -> None:
 def sessions(
     limit: int | None = Query(default=None, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
-    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    user_id: str = Depends(require_user),
 ) -> dict[str, Any]:
-    all_sessions = list_sessions(user_id=x_user_id)
+    all_sessions = list_sessions(user_id=user_id)
     sliced = all_sessions[offset:]
     if limit is not None:
         sliced = sliced[:limit]
@@ -630,12 +838,12 @@ def sessions(
 @app.get("/sessions/{session_name}")
 def session_detail(
     session_name: str,
-    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    user_id: str = Depends(require_user),
 ) -> dict[str, Any]:
     state = read_session_state(session_name)
     if not state:
         return {"session": state}
-    _require_owner(state, x_user_id)
+    _require_owner(state, user_id)
 
     safe_name = sanitize_session_name(session_name)
     session_dir = shared.REPO_ROOT / "output" / safe_name
@@ -668,12 +876,12 @@ def session_detail(
 def save_session_adaptation(
     session_name: str,
     payload: dict[str, Any],
-    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    user_id: str = Depends(require_user),
 ) -> dict[str, Any]:
     state = read_session_state(session_name)
     if not state:
         raise HTTPException(status_code=404, detail="Session not found.")
-    _require_owner(state, x_user_id)
+    _require_owner(state, user_id)
 
     key = str(payload.get("key") or "").strip()
     adaptation = payload.get("adaptation") if isinstance(payload.get("adaptation"), dict) else {}
@@ -696,12 +904,12 @@ def save_session_adaptation(
 def rename_session(
     session_name: str,
     payload: dict[str, Any],
-    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    user_id: str = Depends(require_user),
 ) -> dict[str, Any]:
     state = read_session_state(session_name)
     if not state:
         raise HTTPException(status_code=404, detail="Session not found.")
-    _require_owner(state, x_user_id)
+    _require_owner(state, user_id)
 
     title = str(payload.get("title") or "").strip()
     if not title:
@@ -729,7 +937,7 @@ def rename_session(
 @app.post("/sessions/{session_name}/auto-title")
 def auto_title_session(
     session_name: str,
-    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    user_id: str = Depends(require_user),
     force: bool = Query(default=False),
 ) -> dict[str, Any]:
     """Generate a title for a session that was never titled (or force a refresh).
@@ -741,7 +949,7 @@ def auto_title_session(
     state = read_session_state(session_name)
     if not state:
         raise HTTPException(status_code=404, detail="Session not found.")
-    _require_owner(state, x_user_id)
+    _require_owner(state, user_id)
 
     if not os.environ.get("OPENAI_API_KEY"):
         raise HTTPException(status_code=503, detail="OPENAI_API_KEY is not configured.")
@@ -792,12 +1000,12 @@ def auto_title_session(
 @app.delete("/sessions/{session_name}")
 def delete_session(
     session_name: str,
-    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    user_id: str = Depends(require_user),
 ) -> dict[str, Any]:
     state = read_session_state(session_name)
     if not state:
         raise HTTPException(status_code=404, detail="Session not found.")
-    _require_owner(state, x_user_id)
+    _require_owner(state, user_id)
 
     safe_name = sanitize_session_name(session_name)
     session_dir = shared.REPO_ROOT / "output" / safe_name
@@ -810,7 +1018,7 @@ def delete_session(
 @app.post("/sessions/{session_name}/rediarize")
 def rediarize_session(
     session_name: str,
-    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    user_id: str = Depends(require_user),
 ) -> dict[str, Any]:
     api_key = os.environ.get("SONIOX_API_KEY")
     if not api_key:
@@ -819,7 +1027,7 @@ def rediarize_session(
     state = read_session_state(session_name)
     if not state:
         raise HTTPException(status_code=404, detail="Session not found.")
-    _require_owner(state, x_user_id)
+    _require_owner(state, user_id)
 
     safe_name = sanitize_session_name(session_name)
     session_dir = shared.REPO_ROOT / "output" / safe_name
@@ -871,7 +1079,7 @@ def rediarize_session(
 @app.post("/sessions/{session_name}/retranslate")
 def retranslate_session(
     session_name: str,
-    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    user_id: str = Depends(require_user),
 ) -> dict[str, Any]:
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
@@ -880,7 +1088,7 @@ def retranslate_session(
     state = read_session_state(session_name)
     if not state:
         raise HTTPException(status_code=404, detail="Session not found.")
-    _require_owner(state, x_user_id)
+    _require_owner(state, user_id)
 
     safe_name = sanitize_session_name(session_name)
     session_dir = shared.REPO_ROOT / "output" / safe_name
@@ -920,12 +1128,12 @@ def retranslate_session(
 def review_speakers(
     session_name: str,
     payload: dict[str, Any],
-    x_user_id: str | None = Header(default=None, alias="X-User-Id"),
+    user_id: str = Depends(require_user),
 ) -> dict[str, Any]:
     state = read_session_state(session_name)
     if not state:
         raise HTTPException(status_code=404, detail="Session not found.")
-    _require_owner(state, x_user_id)
+    _require_owner(state, user_id)
 
     safe_name = sanitize_session_name(session_name)
     session_dir = shared.REPO_ROOT / "output" / safe_name
@@ -991,6 +1199,17 @@ def _latest_audio_path(session_dir):
     if not candidates:
         return None
     return max(candidates, key=lambda path: path.stat().st_mtime)
+
+
+def _atomic_write_text(path, content: str) -> None:
+    """Write text to ``path`` via a sibling ``.tmp`` and ``os.replace``.
+
+    Guarantees that a crash mid-write cannot leave a half-written file:
+    readers either see the previous file or the new one, never a torn copy.
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def _latest_tokens_for_session(session_dir, state: dict[str, Any]) -> list[dict[str, Any]]:
@@ -1296,6 +1515,21 @@ def _apply_speaker_labels(session, labels: dict[str, str]) -> None:
 
 @app.websocket("/ws/transcribe")
 async def transcribe(websocket: WebSocket) -> None:
+    # Authenticate BEFORE accepting the socket. We accept the bearer token via
+    # the `?token=...` query param because browser WebSocket APIs can't set
+    # arbitrary headers, and falling back to the `Cookie` header covers the
+    # web client. The user id we resolve here is authoritative — the
+    # `user_id` field the client sends in the start_message is ignored.
+    cookie_header = websocket.headers.get("cookie")
+    token = websocket.query_params.get("token")
+    user_id = await resolve_user_from_token(token)
+    if user_id is None and cookie_header:
+        from .auth import _resolve_session  # type: ignore[attr-defined]
+
+        user_id = await _resolve_session(None, cookie_header)
+    if user_id is None:
+        await websocket.close(code=4401)
+        return
     await websocket.accept()
 
     try:
@@ -1304,6 +1538,10 @@ async def transcribe(websocket: WebSocket) -> None:
     except (WebSocketDisconnect, json.JSONDecodeError):
         await websocket.close(code=1003)
         return
+
+    # Replace any client-supplied user_id with the verified one — the start
+    # message is otherwise trusted by the transcription bridge.
+    start_message["user_id"] = user_id
 
     async def receive_audio() -> bytes | str | None:
         try:

@@ -18,7 +18,57 @@ export type TravelerProfile = {
   location_updated_at: string;
   nearby_places: string;
   saved_places: string;
+  /** ElevenLabs voice ID for Japanese TTS playback. */
+  tts_voice_id: string;
+  /** Display name for the chosen TTS voice. */
+  tts_voice_name: string;
+  /** When true, schedule a background re-diarize + re-translate 2 minutes after the chat stops. */
+  auto_improve: boolean;
 };
+
+export type JapaneseTtsVoice = {
+  id: string;
+  name: string;
+  /** Short kana sample so users can hear the persona in their head. */
+  kana: string;
+  /** One-line character/voice description shown in the picker. */
+  description: string;
+  /** ElevenLabs voice library URL for previewing the voice. */
+  previewUrl: string;
+};
+
+export const JAPANESE_TTS_VOICES: JapaneseTtsVoice[] = [
+  {
+    id: "nHEVPT3LS1V37bXZNr82",
+    name: "Hideki",
+    kana: "ヒデキ",
+    description: "Calm, measured narrator. Good for slower, polite phrasing.",
+    previewUrl: "https://elevenlabs.io/app/voice-library?voiceId=nHEVPT3LS1V37bXZNr82"
+  },
+  {
+    id: "NO5A3b3sSzDyJQF7MiNS",
+    name: "Shohei",
+    kana: "ショウヘイ",
+    description: "Friendly, conversational. Everyday tone for casual exchanges.",
+    previewUrl: "https://elevenlabs.io/app/voice-library?voiceId=NO5A3b3sSzDyJQF7MiNS"
+  },
+  {
+    id: "lDdVGZb7WThyrgVORbh0",
+    name: "Shin",
+    kana: "シン",
+    description: "Bright and youthful. Energetic for quick directions and asks.",
+    previewUrl: "https://elevenlabs.io/app/voice-library?voiceId=lDdVGZb7WThyrgVORbh0"
+  },
+  {
+    id: "8FuuqoKHuM48hIEwni5e",
+    name: "Shohei (warm)",
+    kana: "ショウヘイ",
+    description: "Mellow, warm delivery. Softer alternative for restaurants & hotels.",
+    previewUrl: "https://elevenlabs.io/app/voice-library?voiceId=8FuuqoKHuM48hIEwni5e"
+  }
+];
+
+export const DEFAULT_TTS_VOICE = JAPANESE_TTS_VOICES[1];
 
 /** Western-order full name for prompts and legacy context keys. */
 export function profileWesternFullName(profile: TravelerProfile): string {
@@ -54,7 +104,10 @@ export const DEFAULT_PROFILE: TravelerProfile = {
   location_lng: "",
   location_updated_at: "",
   nearby_places: "",
-  saved_places: ""
+  saved_places: "",
+  tts_voice_id: DEFAULT_TTS_VOICE.id,
+  tts_voice_name: DEFAULT_TTS_VOICE.name,
+  auto_improve: false
 };
 
 function migrateLegacyTravelerName(saved: Record<string, unknown>): Pick<TravelerProfile, "first_name" | "last_name"> {
@@ -69,7 +122,9 @@ function migrateLegacyTravelerName(saved: Record<string, unknown>): Pick<Travele
   return { first_name: parts[0] || "", last_name: "" };
 }
 
-export function loadTravelerProfile(): TravelerProfile {
+let cachedProfileSnapshot: TravelerProfile | null = null;
+
+function readProfileFromStorage(): TravelerProfile {
   if (typeof window === "undefined") return DEFAULT_PROFILE;
   const raw = window.localStorage.getItem(PROFILE_STORAGE_KEY);
   if (!raw) return DEFAULT_PROFILE;
@@ -114,14 +169,47 @@ export function loadTravelerProfile(): TravelerProfile {
       location_lng: String(saved.location_lng ?? "").trim(),
       location_updated_at: String(saved.location_updated_at ?? "").trim(),
       nearby_places: String(saved.nearby_places ?? "").trim(),
-      saved_places: String(saved.saved_places ?? "").trim()
+      saved_places: String(saved.saved_places ?? "").trim(),
+      tts_voice_id: String(saved.tts_voice_id ?? DEFAULT_TTS_VOICE.id).trim() || DEFAULT_TTS_VOICE.id,
+      tts_voice_name: String(saved.tts_voice_name ?? DEFAULT_TTS_VOICE.name).trim() || DEFAULT_TTS_VOICE.name,
+      auto_improve: saved.auto_improve === true || String(saved.auto_improve ?? "").toLowerCase() === "true"
     };
   } catch {
     return DEFAULT_PROFILE;
   }
 }
 
+export function loadTravelerProfile(): TravelerProfile {
+  if (typeof window === "undefined") return DEFAULT_PROFILE;
+  if (!cachedProfileSnapshot) {
+    cachedProfileSnapshot = readProfileFromStorage();
+  }
+  return cachedProfileSnapshot;
+}
+
+export const PROFILE_CHANGE_EVENT = "traveler-profile-change";
+
 export function saveTravelerProfile(profile: TravelerProfile) {
   if (typeof window === "undefined") return;
+  cachedProfileSnapshot = profile;
   window.localStorage.setItem(PROFILE_STORAGE_KEY, JSON.stringify(profile));
+  window.dispatchEvent(new Event(PROFILE_CHANGE_EVENT));
+}
+
+export function subscribeTravelerProfile(callback: () => void): () => void {
+  if (typeof window === "undefined") return () => {};
+  const storageHandler = () => {
+    cachedProfileSnapshot = null;
+    callback();
+  };
+  window.addEventListener("storage", storageHandler);
+  window.addEventListener(PROFILE_CHANGE_EVENT, callback);
+  return () => {
+    window.removeEventListener("storage", storageHandler);
+    window.removeEventListener(PROFILE_CHANGE_EVENT, callback);
+  };
+}
+
+export function getServerProfileSnapshot(): TravelerProfile {
+  return DEFAULT_PROFILE;
 }
