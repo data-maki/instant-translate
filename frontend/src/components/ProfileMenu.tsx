@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { authClient } from "@/lib/auth-client";
 import { ProfileModal, type ProfileModalSection } from "@/components/ProfileModal";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 type Props = {
   userName: string;
@@ -96,6 +97,10 @@ export function ProfileMenu({ userName, userId }: Props) {
               <SparkleIcon />
               <span>Personalization</span>
             </button>
+            <div className="profileMenuThemeRow" role="group" aria-label="Appearance">
+              <span className="profileMenuThemeLabel">Appearance</span>
+              <ThemeToggle compact />
+            </div>
             <div className="profileMenuDivider" role="separator" />
             <button
               type="button"

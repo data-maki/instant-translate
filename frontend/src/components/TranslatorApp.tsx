@@ -1,6 +1,6 @@
 "use client";
 
-import type { CSSProperties, ReactNode } from "react";
+import type { ReactNode } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -33,7 +33,22 @@ import {
   subscribeTravelerProfile,
   TravelerProfile
 } from "@/lib/profile";
+import { PhraseCard, supportsRomanization, type PhraseAdaptation } from "@/components/PhraseCard";
 import { ProfileMenu } from "@/components/ProfileMenu";
+import {
+  adaptationKey,
+  ENGLISH_LANGUAGE,
+  firstNonEnglishTextLanguage,
+  phraseSpeakReady,
+  phraseTargetText
+} from "@/lib/phrase-text";
+import {
+  fallbackSpeakerLabel,
+  initialsFromSpeakerName,
+  normalizeInitials,
+  speakerEditableName,
+  speakerKey
+} from "@/lib/speaker";
 import { playTtsThroughAec, type TtsPlayback } from "@/lib/tts-playback";
 
 type AppStatus =
@@ -49,7 +64,6 @@ type AppStatus =
 const DEFAULT_AUDIENCE_PRESET = "polite-stranger";
 const REGISTER_BLOCK_START = "[Japanese register preset]";
 const REGISTER_BLOCK_END = "[/Japanese register preset]";
-const ENGLISH_LANGUAGE = "en";
 
 type HiddenRegister =
   | "casual_intimate"
@@ -163,12 +177,6 @@ type ContextBundle = {
   rewriteTone: Record<string, unknown>;
 };
 
-type PhraseAdaptation = {
-  source_rewrite: string;
-  target_translation?: string;
-  status: "loading" | "ready" | "error";
-};
-
 type ProviderSignals = {
   transcripts: string[];
   translations: string[];
@@ -212,12 +220,6 @@ const DEFAULT_SESSION_PLACE_CONTEXT: SessionPlaceContext = {
 };
 const GENERIC_TERMS = new Set(["restaurant", "train", "food", "today", "tomorrow", "hotel", "shop", "station"]);
 
-type PhrasePair = {
-  text: string;
-  romaji?: string;
-  translation?: string;
-};
-
 type SpeakerDraft = {
   initials?: string;
   mergeInto: string;
@@ -235,17 +237,6 @@ type SessionGroup = {
   sessions: SessionSummary[];
   collapsedByDefault?: boolean;
 };
-
-const SPEAKER_COLORS = [
-  "#BC002D",
-  "#b45f2a",
-  "#315f9c",
-  "#8a4f9f",
-  "#b23b53",
-  "#5d6f2f",
-  "#2f7f86",
-  "#9a6a1f"
-];
 
 export type TranslatorAppProps = {
   initialLanguages?: Language[];
@@ -2136,25 +2127,6 @@ function DualLabelToggle({
   );
 }
 
-function TranscriptTitle({
-  languageMap,
-  sourceLanguages,
-  targetLanguage
-}: {
-  languageMap: Map<string, Language>;
-  sourceLanguages: string[];
-  targetLanguage: string;
-}) {
-  return (
-    <h2 className="transcriptTitle">
-      <span className="transcriptTitleFull">{transcriptTitle(sourceLanguages, targetLanguage, languageMap)}</span>
-      <span className="transcriptTitleCompact">
-        {transcriptShortTitle(sourceLanguages, targetLanguage, languageMap)}
-      </span>
-    </h2>
-  );
-}
-
 function HeaderLanguagePill({
   languageMap,
   sourceLanguages,
@@ -2877,97 +2849,6 @@ function LanguagePicker({
   );
 }
 
-function ToneSummary({ preset }: { preset: typeof AUDIENCE_PRESETS[number] }) {
-  return (
-    <section className="toneSummary" aria-label="Translation tone">
-      <strong>Tone · {preset.tone}</strong>
-      <span className="toneSummaryFrom">From &ldquo;{preset.label}&rdquo;</span>
-    </section>
-  );
-}
-
-function SpeakerCountPicker({
-  disabled,
-  onChange,
-  value
-}: {
-  disabled: boolean;
-  onChange: (count: string) => void;
-  value: string;
-}) {
-  return (
-    <div className="speakerCountPicker" role="group" aria-label="Expected speakers">
-      <span className="setupFieldLabel">Expected speakers</span>
-      <div className="speakerCountOptions">
-        {SPEAKER_COUNT_OPTIONS.map((count) => (
-          <button
-            aria-pressed={value === count}
-            className={`speakerCountOption ${value === count ? "active" : ""}`}
-            disabled={disabled}
-            key={count}
-            onClick={() => onChange(count)}
-            type="button"
-          >
-            {count === "6" ? "6+" : count}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function AudiencePicker({
-  disabled,
-  onChange,
-  value
-}: {
-  disabled: boolean;
-  onChange: (presetId: string) => void;
-  value: string;
-}) {
-  return (
-    <fieldset className="audiencePicker">
-      <legend>Who are you speaking to?</legend>
-      <div className="audienceOptions">
-        {AUDIENCE_PRESETS.map((preset) => (
-          <button
-            aria-pressed={value === preset.id}
-            className={`audienceOption ${value === preset.id ? "active" : ""}`}
-            disabled={disabled}
-            key={preset.id}
-            onClick={() => onChange(preset.id)}
-            type="button"
-          >
-            <span className="audienceName">{preset.label}</span>
-          </button>
-        ))}
-      </div>
-    </fieldset>
-  );
-}
-
-function DeepLFormalityPicker({
-  disabled,
-  onChange,
-  value
-}: {
-  disabled: boolean;
-  onChange: (value: DeepLFormality) => void;
-  value: DeepLFormality;
-}) {
-  return (
-    <label className="contextField compactSelect">
-      DeepL tone override
-      <select disabled={disabled} onChange={(event) => onChange(event.target.value as DeepLFormality)} value={value}>
-        <option value="auto">Auto from situation</option>
-        <option value="more">Polite</option>
-        <option value="less">Plain</option>
-        <option value="default">DeepL default</option>
-      </select>
-    </label>
-  );
-}
-
 function BrandMark({ compact = false }: { compact?: boolean }) {
   return (
     <span className={`brandMark ${compact ? "compact" : ""}`} aria-hidden="true">
@@ -2982,192 +2863,6 @@ function NewChatIcon() {
       <path d="M7.5 3H4.25A1.75 1.75 0 0 0 2.5 4.75v9A1.75 1.75 0 0 0 4.25 15.5h9a1.75 1.75 0 0 0 1.75-1.75V10.5" />
       <path d="M8 10.25 13.9 4.35a1.2 1.2 0 0 1 1.7 1.7L9.7 11.95l-2.25.55L8 10.25Z" />
     </svg>
-  );
-}
-
-function PhraseCard({
-  activeLeftLanguage,
-  adaptations,
-  editingSpeaker,
-  latencyMode,
-  leftLanguageSelection,
-  languageMap,
-  onEditSpeaker,
-  onSpeak,
-  phrases,
-  speakLanguage,
-  speakerDrafts,
-  showEnhancedEnglish,
-  showRomaji,
-  targetLanguage,
-  ttsStatus
-}: {
-  activeLeftLanguage: string;
-  adaptations: Record<string, PhraseAdaptation>;
-  editingSpeaker: string | null;
-  latencyMode: TranscriptLatencyMode;
-  leftLanguageSelection: LeftLanguageSelection;
-  languageMap: Map<string, Language>;
-  onEditSpeaker: (speakerId: string, label: string) => void;
-  onSpeak: (key: string, text: string, language: string) => void;
-  phrases: Phrase[];
-  speakLanguage: string;
-  speakerDrafts: Record<string, SpeakerDraft>;
-  showEnhancedEnglish: boolean;
-  showRomaji: boolean;
-  targetLanguage: string;
-  ttsStatus: Record<string, TtsPlaybackState>;
-}) {
-  const phrase = phrases[0]!;
-  const color = speakerColor(speakerKey(phrase.speaker));
-  const style = { "--speaker-color": color } as CSSProperties;
-  const speakerId = speakerKey(phrase.speaker);
-  const speakerLabel = speakerDrafts[speakerId]?.label.trim() || phrase.speaker_label || fallbackSpeakerLabel(speakerId);
-  const speakerInitials = speakerDrafts[speakerId]?.initials?.trim() || initialsFromSpeakerName(speakerLabel, speakerId);
-  const isEditingSpeaker = Boolean(speakerId && editingSpeaker === speakerId);
-  const sourceLang = phrase.source_lang || firstNonEnglishTextLanguage(phrase) || activeLeftLanguage;
-  const isTargetSource = sourceLang === targetLanguage;
-  const leftLanguage = isTargetSource
-    ? activeLeftLanguage
-    : leftLanguageSelection === "all"
-      ? sourceLang
-      : activeLeftLanguage;
-  const targetText = joinDisplayLines(phrases.map((item) => phraseTargetText(item, targetLanguage, adaptations)));
-  const hasEnhancedEnglish = phrases.some((item) => Boolean(adaptations[adaptationKey(item, activeLeftLanguage)]?.source_rewrite?.trim()));
-  const shownTargetText = joinDisplayLines(
-    phrases.map((item) => phraseShownTargetText(item, targetLanguage, activeLeftLanguage, adaptations, showEnhancedEnglish))
-  );
-  const leftLabel = languageLabel(languageMap, leftLanguage);
-  const targetLabel = languageLabel(languageMap, targetLanguage);
-  const phrasePairs: PhrasePair[] = phrases.map((item) => {
-    const itemSourceLang = item.source_lang || firstNonEnglishTextLanguage(item) || activeLeftLanguage;
-    const itemRomaji = itemSourceLang === leftLanguage ? phraseRomanization(item, leftLanguage) : "";
-    const originalText = phraseLeftText(item, leftLanguage, targetLanguage, adaptations);
-    return {
-      text: showRomaji && itemRomaji ? itemRomaji : originalText,
-      romaji: showRomaji ? "" : itemRomaji,
-      translation: phraseTargetText(item, targetLanguage, adaptations)
-    };
-  });
-  const loading = phrases.some((item) => adaptations[adaptationKey(item, activeLeftLanguage)]?.status === "loading");
-
-  const firstPhrase = phrases[0]!;
-  // The speaker icon always lives on the source-side bubble (above the avatar).
-  // Speak language is the non-English language in the pair. For English-source
-  // bubbles we speak the *translation* (English → JP). For native-target-source
-  // bubbles (e.g. someone spoke Japanese) we speak the *same* text so the user
-  // can rehearse pronunciation.
-  const sourceSpeakText = isTargetSource
-    ? joinDisplayLines(phrases.map((item) => phraseTargetText(item, speakLanguage, adaptations)))
-    : joinDisplayLines(phrases.map((item) => item.texts[speakLanguage] || ""));
-  const sourceSpeakKey = speakLanguage ? `tts:${firstPhrase.id}:${speakLanguage}` : "";
-  const sourceSpeakable =
-    Boolean(speakLanguage) &&
-    sourceSpeakText.trim().length > 0 &&
-    phrases.every((item) => phraseSpeakReady(item, adaptations, speakLanguage, latencyMode));
-  const sourceOnSpeak = sourceSpeakable
-    ? () => onSpeak(sourceSpeakKey, sourceSpeakText, speakLanguage)
-    : undefined;
-  const sourceTtsState = sourceSpeakable ? ttsStatus[sourceSpeakKey] : undefined;
-
-  return (
-    <article className={`phrase ${isTargetSource ? "fromEnglish" : "fromOther"}`} style={style}>
-      {isTargetSource ? (
-        <BubbleWithSpeaker
-          code={targetLanguage}
-          editingSpeaker={isEditingSpeaker}
-          enhanced={showEnhancedEnglish && hasEnhancedEnglish}
-          loading={loading}
-          label={targetLabel}
-          onEditSpeaker={onEditSpeaker}
-          speakerId={speakerId}
-          speakerInitials={speakerInitials}
-          speakerLabel={speakerLabel}
-          text={shownTargetText || targetText}
-        />
-      ) : (
-        <div className={`bubbleWithSpeaker ${isEditingSpeaker ? "editingSpeaker" : ""}`}>
-          <SpeakerTag
-            initials={speakerInitials}
-            onOpen={() => onEditSpeaker(speakerId, speakerLabel)}
-          />
-          <div className="speechBubbleHighlight">
-            <SpeechBubble
-              code={leftLanguage}
-              label={leftLabel}
-              pairs={phrasePairs}
-              translationCode={targetLanguage}
-              translationLabel={targetLabel}
-            />
-          </div>
-        </div>
-      )}
-    </article>
-  );
-}
-
-function BubbleWithSpeaker({
-  code,
-  editingSpeaker,
-  enhanced = false,
-  label,
-  loading = false,
-  onEditSpeaker,
-  onSpeak,
-  romaji = "",
-  speakerId,
-  speakerInitials,
-  speakerLabel,
-  text,
-  ttsState
-}: {
-  code: string;
-  editingSpeaker: boolean;
-  enhanced?: boolean;
-  label: string;
-  loading?: boolean;
-  onEditSpeaker: (speakerId: string, label: string) => void;
-  onSpeak?: () => void;
-  romaji?: string;
-  speakerId: string;
-  speakerInitials: string;
-  speakerLabel: string;
-  text: string;
-  ttsState?: TtsPlaybackState;
-}) {
-  return (
-    <div className={`bubbleWithSpeaker ${editingSpeaker ? "editingSpeaker" : ""}`}>
-      <SpeakerTag
-        initials={speakerInitials}
-        onOpen={() => onEditSpeaker(speakerId, speakerLabel)}
-      />
-      <div className="speechBubbleHighlight">
-        <SpeechBubble
-          code={code}
-          enhanced={enhanced}
-          label={label}
-          loading={loading}
-          onSpeak={onSpeak}
-          romaji={romaji}
-          text={text}
-          ttsState={ttsState}
-        />
-      </div>
-    </div>
-  );
-}
-
-function SpeakerTag({
-  initials,
-  onOpen
-}: {
-  initials: string;
-  onOpen: () => void;
-}) {
-  return (
-    <button aria-label={`Edit speaker ${initials}`} className="speakerTag" onClick={onOpen} title={`Edit speaker ${initials}`} type="button">
-      <span className="speakerTagInitials">{initials}</span>
-    </button>
   );
 }
 
@@ -3224,240 +2919,6 @@ function SpeakerNameDialog({
       </div>
     </div>
   );
-}
-
-function SpeechBubble({
-  code,
-  enhanced = false,
-  label,
-  loading = false,
-  onSpeak,
-  pairs,
-  romaji = "",
-  text = "",
-  translation = "",
-  translationCode = "",
-  translationLabel = "",
-  ttsState
-}: {
-  code: string;
-  enhanced?: boolean;
-  label: string;
-  loading?: boolean;
-  onSpeak?: () => void;
-  pairs?: PhrasePair[];
-  romaji?: string;
-  text?: string;
-  translation?: string;
-  translationCode?: string;
-  translationLabel?: string;
-  ttsState?: TtsPlaybackState;
-}) {
-  const pairedJapanese = !pairs && code === "ja" && romaji ? pairJapaneseRomaji(text, romaji) : [];
-  return (
-    <div className={`speechBubble ${code === "ja" ? "japanese" : ""} ${enhanced ? "aiEnhanced" : ""}`} dir="auto" lang={code} title={label}>
-      <div className="speechBubbleBody">
-        {pairs ? (
-          pairs.map((pair, index) => (
-            <div className="phrasePairLine" key={index}>
-              <span className="lineText">
-                <span className="bubbleOriginal">{pair.text || "..."}</span>
-                {pair.romaji ? <span className="inlineRomaji"> ({pair.romaji})</span> : null}
-                {pair.translation ? (
-                  <>{" "}<span className="bubbleTranslation" dir="auto" lang={translationCode} title={translationLabel}>{pair.translation}</span></>
-                ) : null}
-              </span>
-            </div>
-          ))
-        ) : (
-          <span className="lineText">
-            {pairedJapanese.length ? (
-              pairedJapanese.map((line, index) => (
-                <span className="bubbleOriginal" key={`${line.text}-${index}`}>
-                  <span className="japaneseOriginal">{line.text || "..."}</span>
-                  {line.romaji ? <span className="inlineRomaji"> ({line.romaji})</span> : null}
-                </span>
-              ))
-            ) : (
-              <span className="bubbleOriginal">{text || "..."}</span>
-            )}
-            {translation ? (
-              <>{" "}<span className="bubbleTranslation" dir="auto" lang={translationCode} title={translationLabel}>{translation}</span></>
-            ) : null}
-          </span>
-        )}
-      </div>
-      {loading ? <span className="romaji">Adapting...</span> : null}
-      {romaji && !pairedJapanese.length && !pairs ? <span className="romaji">{romaji}</span> : null}
-    </div>
-  );
-}
-
-function supportsRomanization(langCode: string): boolean {
-  return langCode === "ja";
-}
-
-function phraseRomanization(phrase: Phrase, langCode: string): string {
-  if (langCode === "ja") return phrase.romaji_ja || "";
-  return "";
-}
-
-function pairJapaneseRomaji(text: string, romaji: string): Array<{ text: string; romaji: string }> {
-  const textLines = splitDisplayLines(text);
-  const romajiLines = splitDisplayLines(romaji);
-  const count = Math.max(textLines.length, romajiLines.length);
-  const pairs: Array<{ text: string; romaji: string }> = [];
-  for (let index = 0; index < count; index += 1) {
-    pairs.push({
-      text: textLines[index] || "",
-      romaji: romajiLines[index] || ""
-    });
-  }
-  return pairs;
-}
-
-function splitDisplayLines(value: string): string[] {
-  return value
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
-
-function joinDisplayLines(values: Array<string | undefined | null>): string {
-  return values.map((value) => (value || "").trim()).filter(Boolean).join("\n");
-}
-
-function phraseLeftText(
-  phrase: Phrase,
-  leftLanguage: string,
-  targetLanguage: string,
-  adaptations: Record<string, PhraseAdaptation>
-): string {
-  const sourceLang = phrase.source_lang || firstNonEnglishTextLanguage(phrase) || leftLanguage;
-  if (sourceLang === targetLanguage) {
-    const adaptation = adaptations[adaptationKey(phrase, leftLanguage)];
-    return adaptation?.target_translation || phrase.texts[leftLanguage] || firstNonEnglishText(phrase) || "";
-  }
-  if (sourceLang === leftLanguage) {
-    return phrase.texts[sourceLang] || phrase.texts[leftLanguage] || "";
-  }
-  const adaptation = adaptations[adaptationKey(phrase, leftLanguage)];
-  return adaptation?.target_translation || phrase.texts[leftLanguage] || "";
-}
-
-function phraseTargetText(
-  phrase: Phrase,
-  targetLanguage: string,
-  adaptations: Record<string, PhraseAdaptation>
-): string {
-  const sourceLang = phrase.source_lang || firstNonEnglishTextLanguage(phrase) || targetLanguage;
-  if (sourceLang === targetLanguage) {
-    return phrase.texts[targetLanguage] || "";
-  }
-  const adaptation = adaptations[adaptationKey(phrase, targetLanguage)];
-  return phrase.texts[targetLanguage] || adaptation?.target_translation || "";
-}
-
-function phraseShownTargetText(
-  phrase: Phrase,
-  targetLanguage: string,
-  leftLanguage: string,
-  adaptations: Record<string, PhraseAdaptation>,
-  showEnhancedEnglish: boolean
-): string {
-  const sourceLang = phrase.source_lang || firstNonEnglishTextLanguage(phrase) || targetLanguage;
-  if (sourceLang !== targetLanguage) {
-    return phraseTargetText(phrase, targetLanguage, adaptations);
-  }
-  const adaptation = adaptations[adaptationKey(phrase, leftLanguage)];
-  const original = phrase.texts[targetLanguage] || "";
-  return showEnhancedEnglish && adaptation?.source_rewrite ? adaptation.source_rewrite : original;
-}
-
-function TranslationLine({
-  code,
-  enhanced = false,
-  label,
-  text,
-  onSpeak,
-  ttsState
-}: {
-  code: string;
-  enhanced?: boolean;
-  label: string;
-  text: string;
-  onSpeak?: () => void;
-  ttsState?: TtsPlaybackState;
-}) {
-  return (
-    <div className={`translationLine ${code === "ja" ? "japanese" : ""} ${enhanced ? "aiEnhanced" : ""}`} dir="auto" lang={code} title={label}>
-      <span className="lineText">{text || "..."}</span>
-    </div>
-  );
-}
-
-function speakerKey(speaker: number | string | null): string {
-  if (speaker === null || speaker === undefined) {
-    return "";
-  }
-  return String(speaker);
-}
-
-function speakerColor(id: string): string {
-  if (!id) {
-    return "#BC002D";
-  }
-  let hash = 0;
-  for (const char of id) {
-    hash = (hash * 31 + char.charCodeAt(0)) % 9973;
-  }
-  return SPEAKER_COLORS[hash % SPEAKER_COLORS.length];
-}
-
-function fallbackSpeakerLabel(id: string): string {
-  if (!id) {
-    return "Speaker";
-  }
-  if (id === "typed") {
-    return "You";
-  }
-  const numeric = Number(id);
-  if (Number.isFinite(numeric)) {
-    return `Speaker ${numeric}`;
-  }
-  return id;
-}
-
-function speakerEditableName(label: string, speakerId: string): string {
-  const clean = label.trim();
-  if (!clean || clean === fallbackSpeakerLabel(speakerId) || clean.startsWith("Speaker ")) {
-    return "";
-  }
-  return clean;
-}
-
-function initialsFromSpeakerName(name: string, speakerId: string): string {
-  const clean = name.trim();
-  const numeric = Number(speakerId);
-  if (!clean || clean.startsWith("Speaker ")) {
-    return Number.isFinite(numeric) ? `S${numeric}` : "S";
-  }
-  if (speakerId === "typed" && clean === "You") {
-    return "Me";
-  }
-  const parts = clean.split(/\s+/).filter(Boolean);
-  if (parts.length >= 2) {
-    return normalizeInitials(`${parts[0]![0] || ""}${parts.at(-1)?.[0] || ""}`);
-  }
-  const chars = Array.from(parts[0] || clean).slice(0, 2).join("");
-  return normalizeInitials(chars) || "S";
-}
-
-function normalizeInitials(value: string): string {
-  return Array.from(value.trim().replace(/\s+/g, ""))
-    .slice(0, 3)
-    .join("")
-    .toLocaleUpperCase();
 }
 
 function languageLabel(languageMap: Map<string, Language>, code: string): string {
@@ -3527,55 +2988,6 @@ function resolveLeftLanguageSelection(
     return configured;
   }
   return options[0]?.code || "ja";
-}
-
-function firstNonEnglishTextLanguage(phrase: Phrase): string {
-  return Object.keys(phrase.texts).find((code) => code !== ENGLISH_LANGUAGE) || "";
-}
-
-function firstNonEnglishText(phrase: Phrase): string {
-  const code = firstNonEnglishTextLanguage(phrase);
-  return code ? phrase.texts[code] || "" : "";
-}
-
-function adaptationKey(phrase: Phrase, targetLanguage = ""): string {
-  const sourceLanguage = phrase.source_lang || firstNonEnglishTextLanguage(phrase);
-  const source = sourceLanguage ? phrase.texts[sourceLanguage]?.trim() : "";
-  if (!source) {
-    return "";
-  }
-  return targetLanguage ? `${phrase.id}:${targetLanguage}:${source}` : `${phrase.id}:${source}`;
-}
-
-function phraseSpeakReady(
-  phrase: Phrase,
-  adaptations: Record<string, PhraseAdaptation>,
-  speakLanguage: string,
-  latencyMode: TranscriptLatencyMode
-): boolean {
-  if (!phrase.is_final) return false;
-  if (!speakLanguage) return false;
-  const sourceLang = phrase.source_lang || firstNonEnglishTextLanguage(phrase) || speakLanguage;
-  // Native text in the speak language — no AI step to wait for.
-  if (sourceLang === speakLanguage) {
-    return Boolean(phrase.texts[speakLanguage]?.trim());
-  }
-  const adaptation = adaptations[adaptationKey(phrase, speakLanguage)];
-  if (!adaptation?.target_translation?.trim() && !phrase.texts[speakLanguage]?.trim()) {
-    return false;
-  }
-  if (latencyMode === "slow") {
-    // English-source phrases run a two-stage pipeline: fast translate, then a
-    // polish/adapt pass that fills in source_rewrite. Wait for the polish.
-    if (sourceLang === "en") {
-      if (adaptation?.status !== "ready" || !adaptation.source_rewrite?.trim()) {
-        return false;
-      }
-    } else if (adaptation?.status !== "ready") {
-      return false;
-    }
-  }
-  return true;
 }
 
 function phraseReadyForSlowMode(
