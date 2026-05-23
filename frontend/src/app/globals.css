@@ -4022,24 +4022,17 @@ button.sidebarProfileChip {
   margin: 0 0 10px;
 }
 
-.conversationLanes {
-  display: grid;
-  grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
-  gap: 18px;
-  align-items: start;
+
+.phrasePairLine + .phrasePairLine {
+  margin-top: 3px;
 }
 
-.languageLane {
-  display: grid;
-  min-width: 0;
+.bubbleOriginal {
+  font-weight: 700;
 }
 
-.englishLane {
-  justify-items: end;
-}
-
-.leftLanguageLane {
-  justify-items: start;
+.bubbleTranslation {
+  color: var(--muted);
 }
 
 .speechBubble,
@@ -4119,25 +4112,11 @@ button.sidebarProfileChip {
 
 .bubbleWithSpeaker {
   display: grid;
-  grid-template-columns: 34px minmax(0, auto);
+  grid-template-columns: 34px minmax(0, 1fr);
   gap: 7px;
   align-items: end;
-  max-width: min(100%, 466px);
 }
 
-.fromEnglish .englishLane .bubbleWithSpeaker {
-  grid-template-columns: minmax(0, auto) 34px;
-}
-
-.fromEnglish .englishLane .bubbleWithSpeaker .speakerStack {
-  grid-column: 2;
-  grid-row: 1;
-}
-
-.fromEnglish .englishLane .bubbleWithSpeaker .speechBubbleHighlight {
-  grid-column: 1;
-  grid-row: 1;
-}
 
 .speakerTag {
   display: grid;
@@ -4167,25 +4146,11 @@ button.sidebarProfileChip {
 
 .speechBubbleHighlight {
   display: grid;
-  max-width: min(100%, 430px);
   padding-left: 5px;
   border-radius: 12px;
   background: color-mix(in srgb, var(--speaker-color) 16%, transparent);
 }
 
-.fromEnglish .englishLane .speechBubbleHighlight {
-  padding-right: 5px;
-  padding-left: 0;
-}
-
-.fromOther .leftLanguageLane .speechBubble,
-.fromEnglish .englishLane .speechBubble {
-  border-color: var(--color-chat-bubble-border);
-}
-
-.fromEnglish .englishLane .speechBubble {
-  border-left-width: 1px;
-}
 
 .speakerDialogBackdrop {
   position: fixed;
@@ -4251,13 +4216,8 @@ button.sidebarProfileChip {
   line-height: 1.35;
 }
 
-.japaneseLines {
-  display: grid;
-  gap: 2px;
-}
-
 .japaneseLine {
-  display: block;
+  display: inline;
 }
 
 .inlineRomaji {
@@ -4522,7 +4482,6 @@ button.sidebarProfileChip {
   .profileFields,
   .profileSectionGrid,
   .profileVoiceGrid,
-  .conversationLanes,
   .languageRail,
   .speakerRow {
     grid-template-columns: 1fr;
@@ -4767,19 +4726,6 @@ button.sidebarProfileChip {
     margin-bottom: 12px;
   }
 
-  .speechBubble,
-  .translationLine {
-    max-width: 94%;
-  }
-
-  .bubbleWithSpeaker {
-    max-width: min(100%, 340px);
-  }
-
-  .speechBubbleHighlight {
-    max-width: min(100%, 306px);
-  }
-
   .chatDisplayBar {
     align-items: stretch;
     flex-direction: column;
@@ -4794,17 +4740,7 @@ button.sidebarProfileChip {
     overflow-x: auto;
   }
 
-  .fromEnglish .leftLanguageLane,
-  .fromOther .leftLanguageLane {
-    justify-items: start;
-  }
-
-  .fromEnglish .englishLane,
-  .fromOther .englishLane {
-    justify-items: end;
-  }
-
-  .speakerReviewHeader {
+.speakerReviewHeader {
     align-items: start;
     flex-direction: column;
   }

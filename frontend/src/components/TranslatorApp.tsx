@@ -212,6 +212,12 @@ const DEFAULT_SESSION_PLACE_CONTEXT: SessionPlaceContext = {
 };
 const GENERIC_TERMS = new Set(["restaurant", "train", "food", "today", "tomorrow", "hotel", "shop", "station"]);
 
+type PhrasePair = {
+  text: string;
+  romaji?: string;
+  translation?: string;
+};
+
 type SpeakerDraft = {
   initials?: string;
   mergeInto: string;
@@ -3013,7 +3019,6 @@ function PhraseCard({
     : leftLanguageSelection === "all"
       ? sourceLang
       : activeLeftLanguage;
-  const leftText = joinDisplayLines(phrases.map((item) => phraseLeftText(item, leftLanguage, targetLanguage, adaptations)));
   const targetText = joinDisplayLines(phrases.map((item) => phraseTargetText(item, targetLanguage, adaptations)));
   const hasEnhancedEnglish = phrases.some((item) => Boolean(adaptations[adaptationKey(item, activeLeftLanguage)]?.source_rewrite?.trim()));
   const shownTargetText = joinDisplayLines(
@@ -3021,9 +3026,14 @@ function PhraseCard({
   );
   const leftLabel = languageLabel(languageMap, leftLanguage);
   const targetLabel = languageLabel(languageMap, targetLanguage);
-  const leftRomaji = leftLanguage === "ja" && sourceLang === "ja"
-    ? joinDisplayLines(phrases.map((item) => item.romaji_ja || ""))
-    : "";
+  const phrasePairs: PhrasePair[] = phrases.map((item) => {
+    const itemSourceLang = item.source_lang || firstNonEnglishTextLanguage(item) || activeLeftLanguage;
+    return {
+      text: phraseLeftText(item, leftLanguage, targetLanguage, adaptations),
+      romaji: leftLanguage === "ja" && itemSourceLang === "ja" ? (item.romaji_ja || "") : "",
+      translation: phraseTargetText(item, targetLanguage, adaptations)
+    };
+  });
   const loading = phrases.some((item) => adaptations[adaptationKey(item, activeLeftLanguage)]?.status === "loading");
 
   const firstPhrase = phrases[0]!;
@@ -3047,57 +3057,36 @@ function PhraseCard({
 
   return (
     <article className={`phrase ${isTargetSource ? "fromEnglish" : "fromOther"}`} style={style}>
-      <div className="conversationLanes">
-        <div className="languageLane leftLanguageLane">
-          {isTargetSource ? (
-            <TranslationLine
+      {isTargetSource ? (
+        <BubbleWithSpeaker
+          code={targetLanguage}
+          editingSpeaker={isEditingSpeaker}
+          enhanced={showEnhancedEnglish && hasEnhancedEnglish}
+          loading={loading}
+          label={targetLabel}
+          onEditSpeaker={onEditSpeaker}
+          speakerId={speakerId}
+          speakerInitials={speakerInitials}
+          speakerLabel={speakerLabel}
+          text={shownTargetText || targetText}
+        />
+      ) : (
+        <div className={`bubbleWithSpeaker ${isEditingSpeaker ? "editingSpeaker" : ""}`}>
+          <SpeakerTag
+            initials={speakerInitials}
+            onOpen={() => onEditSpeaker(speakerId, speakerLabel)}
+          />
+          <div className="speechBubbleHighlight">
+            <SpeechBubble
               code={leftLanguage}
-              enhanced={hasEnhancedEnglish}
               label={leftLabel}
-              text={leftText}
-              onSpeak={sourceOnSpeak}
-              ttsState={sourceTtsState}
+              pairs={phrasePairs}
+              translationCode={targetLanguage}
+              translationLabel={targetLabel}
             />
-          ) : (
-            <BubbleWithSpeaker
-              code={leftLanguage}
-              editingSpeaker={isEditingSpeaker}
-              label={leftLabel}
-              onEditSpeaker={onEditSpeaker}
-              romaji={leftRomaji}
-              speakerId={speakerId}
-              speakerInitials={speakerInitials}
-              speakerLabel={speakerLabel}
-              text={leftText}
-              ttsState={sourceTtsState}
-              onSpeak={sourceOnSpeak}
-            />
-          )}
+          </div>
         </div>
-        <div className="languageLane englishLane">
-          {isTargetSource ? (
-            <BubbleWithSpeaker
-              code={targetLanguage}
-              editingSpeaker={isEditingSpeaker}
-              enhanced={showEnhancedEnglish && hasEnhancedEnglish}
-              loading={loading}
-              label={targetLabel}
-              onEditSpeaker={onEditSpeaker}
-              speakerId={speakerId}
-              speakerInitials={speakerInitials}
-              speakerLabel={speakerLabel}
-              text={shownTargetText || targetText}
-            />
-          ) : (
-            <TranslationLine
-              code={targetLanguage}
-              enhanced={phrases.some((item) => Boolean(adaptations[adaptationKey(item, targetLanguage)]?.target_translation))}
-              label={targetLabel}
-              text={targetText}
-            />
-          )}
-        </div>
-      </div>
+      )}
     </article>
   );
 }
@@ -3228,8 +3217,12 @@ function SpeechBubble({
   label,
   loading = false,
   onSpeak,
+  pairs,
   romaji = "",
-  text,
+  text = "",
+  translation = "",
+  translationCode = "",
+  translationLabel = "",
   ttsState
 }: {
   code: string;
@@ -3237,29 +3230,50 @@ function SpeechBubble({
   label: string;
   loading?: boolean;
   onSpeak?: () => void;
+  pairs?: PhrasePair[];
   romaji?: string;
-  text: string;
+  text?: string;
+  translation?: string;
+  translationCode?: string;
+  translationLabel?: string;
   ttsState?: TtsPlaybackState;
 }) {
-  const pairedJapanese = code === "ja" && romaji ? pairJapaneseRomaji(text, romaji) : [];
+  const pairedJapanese = !pairs && code === "ja" && romaji ? pairJapaneseRomaji(text, romaji) : [];
   return (
     <div className={`speechBubble ${code === "ja" ? "japanese" : ""} ${enhanced ? "aiEnhanced" : ""}`} dir="auto" lang={code} title={label}>
       <div className="speechBubbleBody">
-        {pairedJapanese.length ? (
-          <span className="lineText japaneseLines">
-            {pairedJapanese.map((line, index) => (
-              <span className="japaneseLine" key={`${line.text}-${index}`}>
-                <span className="japaneseOriginal">{line.text || "..."}</span>
-                {line.romaji ? <span className="inlineRomaji">({line.romaji})</span> : null}
+        {pairs ? (
+          pairs.map((pair, index) => (
+            <div className="phrasePairLine" key={index}>
+              <span className="lineText">
+                <span className="bubbleOriginal">{pair.text || "..."}</span>
+                {pair.romaji ? <span className="inlineRomaji"> ({pair.romaji})</span> : null}
+                {pair.translation ? (
+                  <>{" "}<span className="bubbleTranslation" dir="auto" lang={translationCode} title={translationLabel}>{pair.translation}</span></>
+                ) : null}
               </span>
-            ))}
-          </span>
+            </div>
+          ))
         ) : (
-          <span className="lineText">{text || "..."}</span>
+          <span className="lineText">
+            {pairedJapanese.length ? (
+              pairedJapanese.map((line, index) => (
+                <span className="bubbleOriginal" key={`${line.text}-${index}`}>
+                  <span className="japaneseOriginal">{line.text || "..."}</span>
+                  {line.romaji ? <span className="inlineRomaji"> ({line.romaji})</span> : null}
+                </span>
+              ))
+            ) : (
+              <span className="bubbleOriginal">{text || "..."}</span>
+            )}
+            {translation ? (
+              <>{" "}<span className="bubbleTranslation" dir="auto" lang={translationCode} title={translationLabel}>{translation}</span></>
+            ) : null}
+          </span>
         )}
       </div>
       {loading ? <span className="romaji">Adapting...</span> : null}
-      {romaji && !pairedJapanese.length ? <span className="romaji">{romaji}</span> : null}
+      {romaji && !pairedJapanese.length && !pairs ? <span className="romaji">{romaji}</span> : null}
     </div>
   );
 }
