@@ -253,11 +253,11 @@ summary {
   position: relative;
   display: grid;
   grid-template-columns: minmax(212px, 246px) minmax(0, 1fr);
-  gap: 14px;
+  column-gap: 0;
   align-items: stretch;
   height: 100%;
   min-height: 0;
-  padding: 10px clamp(10px, 2vw, 18px) 12px;
+  padding: 0 clamp(10px, 2vw, 18px) 0 0;
 }
 
 .sessionBackdrop {
@@ -281,6 +281,11 @@ summary {
   min-height: 0;
   padding: 10px;
   overflow: hidden;
+  border-radius: 0;
+  border-top: none;
+  border-left: none;
+  border-bottom: none;
+  box-shadow: none;
 }
 
 .sessionPanelHeader {

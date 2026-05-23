@@ -316,6 +316,7 @@ export function TranslatorApp({
   const [editingSpeaker, setEditingSpeaker] = useState<string | null>(null);
   const [speakerEditorDraft, setSpeakerEditorDraft] = useState<SpeakerEditorDraft | null>(null);
   const [showEnhancedEnglish, setShowEnhancedEnglish] = useState(true);
+  const [showRomaji, setShowRomaji] = useState(false);
   const [openAIRealtimeEnabled, setOpenAIRealtimeEnabled] = useState(false);
   const [transcriptLatencyMode, setTranscriptLatencyMode] = useState<TranscriptLatencyMode>("fast");
   const [leftLanguageSelection, setLeftLanguageSelection] = useState<LeftLanguageSelection>("all");
@@ -1668,6 +1669,15 @@ export function TranslatorApp({
             </div>
             {!showOnboarding && !openAIRealtimeEnabled ? (
               <div className="transcriptMeta">
+                {supportsRomanization(activeLeftLanguage) ? (
+                  <DualLabelToggle
+                    leftLabel="script"
+                    rightLabel="romaji"
+                    rightSelected={showRomaji}
+                    onChange={setShowRomaji}
+                    title="Script shows original characters. Romaji shows only the phonetic romanization."
+                  />
+                ) : null}
                 <DualLabelToggle
                   leftLabel="fast"
                   rightLabel="slow"
@@ -1743,6 +1753,7 @@ export function TranslatorApp({
                   speakLanguage={ttsSpeakLanguage}
                   speakerDrafts={speakerDrafts}
                   showEnhancedEnglish={showEnhancedEnglish}
+                  showRomaji={showRomaji}
                   targetLanguage={sourceB}
                   ttsStatus={ttsStatus}
                 />
@@ -2987,6 +2998,7 @@ function PhraseCard({
   speakLanguage,
   speakerDrafts,
   showEnhancedEnglish,
+  showRomaji,
   targetLanguage,
   ttsStatus
 }: {
@@ -3002,6 +3014,7 @@ function PhraseCard({
   speakLanguage: string;
   speakerDrafts: Record<string, SpeakerDraft>;
   showEnhancedEnglish: boolean;
+  showRomaji: boolean;
   targetLanguage: string;
   ttsStatus: Record<string, TtsPlaybackState>;
 }) {
@@ -3028,9 +3041,11 @@ function PhraseCard({
   const targetLabel = languageLabel(languageMap, targetLanguage);
   const phrasePairs: PhrasePair[] = phrases.map((item) => {
     const itemSourceLang = item.source_lang || firstNonEnglishTextLanguage(item) || activeLeftLanguage;
+    const itemRomaji = itemSourceLang === leftLanguage ? phraseRomanization(item, leftLanguage) : "";
+    const originalText = phraseLeftText(item, leftLanguage, targetLanguage, adaptations);
     return {
-      text: phraseLeftText(item, leftLanguage, targetLanguage, adaptations),
-      romaji: leftLanguage === "ja" && itemSourceLang === "ja" ? (item.romaji_ja || "") : "",
+      text: showRomaji && itemRomaji ? itemRomaji : originalText,
+      romaji: showRomaji ? "" : itemRomaji,
       translation: phraseTargetText(item, targetLanguage, adaptations)
     };
   });
@@ -3276,6 +3291,15 @@ function SpeechBubble({
       {romaji && !pairedJapanese.length && !pairs ? <span className="romaji">{romaji}</span> : null}
     </div>
   );
+}
+
+function supportsRomanization(langCode: string): boolean {
+  return langCode === "ja";
+}
+
+function phraseRomanization(phrase: Phrase, langCode: string): string {
+  if (langCode === "ja") return phrase.romaji_ja || "";
+  return "";
 }
 
 function pairJapaneseRomaji(text: string, romaji: string): Array<{ text: string; romaji: string }> {
