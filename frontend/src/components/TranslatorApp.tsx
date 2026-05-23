@@ -3257,45 +3257,10 @@ function SpeechBubble({
         ) : (
           <span className="lineText">{text || "..."}</span>
         )}
-        {onSpeak ? <TtsSpeakerButton onSpeak={onSpeak} state={ttsState} /> : null}
       </div>
       {loading ? <span className="romaji">Adapting...</span> : null}
       {romaji && !pairedJapanese.length ? <span className="romaji">{romaji}</span> : null}
     </div>
-  );
-}
-
-function TtsSpeakerButton({
-  disabled = false,
-  onSpeak,
-  state
-}: {
-  disabled?: boolean;
-  onSpeak: () => void;
-  state?: TtsPlaybackState;
-}) {
-  const label =
-    state === "loading"
-      ? "Loading speech"
-      : state === "playing"
-        ? "Playing"
-        : state === "error"
-          ? "Speech failed (tap to retry)"
-          : "Play translation";
-  return (
-    <button
-      aria-label={label}
-      className={`ttsSpeakerButton ${state || ""}`}
-      disabled={disabled || state === "loading"}
-      onClick={(event) => {
-        event.stopPropagation();
-        onSpeak();
-      }}
-      title={label}
-      type="button"
-    >
-      {state === "loading" ? "..." : state === "playing" ? "🔊" : state === "error" ? "⚠︎" : "🔈"}
-    </button>
   );
 }
 
@@ -3389,7 +3354,6 @@ function TranslationLine({
   return (
     <div className={`translationLine ${code === "ja" ? "japanese" : ""} ${enhanced ? "aiEnhanced" : ""}`} dir="auto" lang={code} title={label}>
       <span className="lineText">{text || "..."}</span>
-      {onSpeak ? <TtsSpeakerButton onSpeak={onSpeak} state={ttsState} /> : null}
     </div>
   );
 }
