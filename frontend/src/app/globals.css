@@ -200,8 +200,6 @@ summary {
 .appShell {
   height: 100dvh;
   min-height: 0;
-  max-width: 1440px;
-  margin: 0 auto;
 }
 
 .menuButton {
@@ -274,12 +272,13 @@ summary {
   -webkit-backdrop-filter: blur(14px);
 }
 
+
 .sessionPanel {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto auto;
   gap: 9px;
   min-height: 0;
-  padding: 10px;
+  padding: 10px 10px 10px 0;
   overflow: hidden;
   border-radius: 0;
   border-top: none;
@@ -452,7 +451,7 @@ summary {
   gap: 8px;
   width: 100%;
   min-height: 28px;
-  padding: 5px 8px;
+  padding: 5px 8px 5px 4px;
   border: 0;
   background: transparent;
   color: var(--foreground);
@@ -1825,13 +1824,16 @@ textarea:focus-visible {
 
 .transcriptPanel.setupMode .chatHero {
   flex: 1 1 auto;
+  min-height: min(420px, 100%);
+  overflow-y: auto;
+  position: relative;
+  z-index: 1;
 }
 
 .chatHero {
   display: flex;
   align-items: center;
   justify-content: center;
-  min-height: 0;
   padding: 32px 24px;
   background: var(--surface);
 }
@@ -2025,7 +2027,7 @@ textarea:focus-visible {
   justify-content: space-between;
   gap: 12px;
   align-items: center;
-  padding: 11px 18px;
+  padding: 11px 10px;
   border-bottom: 1px solid var(--line);
 }
 
@@ -3263,7 +3265,7 @@ button.sidebarProfileChip {
   min-height: 0;
   overflow-y: auto;
   scroll-behavior: smooth;
-  padding: 10px 18px 12px;
+  padding: 10px 10px 12px;
 }
 
 .composerBar {
@@ -3271,7 +3273,7 @@ button.sidebarProfileChip {
   grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 8px;
   align-items: center;
-  padding: 10px 18px 14px;
+  padding: 10px 10px 14px;
   border-top: 1px solid var(--line);
   background: var(--surface-strong);
 }

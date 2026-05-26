@@ -1353,6 +1353,11 @@ export function TranslatorApp({
     if (message.type === "transcript") {
       if (openAIRealtimeEnabled) {
         sonioxRealtimePhraseCountRef.current = message.phrases.length;
+        if (message.phrases.length === 0) {
+          // Soniox bridge emits empty transcripts while OpenAI captions are in flight.
+          // Ignore those updates so local realtime phrases are not wiped.
+          return;
+        }
         clearRealtimeCaptionDrafts();
       }
       setPhrasesAndFollow(message.phrases);
@@ -1710,79 +1715,77 @@ export function TranslatorApp({
               openAIRealtimeEnabled={openAIRealtimeEnabled}
               preset={selectedPreset}
             />
-          ) : error ? (
-            <FeedbackBanner message={error} />
-          ) : null}
-          <div className="feed" onScroll={handleFeedScroll} ref={feedRef}>
-            {phrases.length === 0 ? (
-              <LiveCanvas
+          ) : (
+            <>
+              {error ? <FeedbackBanner message={error} /> : null}
+              <div className="feed" onScroll={handleFeedScroll} ref={feedRef}>
+                {phrases.length === 0 ? (
+                  <LiveCanvas
+                    isLive={isLive}
+                    micCaptureEnabled={micCaptureEnabled}
+                    openAIRealtimeEnabled={openAIRealtimeEnabled}
+                    sourceLanguages={sourceALanguages}
+                    status={status}
+                    targetLanguage={sourceB}
+                    languageMap={languageMap}
+                  />
+                ) : visiblePhraseGroups.length === 0 ? (
+                  <div className="emptyState">
+                    <strong>Waiting for corrections...</strong>
+                  </div>
+                ) : (
+                  visiblePhraseGroups.map((phraseGroup) => (
+                    <PhraseCard
+                      key={phraseGroup[0]?.id || ""}
+                      adaptations={adaptations}
+                      activeLeftLanguage={activeLeftLanguage}
+                      editingSpeaker={editingSpeaker}
+                      latencyMode={transcriptLatencyMode}
+                      leftLanguageSelection={leftLanguageSelection}
+                      languageMap={languageMap}
+                      onEditSpeaker={openSpeakerEditor}
+                      onSpeak={speakPhraseText}
+                      phrases={phraseGroup}
+                      speakLanguage={ttsSpeakLanguage}
+                      speakerDrafts={speakerDrafts}
+                      showEnhancedEnglish={showEnhancedEnglish}
+                      showRomaji={showRomaji}
+                      targetLanguage={sourceB}
+                      ttsStatus={ttsStatus}
+                    />
+                  ))
+                )}
+              </div>
+              {speakerEditorDraft ? (
+                <SpeakerNameDialog
+                  draft={speakerEditorDraft}
+                  onCancel={closeSpeakerEditor}
+                  onChange={setSpeakerEditorDraft}
+                  onSave={saveSpeakerEditor}
+                />
+              ) : null}
+              <ControlsStrip
+                canStart={canStart && hasLanguagePair}
+                durationLabel={formatTranscriptStats(transcriptStats)}
+                englishTargetLabel={languageShortLabel(englishOverdubTargetLanguage(sourceALanguages, sourceB), languageMap)}
+                englishToTargetOverdubEnabled={englishToTargetOverdubEnabled}
                 isLive={isLive}
                 micCaptureEnabled={micCaptureEnabled}
+                onStart={() => start(openAIRealtimeEnabled)}
+                onStop={stop}
+                onToggleEnglishToTarget={() => toggleRealtimeDirection("english_to_target")}
+                onToggleMicCapture={toggleMicCapture}
+                onToggleTargetToEnglish={() => toggleRealtimeDirection("target_to_english")}
                 openAIRealtimeEnabled={openAIRealtimeEnabled}
-                sourceLanguages={sourceALanguages}
-                status={status}
-                targetLanguage={sourceB}
-                languageMap={languageMap}
+                targetToEnglishOverdubEnabled={targetToEnglishOverdubEnabled}
               />
-            ) : visiblePhraseGroups.length === 0 ? (
-              <div className="emptyState">
-                <strong>Waiting for corrections...</strong>
-              </div>
-            ) : (
-              visiblePhraseGroups.map((phraseGroup) => (
-                <PhraseCard
-                  key={phraseGroup[0]?.id || ""}
-                  adaptations={adaptations}
-                  activeLeftLanguage={activeLeftLanguage}
-                  editingSpeaker={editingSpeaker}
-                  latencyMode={transcriptLatencyMode}
-                  leftLanguageSelection={leftLanguageSelection}
-                  languageMap={languageMap}
-                  onEditSpeaker={openSpeakerEditor}
-                  onSpeak={speakPhraseText}
-                  phrases={phraseGroup}
-                  speakLanguage={ttsSpeakLanguage}
-                  speakerDrafts={speakerDrafts}
-                  showEnhancedEnglish={showEnhancedEnglish}
-                  showRomaji={showRomaji}
-                  targetLanguage={sourceB}
-                  ttsStatus={ttsStatus}
-                />
-              ))
-            )}
-          </div>
-          {speakerEditorDraft ? (
-            <SpeakerNameDialog
-              draft={speakerEditorDraft}
-              onCancel={closeSpeakerEditor}
-              onChange={setSpeakerEditorDraft}
-              onSave={saveSpeakerEditor}
-            />
-          ) : null}
-          {!showOnboarding ? (
-            <ControlsStrip
-              canStart={canStart && hasLanguagePair}
-              durationLabel={formatTranscriptStats(transcriptStats)}
-              englishTargetLabel={languageShortLabel(englishOverdubTargetLanguage(sourceALanguages, sourceB), languageMap)}
-              englishToTargetOverdubEnabled={englishToTargetOverdubEnabled}
-              isLive={isLive}
-              micCaptureEnabled={micCaptureEnabled}
-              onStart={() => start(openAIRealtimeEnabled)}
-              onStop={stop}
-              onToggleEnglishToTarget={() => toggleRealtimeDirection("english_to_target")}
-              onToggleMicCapture={toggleMicCapture}
-              onToggleTargetToEnglish={() => toggleRealtimeDirection("target_to_english")}
-              openAIRealtimeEnabled={openAIRealtimeEnabled}
-              targetToEnglishOverdubEnabled={targetToEnglishOverdubEnabled}
-            />
-          ) : null}
-          {!showOnboarding ? (
-            <ComposerBar
-              onSubmit={submitTypedText}
-              text={typedText}
-              onTextChange={setTypedText}
-            />
-          ) : null}
+              <ComposerBar
+                onSubmit={submitTypedText}
+                text={typedText}
+                onTextChange={setTypedText}
+              />
+            </>
+          )}
         </section>
       </section>
     </main>
