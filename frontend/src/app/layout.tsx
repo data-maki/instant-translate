@@ -1,5 +1,8 @@
 import type { Metadata } from "next";
+import Script from "next/script";
 import { LocaleProvider } from "@/i18n/LocaleProvider";
+import { ThemeProvider } from "@/components/ThemeProvider";
+import { THEME_INIT_SCRIPT } from "@/lib/theme";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -16,9 +19,16 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html className="theme-light" lang="ja">
+    <html lang="ja" suppressHydrationWarning>
+      <head>
+        <Script id="theme-init" strategy="beforeInteractive">
+          {THEME_INIT_SCRIPT}
+        </Script>
+      </head>
       <body suppressHydrationWarning>
-        <LocaleProvider>{children}</LocaleProvider>
+        <ThemeProvider>
+          <LocaleProvider>{children}</LocaleProvider>
+        </ThemeProvider>
       </body>
     </html>
   );

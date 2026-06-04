@@ -3,7 +3,9 @@
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { authClient } from "@/lib/auth-client";
+import { safeRouterPush } from "@/lib/safe-router";
 import { ProfileModal, type ProfileModalSection } from "@/components/ProfileModal";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 type Props = {
   userName: string;
@@ -34,8 +36,7 @@ export function ProfileMenu({ userName, userId }: Props) {
     setSigningOut(true);
     try {
       await authClient.signOut();
-      router.push("/sign-in");
-      router.refresh();
+      safeRouterPush(router, "/sign-in");
     } finally {
       setSigningOut(false);
     }
@@ -96,6 +97,10 @@ export function ProfileMenu({ userName, userId }: Props) {
               <SparkleIcon />
               <span>Personalization</span>
             </button>
+            <div className="profileMenuThemeRow" role="group" aria-label="Appearance">
+              <span className="profileMenuThemeLabel">Appearance</span>
+              <ThemeToggle compact />
+            </div>
             <div className="profileMenuDivider" role="separator" />
             <button
               type="button"

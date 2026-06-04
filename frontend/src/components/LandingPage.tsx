@@ -3,6 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { LocaleToggle } from "@/components/LocaleToggle";
+import { ThemeToggle } from "@/components/ThemeToggle";
 import { useLocale } from "@/i18n/LocaleProvider";
 
 export function LandingPage() {
@@ -11,7 +12,7 @@ export function LandingPage() {
   const otherLocale = locale === "ja" ? "en" : "ja";
 
   return (
-    <main className="landingPage mecha" lang={locale}>
+    <main className="landingPage" lang={locale}>
       <div className="landingAnnouncement" aria-label={locale === "ja" ? "お知らせ" : "Updates"}>
         {m.perks.map((p) => (
           <span key={p.text} className="landingPerk">
@@ -30,6 +31,7 @@ export function LandingPage() {
           <span className="brandKanji" lang="ja">{m.brand.kanji}</span>
         </Link>
         <div className="landingNavRight">
+          <ThemeToggle compact />
           <LocaleToggle />
           <Link className="landingNavLogin" href="/sign-in">
             {m.nav.login}

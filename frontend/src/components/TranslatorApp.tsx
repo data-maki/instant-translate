@@ -1,6 +1,6 @@
 "use client";
 
-import type { CSSProperties, ReactNode } from "react";
+import type { ReactNode } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import { useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -33,7 +33,22 @@ import {
   subscribeTravelerProfile,
   TravelerProfile
 } from "@/lib/profile";
+import { PhraseCard, supportsRomanization, type PhraseAdaptation } from "@/components/PhraseCard";
 import { ProfileMenu } from "@/components/ProfileMenu";
+import {
+  adaptationKey,
+  ENGLISH_LANGUAGE,
+  firstNonEnglishTextLanguage,
+  phraseSpeakReady,
+  phraseTargetText
+} from "@/lib/phrase-text";
+import {
+  fallbackSpeakerLabel,
+  initialsFromSpeakerName,
+  normalizeInitials,
+  speakerEditableName,
+  speakerKey
+} from "@/lib/speaker";
 import { playTtsThroughAec, type TtsPlayback } from "@/lib/tts-playback";
 
 type AppStatus =
@@ -49,7 +64,6 @@ type AppStatus =
 const DEFAULT_AUDIENCE_PRESET = "polite-stranger";
 const REGISTER_BLOCK_START = "[Japanese register preset]";
 const REGISTER_BLOCK_END = "[/Japanese register preset]";
-const ENGLISH_LANGUAGE = "en";
 
 type HiddenRegister =
   | "casual_intimate"
@@ -163,12 +177,6 @@ type ContextBundle = {
   rewriteTone: Record<string, unknown>;
 };
 
-type PhraseAdaptation = {
-  source_rewrite: string;
-  target_translation?: string;
-  status: "loading" | "ready" | "error";
-};
-
 type ProviderSignals = {
   transcripts: string[];
   translations: string[];
@@ -195,6 +203,7 @@ type RealtimeCaptionDraft = {
 
 const DEEPL_FORMALITY_STORAGE_KEY = "mil-decoder-deepl-formality-v1";
 const TTS_MODE_STORAGE_KEY = "mil-decoder-tts-mode-v1";
+const SIDEBAR_COLLAPSED_KEY = "cottonoha-sidebar-collapsed-v1";
 
 type TtsMode = "push" | "auto";
 type TtsPlaybackState = "loading" | "playing" | "error";
@@ -229,17 +238,6 @@ type SessionGroup = {
   sessions: SessionSummary[];
   collapsedByDefault?: boolean;
 };
-
-const SPEAKER_COLORS = [
-  "#BC002D",
-  "#b45f2a",
-  "#315f9c",
-  "#8a4f9f",
-  "#b23b53",
-  "#5d6f2f",
-  "#2f7f86",
-  "#9a6a1f"
-];
 
 export type TranslatorAppProps = {
   initialLanguages?: Language[];
@@ -310,6 +308,7 @@ export function TranslatorApp({
   const [editingSpeaker, setEditingSpeaker] = useState<string | null>(null);
   const [speakerEditorDraft, setSpeakerEditorDraft] = useState<SpeakerEditorDraft | null>(null);
   const [showEnhancedEnglish, setShowEnhancedEnglish] = useState(true);
+  const [showRomaji, setShowRomaji] = useState(false);
   const [openAIRealtimeEnabled, setOpenAIRealtimeEnabled] = useState(false);
   const [transcriptLatencyMode, setTranscriptLatencyMode] = useState<TranscriptLatencyMode>("fast");
   const [leftLanguageSelection, setLeftLanguageSelection] = useState<LeftLanguageSelection>("all");
@@ -319,6 +318,10 @@ export function TranslatorApp({
   const [sessionTotal, setSessionTotal] = useState(initialSessionTotal ?? initialSessions.length);
   const [loadingMoreSessions, setLoadingMoreSessions] = useState(false);
   const [sessionsOpen, setSessionsOpen] = useDrawerState();
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try { return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true"; } catch { return false; }
+  });
   const [loadingSession, setLoadingSession] = useState("");
   const [micCaptureEnabled, setMicCaptureEnabled] = useState(true);
   const [englishToTargetOverdubEnabled, setEnglishToTargetOverdubEnabled] = useState(true);
@@ -1250,6 +1253,14 @@ export function TranslatorApp({
     }
   }
 
+  function toggleSidebarCollapsed() {
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      try { window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(next)); } catch {}
+      return next;
+    });
+  }
+
   function newSession() {
     if (isLive) {
       return;
@@ -1355,6 +1366,11 @@ export function TranslatorApp({
     if (message.type === "transcript") {
       if (openAIRealtimeEnabled) {
         sonioxRealtimePhraseCountRef.current = message.phrases.length;
+        if (message.phrases.length === 0) {
+          // Soniox bridge emits empty transcripts while OpenAI captions are in flight.
+          // Ignore those updates so local realtime phrases are not wiped.
+          return;
+        }
         clearRealtimeCaptionDrafts();
       }
       setPhrasesAndFollow(message.phrases);
@@ -1599,7 +1615,7 @@ export function TranslatorApp({
 
   return (
     <main className="appShell">
-      <section className="workspace">
+      <section className={`workspace ${sidebarCollapsed ? "sidebarCollapsed" : ""}`}>
         <button
           aria-label="Close sessions"
           className={`sessionBackdrop ${sessionsOpen ? "open" : ""}`}
@@ -1610,6 +1626,7 @@ export function TranslatorApp({
           activeSession={activeSession}
           activeSessionTitle={activeSessionTitle}
           allGroups={sessionGroups}
+          isCollapsed={sidebarCollapsed}
           isOpen={sessionsOpen}
           loadingMore={loadingMoreSessions}
           loadingSession={loadingSession}
@@ -1619,6 +1636,7 @@ export function TranslatorApp({
           onLoadMore={loadMoreSessions}
           onNew={newSession}
           onRename={renameSessionTitle}
+          onToggleCollapsed={toggleSidebarCollapsed}
           total={sessionTotal}
           userName={userName}
           userId={userId}
@@ -1662,6 +1680,15 @@ export function TranslatorApp({
             </div>
             {!showOnboarding && !openAIRealtimeEnabled ? (
               <div className="transcriptMeta">
+                {supportsRomanization(activeLeftLanguage) ? (
+                  <DualLabelToggle
+                    leftLabel="script"
+                    rightLabel="romaji"
+                    rightSelected={showRomaji}
+                    onChange={setShowRomaji}
+                    title="Script shows original characters. Romaji shows only the phonetic romanization."
+                  />
+                ) : null}
                 <DualLabelToggle
                   leftLabel="fast"
                   rightLabel="slow"
@@ -1703,78 +1730,77 @@ export function TranslatorApp({
               openAIRealtimeEnabled={openAIRealtimeEnabled}
               preset={selectedPreset}
             />
-          ) : error ? (
-            <FeedbackBanner message={error} />
-          ) : null}
-          <div className="feed" onScroll={handleFeedScroll} ref={feedRef}>
-            {phrases.length === 0 ? (
-              <LiveCanvas
+          ) : (
+            <>
+              {error ? <FeedbackBanner message={error} /> : null}
+              <div className="feed" onScroll={handleFeedScroll} ref={feedRef}>
+                {phrases.length === 0 ? (
+                  <LiveCanvas
+                    isLive={isLive}
+                    micCaptureEnabled={micCaptureEnabled}
+                    openAIRealtimeEnabled={openAIRealtimeEnabled}
+                    sourceLanguages={sourceALanguages}
+                    status={status}
+                    targetLanguage={sourceB}
+                    languageMap={languageMap}
+                  />
+                ) : visiblePhraseGroups.length === 0 ? (
+                  <div className="emptyState">
+                    <strong>Waiting for corrections...</strong>
+                  </div>
+                ) : (
+                  visiblePhraseGroups.map((phraseGroup) => (
+                    <PhraseCard
+                      key={phraseGroup[0]?.id || ""}
+                      adaptations={adaptations}
+                      activeLeftLanguage={activeLeftLanguage}
+                      editingSpeaker={editingSpeaker}
+                      latencyMode={transcriptLatencyMode}
+                      leftLanguageSelection={leftLanguageSelection}
+                      languageMap={languageMap}
+                      onEditSpeaker={openSpeakerEditor}
+                      onSpeak={speakPhraseText}
+                      phrases={phraseGroup}
+                      speakLanguage={ttsSpeakLanguage}
+                      speakerDrafts={speakerDrafts}
+                      showEnhancedEnglish={showEnhancedEnglish}
+                      showRomaji={showRomaji}
+                      targetLanguage={sourceB}
+                      ttsStatus={ttsStatus}
+                    />
+                  ))
+                )}
+              </div>
+              {speakerEditorDraft ? (
+                <SpeakerNameDialog
+                  draft={speakerEditorDraft}
+                  onCancel={closeSpeakerEditor}
+                  onChange={setSpeakerEditorDraft}
+                  onSave={saveSpeakerEditor}
+                />
+              ) : null}
+              <ControlsStrip
+                canStart={canStart && hasLanguagePair}
+                durationLabel={formatTranscriptStats(transcriptStats)}
+                englishTargetLabel={languageShortLabel(englishOverdubTargetLanguage(sourceALanguages, sourceB), languageMap)}
+                englishToTargetOverdubEnabled={englishToTargetOverdubEnabled}
                 isLive={isLive}
                 micCaptureEnabled={micCaptureEnabled}
+                onStart={() => start(openAIRealtimeEnabled)}
+                onStop={stop}
+                onToggleEnglishToTarget={() => toggleRealtimeDirection("english_to_target")}
+                onToggleMicCapture={toggleMicCapture}
+                onToggleTargetToEnglish={() => toggleRealtimeDirection("target_to_english")}
                 openAIRealtimeEnabled={openAIRealtimeEnabled}
-                sourceLanguages={sourceALanguages}
-                status={status}
-                targetLanguage={sourceB}
-                languageMap={languageMap}
+                targetToEnglishOverdubEnabled={targetToEnglishOverdubEnabled}
               />
-            ) : visiblePhraseGroups.length === 0 ? (
-              <div className="emptyState">
-                <strong>Waiting for corrections...</strong>
-              </div>
-            ) : (
-              visiblePhraseGroups.map((phraseGroup) => (
-                <PhraseCard
-                  key={phraseGroup[0]?.id || ""}
-                  adaptations={adaptations}
-                  activeLeftLanguage={activeLeftLanguage}
-                  editingSpeaker={editingSpeaker}
-                  latencyMode={transcriptLatencyMode}
-                  leftLanguageSelection={leftLanguageSelection}
-                  languageMap={languageMap}
-                  onEditSpeaker={openSpeakerEditor}
-                  onSpeak={speakPhraseText}
-                  phrases={phraseGroup}
-                  speakLanguage={ttsSpeakLanguage}
-                  speakerDrafts={speakerDrafts}
-                  showEnhancedEnglish={showEnhancedEnglish}
-                  targetLanguage={sourceB}
-                  ttsStatus={ttsStatus}
-                />
-              ))
-            )}
-          </div>
-          {speakerEditorDraft ? (
-            <SpeakerNameDialog
-              draft={speakerEditorDraft}
-              onCancel={closeSpeakerEditor}
-              onChange={setSpeakerEditorDraft}
-              onSave={saveSpeakerEditor}
-            />
-          ) : null}
-          {!showOnboarding ? (
-            <ControlsStrip
-              canStart={canStart && hasLanguagePair}
-              durationLabel={formatTranscriptStats(transcriptStats)}
-              englishTargetLabel={languageShortLabel(englishOverdubTargetLanguage(sourceALanguages, sourceB), languageMap)}
-              englishToTargetOverdubEnabled={englishToTargetOverdubEnabled}
-              isLive={isLive}
-              micCaptureEnabled={micCaptureEnabled}
-              onStart={() => start(openAIRealtimeEnabled)}
-              onStop={stop}
-              onToggleEnglishToTarget={() => toggleRealtimeDirection("english_to_target")}
-              onToggleMicCapture={toggleMicCapture}
-              onToggleTargetToEnglish={() => toggleRealtimeDirection("target_to_english")}
-              openAIRealtimeEnabled={openAIRealtimeEnabled}
-              targetToEnglishOverdubEnabled={targetToEnglishOverdubEnabled}
-            />
-          ) : null}
-          {!showOnboarding ? (
-            <ComposerBar
-              onSubmit={submitTypedText}
-              text={typedText}
-              onTextChange={setTypedText}
-            />
-          ) : null}
+              <ComposerBar
+                onSubmit={submitTypedText}
+                text={typedText}
+                onTextChange={setTypedText}
+              />
+            </>
+          )}
         </section>
       </section>
     </main>
@@ -2119,25 +2145,6 @@ function DualLabelToggle({
   );
 }
 
-function TranscriptTitle({
-  languageMap,
-  sourceLanguages,
-  targetLanguage
-}: {
-  languageMap: Map<string, Language>;
-  sourceLanguages: string[];
-  targetLanguage: string;
-}) {
-  return (
-    <h2 className="transcriptTitle">
-      <span className="transcriptTitleFull">{transcriptTitle(sourceLanguages, targetLanguage, languageMap)}</span>
-      <span className="transcriptTitleCompact">
-        {transcriptShortTitle(sourceLanguages, targetLanguage, languageMap)}
-      </span>
-    </h2>
-  );
-}
-
 function HeaderLanguagePill({
   languageMap,
   sourceLanguages,
@@ -2285,6 +2292,7 @@ function SessionSidebar({
   activeSession,
   activeSessionTitle,
   allGroups,
+  isCollapsed,
   isOpen,
   loadingMore,
   loadingSession,
@@ -2294,6 +2302,7 @@ function SessionSidebar({
   onLoadMore,
   onNew,
   onRename,
+  onToggleCollapsed,
   total,
   userName,
   userId
@@ -2301,6 +2310,7 @@ function SessionSidebar({
   activeSession: string;
   activeSessionTitle: string;
   allGroups: SessionGroup[];
+  isCollapsed: boolean;
   isOpen: boolean;
   loadingMore: boolean;
   loadingSession: string;
@@ -2310,6 +2320,7 @@ function SessionSidebar({
   onLoadMore: () => Promise<void> | void;
   onNew: () => void;
   onRename: (name: string, title: string) => Promise<void>;
+  onToggleCollapsed: () => void;
   total: number;
   userName: string;
   userId?: string;
@@ -2358,6 +2369,24 @@ function SessionSidebar({
     setConfirmDeleteSession("");
   }
 
+  if (isCollapsed && !isOpen) {
+    return (
+      <aside className="sessionPanel collapsed" aria-label="Sessions">
+        <div className="collapsedRail">
+          <button aria-label="Open sidebar" className="collapsedRailButton" onClick={onToggleCollapsed} title="Open sidebar" type="button">
+            <SidebarExpandIcon />
+          </button>
+          <button aria-label="New chat" className="collapsedRailButton" onClick={onNew} title="New chat" type="button">
+            <NewChatIcon />
+          </button>
+          <button aria-label="Recents" className="collapsedRailButton" onClick={onToggleCollapsed} title="Recents" type="button">
+            <RecentsIcon />
+          </button>
+        </div>
+      </aside>
+    );
+  }
+
   return (
     <aside className={`sessionPanel ${isOpen ? "open" : ""}`} aria-label="Sessions">
       <div className="sessionPanelHeader">
@@ -2366,6 +2395,9 @@ function SessionSidebar({
           <strong>cottonoha</strong>
         </Link>
         <div className="sessionHeaderActions">
+          <button aria-label="Collapse sidebar" className="sidebarCollapseButton" onClick={onToggleCollapsed} title="Collapse sidebar" type="button">
+            <SidebarCollapseIcon />
+          </button>
           <button aria-label="Close sessions" className="drawerCloseButton" onClick={onClose} type="button">
             ×
           </button>
@@ -2860,97 +2892,6 @@ function LanguagePicker({
   );
 }
 
-function ToneSummary({ preset }: { preset: typeof AUDIENCE_PRESETS[number] }) {
-  return (
-    <section className="toneSummary" aria-label="Translation tone">
-      <strong>Tone · {preset.tone}</strong>
-      <span className="toneSummaryFrom">From &ldquo;{preset.label}&rdquo;</span>
-    </section>
-  );
-}
-
-function SpeakerCountPicker({
-  disabled,
-  onChange,
-  value
-}: {
-  disabled: boolean;
-  onChange: (count: string) => void;
-  value: string;
-}) {
-  return (
-    <div className="speakerCountPicker" role="group" aria-label="Expected speakers">
-      <span className="setupFieldLabel">Expected speakers</span>
-      <div className="speakerCountOptions">
-        {SPEAKER_COUNT_OPTIONS.map((count) => (
-          <button
-            aria-pressed={value === count}
-            className={`speakerCountOption ${value === count ? "active" : ""}`}
-            disabled={disabled}
-            key={count}
-            onClick={() => onChange(count)}
-            type="button"
-          >
-            {count === "6" ? "6+" : count}
-          </button>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function AudiencePicker({
-  disabled,
-  onChange,
-  value
-}: {
-  disabled: boolean;
-  onChange: (presetId: string) => void;
-  value: string;
-}) {
-  return (
-    <fieldset className="audiencePicker">
-      <legend>Who are you speaking to?</legend>
-      <div className="audienceOptions">
-        {AUDIENCE_PRESETS.map((preset) => (
-          <button
-            aria-pressed={value === preset.id}
-            className={`audienceOption ${value === preset.id ? "active" : ""}`}
-            disabled={disabled}
-            key={preset.id}
-            onClick={() => onChange(preset.id)}
-            type="button"
-          >
-            <span className="audienceName">{preset.label}</span>
-          </button>
-        ))}
-      </div>
-    </fieldset>
-  );
-}
-
-function DeepLFormalityPicker({
-  disabled,
-  onChange,
-  value
-}: {
-  disabled: boolean;
-  onChange: (value: DeepLFormality) => void;
-  value: DeepLFormality;
-}) {
-  return (
-    <label className="contextField compactSelect">
-      DeepL tone override
-      <select disabled={disabled} onChange={(event) => onChange(event.target.value as DeepLFormality)} value={value}>
-        <option value="auto">Auto from situation</option>
-        <option value="more">Polite</option>
-        <option value="less">Plain</option>
-        <option value="default">DeepL default</option>
-      </select>
-    </label>
-  );
-}
-
 function BrandMark({ compact = false }: { compact?: boolean }) {
   return (
     <span className={`brandMark ${compact ? "compact" : ""}`} aria-hidden="true">
@@ -2968,202 +2909,30 @@ function NewChatIcon() {
   );
 }
 
-function PhraseCard({
-  activeLeftLanguage,
-  adaptations,
-  editingSpeaker,
-  latencyMode,
-  leftLanguageSelection,
-  languageMap,
-  onEditSpeaker,
-  onSpeak,
-  phrases,
-  speakLanguage,
-  speakerDrafts,
-  showEnhancedEnglish,
-  targetLanguage,
-  ttsStatus
-}: {
-  activeLeftLanguage: string;
-  adaptations: Record<string, PhraseAdaptation>;
-  editingSpeaker: string | null;
-  latencyMode: TranscriptLatencyMode;
-  leftLanguageSelection: LeftLanguageSelection;
-  languageMap: Map<string, Language>;
-  onEditSpeaker: (speakerId: string, label: string) => void;
-  onSpeak: (key: string, text: string, language: string) => void;
-  phrases: Phrase[];
-  speakLanguage: string;
-  speakerDrafts: Record<string, SpeakerDraft>;
-  showEnhancedEnglish: boolean;
-  targetLanguage: string;
-  ttsStatus: Record<string, TtsPlaybackState>;
-}) {
-  const phrase = phrases[0]!;
-  const color = speakerColor(speakerKey(phrase.speaker));
-  const style = { "--speaker-color": color } as CSSProperties;
-  const speakerId = speakerKey(phrase.speaker);
-  const speakerLabel = speakerDrafts[speakerId]?.label.trim() || phrase.speaker_label || fallbackSpeakerLabel(speakerId);
-  const speakerInitials = speakerDrafts[speakerId]?.initials?.trim() || initialsFromSpeakerName(speakerLabel, speakerId);
-  const isEditingSpeaker = Boolean(speakerId && editingSpeaker === speakerId);
-  const sourceLang = phrase.source_lang || firstNonEnglishTextLanguage(phrase) || activeLeftLanguage;
-  const isTargetSource = sourceLang === targetLanguage;
-  const leftLanguage = isTargetSource
-    ? activeLeftLanguage
-    : leftLanguageSelection === "all"
-      ? sourceLang
-      : activeLeftLanguage;
-  const leftText = joinDisplayLines(phrases.map((item) => phraseLeftText(item, leftLanguage, targetLanguage, adaptations)));
-  const targetText = joinDisplayLines(phrases.map((item) => phraseTargetText(item, targetLanguage, adaptations)));
-  const hasEnhancedEnglish = phrases.some((item) => Boolean(adaptations[adaptationKey(item, activeLeftLanguage)]?.source_rewrite?.trim()));
-  const shownTargetText = joinDisplayLines(
-    phrases.map((item) => phraseShownTargetText(item, targetLanguage, activeLeftLanguage, adaptations, showEnhancedEnglish))
-  );
-  const leftLabel = languageLabel(languageMap, leftLanguage);
-  const targetLabel = languageLabel(languageMap, targetLanguage);
-  const leftRomaji = leftLanguage === "ja" && sourceLang === "ja"
-    ? joinDisplayLines(phrases.map((item) => item.romaji_ja || ""))
-    : "";
-  const loading = phrases.some((item) => adaptations[adaptationKey(item, activeLeftLanguage)]?.status === "loading");
-
-  const firstPhrase = phrases[0]!;
-  // The speaker icon always lives on the source-side bubble (above the avatar).
-  // Speak language is the non-English language in the pair. For English-source
-  // bubbles we speak the *translation* (English → JP). For native-target-source
-  // bubbles (e.g. someone spoke Japanese) we speak the *same* text so the user
-  // can rehearse pronunciation.
-  const sourceSpeakText = isTargetSource
-    ? joinDisplayLines(phrases.map((item) => phraseTargetText(item, speakLanguage, adaptations)))
-    : joinDisplayLines(phrases.map((item) => item.texts[speakLanguage] || ""));
-  const sourceSpeakKey = speakLanguage ? `tts:${firstPhrase.id}:${speakLanguage}` : "";
-  const sourceSpeakable =
-    Boolean(speakLanguage) &&
-    sourceSpeakText.trim().length > 0 &&
-    phrases.every((item) => phraseSpeakReady(item, adaptations, speakLanguage, latencyMode));
-  const sourceOnSpeak = sourceSpeakable
-    ? () => onSpeak(sourceSpeakKey, sourceSpeakText, speakLanguage)
-    : undefined;
-  const sourceTtsState = sourceSpeakable ? ttsStatus[sourceSpeakKey] : undefined;
-
+function SidebarCollapseIcon() {
   return (
-    <article className={`phrase ${isTargetSource ? "fromEnglish" : "fromOther"}`} style={style}>
-      <div className="conversationLanes">
-        <div className="languageLane leftLanguageLane">
-          {isTargetSource ? (
-            <TranslationLine
-              code={leftLanguage}
-              enhanced={hasEnhancedEnglish}
-              label={leftLabel}
-              text={leftText}
-              onSpeak={sourceOnSpeak}
-              ttsState={sourceTtsState}
-            />
-          ) : (
-            <BubbleWithSpeaker
-              code={leftLanguage}
-              editingSpeaker={isEditingSpeaker}
-              label={leftLabel}
-              onEditSpeaker={onEditSpeaker}
-              romaji={leftRomaji}
-              speakerId={speakerId}
-              speakerInitials={speakerInitials}
-              speakerLabel={speakerLabel}
-              text={leftText}
-              ttsState={sourceTtsState}
-              onSpeak={sourceOnSpeak}
-            />
-          )}
-        </div>
-        <div className="languageLane englishLane">
-          {isTargetSource ? (
-            <BubbleWithSpeaker
-              code={targetLanguage}
-              editingSpeaker={isEditingSpeaker}
-              enhanced={showEnhancedEnglish && hasEnhancedEnglish}
-              loading={loading}
-              label={targetLabel}
-              onEditSpeaker={onEditSpeaker}
-              speakerId={speakerId}
-              speakerInitials={speakerInitials}
-              speakerLabel={speakerLabel}
-              text={shownTargetText || targetText}
-            />
-          ) : (
-            <TranslationLine
-              code={targetLanguage}
-              enhanced={phrases.some((item) => Boolean(adaptations[adaptationKey(item, targetLanguage)]?.target_translation))}
-              label={targetLabel}
-              text={targetText}
-            />
-          )}
-        </div>
-      </div>
-    </article>
+    <svg aria-hidden="true" className="sidebarToggleIcon" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="2" width="5" height="14" rx="1" opacity="0.45" />
+      <path d="M12 6l-3 3 3 3" />
+    </svg>
   );
 }
 
-function BubbleWithSpeaker({
-  code,
-  editingSpeaker,
-  enhanced = false,
-  label,
-  loading = false,
-  onEditSpeaker,
-  onSpeak,
-  romaji = "",
-  speakerId,
-  speakerInitials,
-  speakerLabel,
-  text,
-  ttsState
-}: {
-  code: string;
-  editingSpeaker: boolean;
-  enhanced?: boolean;
-  label: string;
-  loading?: boolean;
-  onEditSpeaker: (speakerId: string, label: string) => void;
-  onSpeak?: () => void;
-  romaji?: string;
-  speakerId: string;
-  speakerInitials: string;
-  speakerLabel: string;
-  text: string;
-  ttsState?: TtsPlaybackState;
-}) {
+function SidebarExpandIcon() {
   return (
-    <div className={`bubbleWithSpeaker ${editingSpeaker ? "editingSpeaker" : ""}`}>
-      <SpeakerTag
-        initials={speakerInitials}
-        onOpen={() => onEditSpeaker(speakerId, speakerLabel)}
-      />
-      <div className="speechBubbleHighlight">
-        <SpeechBubble
-          code={code}
-          enhanced={enhanced}
-          label={label}
-          loading={loading}
-          onSpeak={onSpeak}
-          romaji={romaji}
-          text={text}
-          ttsState={ttsState}
-        />
-      </div>
-    </div>
+    <svg aria-hidden="true" className="sidebarToggleIcon" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="11" y="2" width="5" height="14" rx="1" opacity="0.45" />
+      <path d="M6 6l3 3-3 3" />
+    </svg>
   );
 }
 
-function SpeakerTag({
-  initials,
-  onOpen
-}: {
-  initials: string;
-  onOpen: () => void;
-}) {
+function RecentsIcon() {
   return (
-    <button aria-label={`Edit speaker ${initials}`} className="speakerTag" onClick={onOpen} title={`Edit speaker ${initials}`} type="button">
-      <span className="speakerTagInitials">{initials}</span>
-    </button>
+    <svg aria-hidden="true" className="sidebarToggleIcon" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="9" cy="9" r="7" />
+      <path d="M9 5.5V9l2.5 2.5" />
+    </svg>
   );
 }
 
@@ -3220,242 +2989,6 @@ function SpeakerNameDialog({
       </div>
     </div>
   );
-}
-
-function SpeechBubble({
-  code,
-  enhanced = false,
-  label,
-  loading = false,
-  onSpeak,
-  romaji = "",
-  text,
-  ttsState
-}: {
-  code: string;
-  enhanced?: boolean;
-  label: string;
-  loading?: boolean;
-  onSpeak?: () => void;
-  romaji?: string;
-  text: string;
-  ttsState?: TtsPlaybackState;
-}) {
-  const pairedJapanese = code === "ja" && romaji ? pairJapaneseRomaji(text, romaji) : [];
-  return (
-    <div className={`speechBubble ${code === "ja" ? "japanese" : ""} ${enhanced ? "aiEnhanced" : ""}`} dir="auto" lang={code} title={label}>
-      <div className="speechBubbleBody">
-        {pairedJapanese.length ? (
-          <span className="lineText japaneseLines">
-            {pairedJapanese.map((line, index) => (
-              <span className="japaneseLine" key={`${line.text}-${index}`}>
-                <span className="japaneseOriginal">{line.text || "..."}</span>
-                {line.romaji ? <span className="inlineRomaji">({line.romaji})</span> : null}
-              </span>
-            ))}
-          </span>
-        ) : (
-          <span className="lineText">{text || "..."}</span>
-        )}
-        {onSpeak ? <TtsSpeakerButton onSpeak={onSpeak} state={ttsState} /> : null}
-      </div>
-      {loading ? <span className="romaji">Adapting...</span> : null}
-      {romaji && !pairedJapanese.length ? <span className="romaji">{romaji}</span> : null}
-    </div>
-  );
-}
-
-function TtsSpeakerButton({
-  disabled = false,
-  onSpeak,
-  state
-}: {
-  disabled?: boolean;
-  onSpeak: () => void;
-  state?: TtsPlaybackState;
-}) {
-  const label =
-    state === "loading"
-      ? "Loading speech"
-      : state === "playing"
-        ? "Playing"
-        : state === "error"
-          ? "Speech failed (tap to retry)"
-          : "Play translation";
-  return (
-    <button
-      aria-label={label}
-      className={`ttsSpeakerButton ${state || ""}`}
-      disabled={disabled || state === "loading"}
-      onClick={(event) => {
-        event.stopPropagation();
-        onSpeak();
-      }}
-      title={label}
-      type="button"
-    >
-      {state === "loading" ? "..." : state === "playing" ? "🔊" : state === "error" ? "⚠︎" : "🔈"}
-    </button>
-  );
-}
-
-function pairJapaneseRomaji(text: string, romaji: string): Array<{ text: string; romaji: string }> {
-  const textLines = splitDisplayLines(text);
-  const romajiLines = splitDisplayLines(romaji);
-  const count = Math.max(textLines.length, romajiLines.length);
-  const pairs: Array<{ text: string; romaji: string }> = [];
-  for (let index = 0; index < count; index += 1) {
-    pairs.push({
-      text: textLines[index] || "",
-      romaji: romajiLines[index] || ""
-    });
-  }
-  return pairs;
-}
-
-function splitDisplayLines(value: string): string[] {
-  return value
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-}
-
-function joinDisplayLines(values: Array<string | undefined | null>): string {
-  return values.map((value) => (value || "").trim()).filter(Boolean).join("\n");
-}
-
-function phraseLeftText(
-  phrase: Phrase,
-  leftLanguage: string,
-  targetLanguage: string,
-  adaptations: Record<string, PhraseAdaptation>
-): string {
-  const sourceLang = phrase.source_lang || firstNonEnglishTextLanguage(phrase) || leftLanguage;
-  if (sourceLang === targetLanguage) {
-    const adaptation = adaptations[adaptationKey(phrase, leftLanguage)];
-    return adaptation?.target_translation || phrase.texts[leftLanguage] || firstNonEnglishText(phrase) || "";
-  }
-  if (sourceLang === leftLanguage) {
-    return phrase.texts[sourceLang] || phrase.texts[leftLanguage] || "";
-  }
-  const adaptation = adaptations[adaptationKey(phrase, leftLanguage)];
-  return adaptation?.target_translation || phrase.texts[leftLanguage] || "";
-}
-
-function phraseTargetText(
-  phrase: Phrase,
-  targetLanguage: string,
-  adaptations: Record<string, PhraseAdaptation>
-): string {
-  const sourceLang = phrase.source_lang || firstNonEnglishTextLanguage(phrase) || targetLanguage;
-  if (sourceLang === targetLanguage) {
-    return phrase.texts[targetLanguage] || "";
-  }
-  const adaptation = adaptations[adaptationKey(phrase, targetLanguage)];
-  return phrase.texts[targetLanguage] || adaptation?.target_translation || "";
-}
-
-function phraseShownTargetText(
-  phrase: Phrase,
-  targetLanguage: string,
-  leftLanguage: string,
-  adaptations: Record<string, PhraseAdaptation>,
-  showEnhancedEnglish: boolean
-): string {
-  const sourceLang = phrase.source_lang || firstNonEnglishTextLanguage(phrase) || targetLanguage;
-  if (sourceLang !== targetLanguage) {
-    return phraseTargetText(phrase, targetLanguage, adaptations);
-  }
-  const adaptation = adaptations[adaptationKey(phrase, leftLanguage)];
-  const original = phrase.texts[targetLanguage] || "";
-  return showEnhancedEnglish && adaptation?.source_rewrite ? adaptation.source_rewrite : original;
-}
-
-function TranslationLine({
-  code,
-  enhanced = false,
-  label,
-  text,
-  onSpeak,
-  ttsState
-}: {
-  code: string;
-  enhanced?: boolean;
-  label: string;
-  text: string;
-  onSpeak?: () => void;
-  ttsState?: TtsPlaybackState;
-}) {
-  return (
-    <div className={`translationLine ${code === "ja" ? "japanese" : ""} ${enhanced ? "aiEnhanced" : ""}`} dir="auto" lang={code} title={label}>
-      <span className="lineText">{text || "..."}</span>
-      {onSpeak ? <TtsSpeakerButton onSpeak={onSpeak} state={ttsState} /> : null}
-    </div>
-  );
-}
-
-function speakerKey(speaker: number | string | null): string {
-  if (speaker === null || speaker === undefined) {
-    return "";
-  }
-  return String(speaker);
-}
-
-function speakerColor(id: string): string {
-  if (!id) {
-    return "#BC002D";
-  }
-  let hash = 0;
-  for (const char of id) {
-    hash = (hash * 31 + char.charCodeAt(0)) % 9973;
-  }
-  return SPEAKER_COLORS[hash % SPEAKER_COLORS.length];
-}
-
-function fallbackSpeakerLabel(id: string): string {
-  if (!id) {
-    return "Speaker";
-  }
-  if (id === "typed") {
-    return "You";
-  }
-  const numeric = Number(id);
-  if (Number.isFinite(numeric)) {
-    return `Speaker ${numeric}`;
-  }
-  return id;
-}
-
-function speakerEditableName(label: string, speakerId: string): string {
-  const clean = label.trim();
-  if (!clean || clean === fallbackSpeakerLabel(speakerId) || clean.startsWith("Speaker ")) {
-    return "";
-  }
-  return clean;
-}
-
-function initialsFromSpeakerName(name: string, speakerId: string): string {
-  const clean = name.trim();
-  const numeric = Number(speakerId);
-  if (!clean || clean.startsWith("Speaker ")) {
-    return Number.isFinite(numeric) ? `S${numeric}` : "S";
-  }
-  if (speakerId === "typed" && clean === "You") {
-    return "Me";
-  }
-  const parts = clean.split(/\s+/).filter(Boolean);
-  if (parts.length >= 2) {
-    return normalizeInitials(`${parts[0]![0] || ""}${parts.at(-1)?.[0] || ""}`);
-  }
-  const chars = Array.from(parts[0] || clean).slice(0, 2).join("");
-  return normalizeInitials(chars) || "S";
-}
-
-function normalizeInitials(value: string): string {
-  return Array.from(value.trim().replace(/\s+/g, ""))
-    .slice(0, 3)
-    .join("")
-    .toLocaleUpperCase();
 }
 
 function languageLabel(languageMap: Map<string, Language>, code: string): string {
@@ -3525,55 +3058,6 @@ function resolveLeftLanguageSelection(
     return configured;
   }
   return options[0]?.code || "ja";
-}
-
-function firstNonEnglishTextLanguage(phrase: Phrase): string {
-  return Object.keys(phrase.texts).find((code) => code !== ENGLISH_LANGUAGE) || "";
-}
-
-function firstNonEnglishText(phrase: Phrase): string {
-  const code = firstNonEnglishTextLanguage(phrase);
-  return code ? phrase.texts[code] || "" : "";
-}
-
-function adaptationKey(phrase: Phrase, targetLanguage = ""): string {
-  const sourceLanguage = phrase.source_lang || firstNonEnglishTextLanguage(phrase);
-  const source = sourceLanguage ? phrase.texts[sourceLanguage]?.trim() : "";
-  if (!source) {
-    return "";
-  }
-  return targetLanguage ? `${phrase.id}:${targetLanguage}:${source}` : `${phrase.id}:${source}`;
-}
-
-function phraseSpeakReady(
-  phrase: Phrase,
-  adaptations: Record<string, PhraseAdaptation>,
-  speakLanguage: string,
-  latencyMode: TranscriptLatencyMode
-): boolean {
-  if (!phrase.is_final) return false;
-  if (!speakLanguage) return false;
-  const sourceLang = phrase.source_lang || firstNonEnglishTextLanguage(phrase) || speakLanguage;
-  // Native text in the speak language — no AI step to wait for.
-  if (sourceLang === speakLanguage) {
-    return Boolean(phrase.texts[speakLanguage]?.trim());
-  }
-  const adaptation = adaptations[adaptationKey(phrase, speakLanguage)];
-  if (!adaptation?.target_translation?.trim() && !phrase.texts[speakLanguage]?.trim()) {
-    return false;
-  }
-  if (latencyMode === "slow") {
-    // English-source phrases run a two-stage pipeline: fast translate, then a
-    // polish/adapt pass that fills in source_rewrite. Wait for the polish.
-    if (sourceLang === "en") {
-      if (adaptation?.status !== "ready" || !adaptation.source_rewrite?.trim()) {
-        return false;
-      }
-    } else if (adaptation?.status !== "ready") {
-      return false;
-    }
-  }
-  return true;
 }
 
 function phraseReadyForSlowMode(

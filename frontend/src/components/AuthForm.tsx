@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { FormEvent, useRef, useState } from "react";
 import { authClient } from "@/lib/auth-client";
+import { safeRouterPush } from "@/lib/safe-router";
 
 type AuthMode = "sign-in" | "sign-up";
 type FieldErrors = { name?: string; email?: string; password?: string };
@@ -74,8 +75,7 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
     setPending(true);
 
     const onSuccess = () => {
-      router.push(next);
-      router.refresh();
+      safeRouterPush(router, next);
     };
 
     const onError = (ctx: { error?: { message?: string; statusText?: string } }) => {

@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { authClient } from "@/lib/auth-client";
+import { safeRouterPush } from "@/lib/safe-router";
 
 export function SignOutButton({ className = "secondaryButton" }: { className?: string }) {
   const router = useRouter();
@@ -11,8 +12,7 @@ export function SignOutButton({ className = "secondaryButton" }: { className?: s
   async function signOut() {
     setPending(true);
     await authClient.signOut();
-    router.push("/sign-in");
-    router.refresh();
+    safeRouterPush(router, "/sign-in");
   }
 
   return (

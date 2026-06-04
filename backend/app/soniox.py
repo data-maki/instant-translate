@@ -28,6 +28,28 @@ SAMPLE_RATE = 16000
 NUM_CHANNELS = 1
 
 SendEvent = Callable[[dict[str, Any]], Awaitable[None]]
+
+
+def _persist_session_start(session) -> None:
+    """Write session_state.json so REST endpoints work during live capture."""
+    try:
+        session.save_state()
+    except OSError:
+        pass
+
+
+def _make_safe_send_event(send_event: SendEvent) -> SendEvent:
+    send_lock = asyncio.Lock()
+
+    async def safe_send_event(event: dict[str, Any]) -> None:
+        async with send_lock:
+            try:
+                await send_event(event)
+            except RuntimeError:
+                # Client disconnected before the bridge finished (send after close).
+                pass
+
+    return safe_send_event
 ReceiveAudio = Callable[[], Awaitable[bytes | str | None]]
 
 
@@ -122,11 +144,8 @@ async def run_transcription_bridge(
     session.context = context_summary(context)
     session.expected_speaker_count = parse_expected_speaker_count(start_message.get("expected_speaker_count"))
     session.expected_speaker_names = parse_expected_speaker_names(start_message.get("expected_speaker_names"))
-    send_lock = asyncio.Lock()
-
-    async def safe_send_event(event: dict[str, Any]) -> None:
-        async with send_lock:
-            await send_event(event)
+    _persist_session_start(session)
+    safe_send_event = _make_safe_send_event(send_event)
 
     await safe_send_event({
         "type": "session",
@@ -269,13 +288,10 @@ async def run_openai_realtime_overdub_bridge(
     user_id = str(start_message.get("user_id") or "").strip()
     if user_id:
         session.user_id = user_id
-    send_lock = asyncio.Lock()
+    _persist_session_start(session)
+    safe_send_event = _make_safe_send_event(send_event)
     started_at = asyncio.get_running_loop().time()
     primary_source = session.source_languages[0] if session.source_languages else "en"
-
-    async def safe_send_event(event: dict[str, Any]) -> None:
-        async with send_lock:
-            await send_event(event)
 
     async def capture_openai_segment(kind: str, text: str) -> None:
         if not text:
