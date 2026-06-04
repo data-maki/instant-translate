@@ -203,6 +203,7 @@ type RealtimeCaptionDraft = {
 
 const DEEPL_FORMALITY_STORAGE_KEY = "mil-decoder-deepl-formality-v1";
 const TTS_MODE_STORAGE_KEY = "mil-decoder-tts-mode-v1";
+const SIDEBAR_COLLAPSED_KEY = "cottonoha-sidebar-collapsed-v1";
 
 type TtsMode = "push" | "auto";
 type TtsPlaybackState = "loading" | "playing" | "error";
@@ -317,6 +318,10 @@ export function TranslatorApp({
   const [sessionTotal, setSessionTotal] = useState(initialSessionTotal ?? initialSessions.length);
   const [loadingMoreSessions, setLoadingMoreSessions] = useState(false);
   const [sessionsOpen, setSessionsOpen] = useDrawerState();
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    if (typeof window === "undefined") return false;
+    try { return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true"; } catch { return false; }
+  });
   const [loadingSession, setLoadingSession] = useState("");
   const [micCaptureEnabled, setMicCaptureEnabled] = useState(true);
   const [englishToTargetOverdubEnabled, setEnglishToTargetOverdubEnabled] = useState(true);
@@ -1248,6 +1253,14 @@ export function TranslatorApp({
     }
   }
 
+  function toggleSidebarCollapsed() {
+    setSidebarCollapsed((prev) => {
+      const next = !prev;
+      try { window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(next)); } catch {}
+      return next;
+    });
+  }
+
   function newSession() {
     if (isLive) {
       return;
@@ -1602,7 +1615,7 @@ export function TranslatorApp({
 
   return (
     <main className="appShell">
-      <section className="workspace">
+      <section className={`workspace ${sidebarCollapsed ? "sidebarCollapsed" : ""}`}>
         <button
           aria-label="Close sessions"
           className={`sessionBackdrop ${sessionsOpen ? "open" : ""}`}
@@ -1613,6 +1626,7 @@ export function TranslatorApp({
           activeSession={activeSession}
           activeSessionTitle={activeSessionTitle}
           allGroups={sessionGroups}
+          isCollapsed={sidebarCollapsed}
           isOpen={sessionsOpen}
           loadingMore={loadingMoreSessions}
           loadingSession={loadingSession}
@@ -1622,6 +1636,7 @@ export function TranslatorApp({
           onLoadMore={loadMoreSessions}
           onNew={newSession}
           onRename={renameSessionTitle}
+          onToggleCollapsed={toggleSidebarCollapsed}
           total={sessionTotal}
           userName={userName}
           userId={userId}
@@ -2277,6 +2292,7 @@ function SessionSidebar({
   activeSession,
   activeSessionTitle,
   allGroups,
+  isCollapsed,
   isOpen,
   loadingMore,
   loadingSession,
@@ -2286,6 +2302,7 @@ function SessionSidebar({
   onLoadMore,
   onNew,
   onRename,
+  onToggleCollapsed,
   total,
   userName,
   userId
@@ -2293,6 +2310,7 @@ function SessionSidebar({
   activeSession: string;
   activeSessionTitle: string;
   allGroups: SessionGroup[];
+  isCollapsed: boolean;
   isOpen: boolean;
   loadingMore: boolean;
   loadingSession: string;
@@ -2302,6 +2320,7 @@ function SessionSidebar({
   onLoadMore: () => Promise<void> | void;
   onNew: () => void;
   onRename: (name: string, title: string) => Promise<void>;
+  onToggleCollapsed: () => void;
   total: number;
   userName: string;
   userId?: string;
@@ -2350,6 +2369,24 @@ function SessionSidebar({
     setConfirmDeleteSession("");
   }
 
+  if (isCollapsed && !isOpen) {
+    return (
+      <aside className="sessionPanel collapsed" aria-label="Sessions">
+        <div className="collapsedRail">
+          <button aria-label="Open sidebar" className="collapsedRailButton" onClick={onToggleCollapsed} title="Open sidebar" type="button">
+            <SidebarExpandIcon />
+          </button>
+          <button aria-label="New chat" className="collapsedRailButton" onClick={onNew} title="New chat" type="button">
+            <NewChatIcon />
+          </button>
+          <button aria-label="Recents" className="collapsedRailButton" onClick={onToggleCollapsed} title="Recents" type="button">
+            <RecentsIcon />
+          </button>
+        </div>
+      </aside>
+    );
+  }
+
   return (
     <aside className={`sessionPanel ${isOpen ? "open" : ""}`} aria-label="Sessions">
       <div className="sessionPanelHeader">
@@ -2358,6 +2395,9 @@ function SessionSidebar({
           <strong>cottonoha</strong>
         </Link>
         <div className="sessionHeaderActions">
+          <button aria-label="Collapse sidebar" className="sidebarCollapseButton" onClick={onToggleCollapsed} title="Collapse sidebar" type="button">
+            <SidebarCollapseIcon />
+          </button>
           <button aria-label="Close sessions" className="drawerCloseButton" onClick={onClose} type="button">
             ×
           </button>
@@ -2865,6 +2905,33 @@ function NewChatIcon() {
     <svg aria-hidden="true" className="newChatIcon" viewBox="0 0 18 18">
       <path d="M7.5 3H4.25A1.75 1.75 0 0 0 2.5 4.75v9A1.75 1.75 0 0 0 4.25 15.5h9a1.75 1.75 0 0 0 1.75-1.75V10.5" />
       <path d="M8 10.25 13.9 4.35a1.2 1.2 0 0 1 1.7 1.7L9.7 11.95l-2.25.55L8 10.25Z" />
+    </svg>
+  );
+}
+
+function SidebarCollapseIcon() {
+  return (
+    <svg aria-hidden="true" className="sidebarToggleIcon" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="2" y="2" width="5" height="14" rx="1" opacity="0.45" />
+      <path d="M12 6l-3 3 3 3" />
+    </svg>
+  );
+}
+
+function SidebarExpandIcon() {
+  return (
+    <svg aria-hidden="true" className="sidebarToggleIcon" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="11" y="2" width="5" height="14" rx="1" opacity="0.45" />
+      <path d="M6 6l3 3-3 3" />
+    </svg>
+  );
+}
+
+function RecentsIcon() {
+  return (
+    <svg aria-hidden="true" className="sidebarToggleIcon" viewBox="0 0 18 18" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="9" cy="9" r="7" />
+      <path d="M9 5.5V9l2.5 2.5" />
     </svg>
   );
 }

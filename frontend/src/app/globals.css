@@ -258,6 +258,10 @@ summary {
   padding: 0;
 }
 
+.workspace.sidebarCollapsed {
+  grid-template-columns: 44px minmax(0, 1fr);
+}
+
 .sessionBackdrop {
   display: none;
 }
@@ -278,13 +282,75 @@ summary {
   grid-template-rows: auto minmax(0, 1fr) auto auto;
   gap: 9px;
   min-height: 0;
-  padding: 10px 10px 10px 0;
+  padding: 10px 10px 10px 8px;
   overflow: hidden;
   border-radius: 0;
   border-top: none;
   border-left: none;
   border-bottom: none;
   box-shadow: none;
+}
+
+.sessionPanel.collapsed {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 0;
+  gap: 0;
+}
+
+.collapsedRail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+  padding-top: 2px;
+}
+
+.collapsedRailButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-compact);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.collapsedRailButton:hover {
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  color: var(--foreground);
+}
+
+.sidebarToggleIcon {
+  width: 18px;
+  height: 18px;
+}
+
+.sidebarCollapseButton {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-compact);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+
+.sidebarCollapseButton:hover {
+  background: color-mix(in srgb, var(--foreground) 6%, transparent);
+  color: var(--foreground);
 }
 
 .sessionPanelHeader {
@@ -3763,6 +3829,10 @@ button.sidebarProfileChip {
   .drawerCloseButton {
     display: inline-grid;
     place-items: center;
+  }
+
+  .sidebarCollapseButton {
+    display: none;
   }
 
   .transcriptPanel {
