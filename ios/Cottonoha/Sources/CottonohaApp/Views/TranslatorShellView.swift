@@ -2,16 +2,11 @@ import SwiftUI
 
 struct TranslatorShellView: View {
     @StateObject private var model: TranslatorViewModel
-    @ObservedObject var auth: BetterAuthSession
     @State private var showingLanguages = false
     @State private var showingHistory = false
 
-    init(configuration: AppConfiguration, auth: BetterAuthSession) {
-        _model = StateObject(wrappedValue: TranslatorViewModel(
-            configuration: configuration,
-            tokenSource: AuthSessionTokenSource(auth)
-        ))
-        self.auth = auth
+    init(configuration: AppConfiguration) {
+        _model = StateObject(wrappedValue: TranslatorViewModel(configuration: configuration))
     }
 
     var body: some View {
@@ -46,7 +41,7 @@ struct TranslatorShellView: View {
                 }
                 ToolbarItem {
                     NavigationLink {
-                        ProfileView(model: model, auth: auth)
+                        ProfileView(model: model)
                     } label: {
                         Image(systemName: "person.crop.circle")
                     }

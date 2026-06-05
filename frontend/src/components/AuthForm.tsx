@@ -8,7 +8,7 @@ import { authClient } from "@/lib/auth-client";
 import { safeRouterPush } from "@/lib/safe-router";
 
 type AuthMode = "sign-in" | "sign-up";
-type FieldErrors = { name?: string; email?: string; password?: string };
+type FieldErrors = { email?: string; password?: string };
 
 const SUPPORT_EMAIL = "jcllobet@gmail.com";
 const DEFAULT_NEXT = "/chat";
@@ -30,7 +30,6 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
   const next = safeNext(rawNext);
   const isSignUp = mode === "sign-up";
 
-  const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -38,7 +37,6 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
   const [formError, setFormError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<FieldErrors>({});
 
-  const nameRef = useRef<HTMLInputElement>(null);
   const emailRef = useRef<HTMLInputElement>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
 
@@ -48,17 +46,14 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
 
   function validate(): FieldErrors {
     const errs: FieldErrors = {};
-    if (isSignUp && !name.trim()) errs.name = "Enter your name.";
     if (!email.trim()) errs.email = "Enter your email.";
     else if (!isEmail(email)) errs.email = "Enter a valid email address.";
     if (!password) errs.password = "Enter your password.";
-    else if (isSignUp && password.length < 8) errs.password = "Password must be at least 8 characters.";
     return errs;
   }
 
   function focusFirstError(errs: FieldErrors) {
-    if (errs.name && nameRef.current) nameRef.current.focus();
-    else if (errs.email && emailRef.current) emailRef.current.focus();
+    if (errs.email && emailRef.current) emailRef.current.focus();
     else if (errs.password && passwordRef.current) passwordRef.current.focus();
   }
 
@@ -85,7 +80,7 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
 
     if (isSignUp) {
       await authClient.signUp.email(
-        { email, name: name.trim() || email, password },
+        { email, password },
         { onError, onSuccess }
       );
       return;
@@ -97,20 +92,16 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
     );
   }
 
-  const passwordHelpId = "password-help";
   const passwordErrorId = "password-error";
   const emailErrorId = "email-error";
-  const nameErrorId = "name-error";
-
-  const passwordDescribedBy =
-    fieldErrors.password ? passwordErrorId : isSignUp ? passwordHelpId : undefined;
+  const passwordDescribedBy = fieldErrors.password ? passwordErrorId : undefined;
 
   const nextQuery = rawNext ? `?next=${encodeURIComponent(next)}` : "";
   const switchTarget = (isSignUp ? "/sign-in" : "/sign-up") + nextQuery;
 
   return (
     <main className="authPage">
-      <section className="authCard" aria-label={isSignUp ? "Create account" : "Sign in"}>
+      <section className="authCard" aria-label={isSignUp ? "Internal access" : "Sign in"}>
         <Link aria-label="cottonoha, home" className="authBrand" href="/">
           <span className="brandMark compact" aria-hidden="true">
             <Image alt="" height={34} src="/favicon.svg" width={34} />
@@ -119,30 +110,11 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
         </Link>
         <div className="authHeader">
           <p className="panelKicker">{isSignUp ? "sign up" : "sign in"}</p>
-          <h1>{isSignUp ? "Create your account" : "Welcome back"}</h1>
-          <p>{isSignUp ? "Save your profile and conversation history." : "Sign in to continue translating."}</p>
+          <h1>{isSignUp ? "Internal access" : "Welcome back"}</h1>
+          <p>{isSignUp ? "Use the credentials configured for this build." : "Sign in to continue translating."}</p>
         </div>
 
         <form className="authForm" noValidate onSubmit={submit} aria-busy={pending}>
-          {isSignUp ? (
-            <label className="contextField">
-              Name
-              <input
-                aria-describedby={fieldErrors.name ? nameErrorId : undefined}
-                aria-invalid={fieldErrors.name ? true : undefined}
-                autoComplete="name"
-                disabled={pending}
-                name="name"
-                onChange={(event) => { setName(event.target.value); clearError("name"); }}
-                placeholder="e.g. Jane Tanaka"
-                ref={nameRef}
-                value={name}
-              />
-              {fieldErrors.name ? (
-                <span className="fieldError" id={nameErrorId}>{fieldErrors.name}</span>
-              ) : null}
-            </label>
-          ) : null}
           <label className="contextField">
             Email
             <input
@@ -182,7 +154,7 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
                 disabled={pending}
                 name="password"
                 onChange={(event) => { setPassword(event.target.value); clearError("password"); }}
-                placeholder={isSignUp ? "Create a password" : "Your password"}
+                placeholder="Your password"
                 ref={passwordRef}
                 type={showPassword ? "text" : "password"}
                 value={password}
@@ -198,9 +170,6 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
                 {showPassword ? "Hide" : "Show"}
               </button>
             </span>
-            {isSignUp && !fieldErrors.password ? (
-              <span className="hint" id={passwordHelpId}>Must be at least 8 characters.</span>
-            ) : null}
             {fieldErrors.password ? (
               <span className="fieldError" id={passwordErrorId}>{fieldErrors.password}</span>
             ) : null}
@@ -209,12 +178,12 @@ export function AuthForm({ mode }: { mode: AuthMode }) {
             <div className="errorBox" role="alert">{formError}</div>
           ) : null}
           <button className="primaryButton" disabled={pending} type="submit">
-            {pending ? (isSignUp ? "Creating account…" : "Signing in…") : isSignUp ? "Create account" : "Sign in"}
+            {pending ? "Signing in…" : isSignUp ? "Continue" : "Sign in"}
           </button>
         </form>
 
         <p className="authSwitch">
-          {isSignUp ? "Already have an account?" : "Need an account?"}{" "}
+          {isSignUp ? "Already have access?" : "Need access?"}{" "}
           <Link href={switchTarget}>{isSignUp ? "Sign in" : "Sign up"}</Link>
         </p>
       </section>

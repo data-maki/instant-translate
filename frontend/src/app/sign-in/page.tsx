@@ -1,13 +1,11 @@
 import { Suspense } from "react";
 import { AuthForm } from "@/components/AuthForm";
-import { auth } from "@/lib/auth";
+import { getSession } from "@/lib/auth";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 export default async function SignInPage() {
-  const session = await auth.api.getSession({
-    headers: await headers()
-  });
+  const session = getSession(await headers());
 
   if (session) {
     redirect("/chat");

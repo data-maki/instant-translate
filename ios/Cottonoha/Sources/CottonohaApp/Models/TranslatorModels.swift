@@ -2,17 +2,11 @@ import Foundation
 
 public struct AppConfiguration: Sendable {
     public var apiBaseURL: URL
-    public var authBaseURL: URL
-    public var authScheme: String
 
     public init(
-        apiBaseURL: URL = URL(string: "http://localhost:8000")!,
-        authBaseURL: URL = URL(string: "http://localhost:3000")!,
-        authScheme: String = "cottonoha"
+        apiBaseURL: URL = URL(string: "http://localhost:8000")!
     ) {
         self.apiBaseURL = apiBaseURL
-        self.authBaseURL = authBaseURL
-        self.authScheme = authScheme
     }
 
     var websocketURL: URL {

@@ -1,4 +1,5 @@
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -11,6 +12,7 @@ from app.languages import validate_language_pair
 from app.main import app
 from app.soniox import get_soniox_config, normalize_start_context
 from app.sessions import build_phrases, list_sessions, make_session, process_soniox_tokens
+from cli.live_transcriber.languages import SONIOX_LANGUAGES
 
 
 def test_health_and_language_defaults():
@@ -23,7 +25,16 @@ def test_health_and_language_defaults():
     languages = client.get("/languages").json()
     codes = {item["code"] for item in languages["languages"]}
     assert {"en", "ja"}.issubset(codes)
-    assert {"my", "th", "vi"}.issubset(codes)
+    assert {"my", "th", "vi", "zh"}.issubset(codes)
+
+
+def test_phrase_text_display_test_covers_every_supported_language():
+    test_file = Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib" / "phrase-text.test.ts"
+    test_source = test_file.read_text()
+    match = re.search(r"const SUPPORTED_LANGUAGE_CODES = \[(.*?)\] as const", test_source, re.S)
+    assert match is not None
+    tested_codes = set(re.findall(r'"([a-z]+)"', match.group(1)))
+    assert tested_codes == set(SONIOX_LANGUAGES)
 
 
 def test_places_context_requires_google_maps_api_key(monkeypatch):
@@ -285,6 +296,7 @@ def test_translate_context_supports_multilingual_text_targets_without_formality(
             return {"translations": [{"text": self.translated}]}
 
     translations = {
+        "ZH": "可以给我账单吗？",
         "TH": "ขอใบเสร็จได้ไหมครับ/คะ",
         "MY": "ဘေလ်ပေးလို့ရမလား။",
         "VI": "Cho tôi xin hóa đơn được không?",
@@ -296,7 +308,7 @@ def test_translate_context_supports_multilingual_text_targets_without_formality(
 
     monkeypatch.setattr(requests, "post", fake_post)
 
-    for target_language in ["th", "my", "vi"]:
+    for target_language in ["zh", "th", "my", "vi"]:
         response = TestClient(app).post(
             "/context/translate",
             json={
@@ -311,7 +323,7 @@ def test_translate_context_supports_multilingual_text_targets_without_formality(
         assert response.status_code == 200
         assert response.json()["target_translation"] == translations[target_language.upper()]
 
-    assert [item["target_lang"] for item in captured] == ["TH", "MY", "VI"]
+    assert [item["target_lang"] for item in captured] == ["ZH", "TH", "MY", "VI"]
     assert all("formality" not in item for item in captured)
 
 

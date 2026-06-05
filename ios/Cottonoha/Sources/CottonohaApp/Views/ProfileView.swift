@@ -31,7 +31,6 @@ private extension View {
 
 struct ProfileView: View {
     @ObservedObject var model: TranslatorViewModel
-    @ObservedObject var auth: BetterAuthSession
 
     var body: some View {
         List {
@@ -71,11 +70,6 @@ struct ProfileView: View {
                 )
             }
 
-            Section {
-                Button("Sign out", role: .destructive) {
-                    Task { await auth.signOut() }
-                }
-            }
         }
         .navigationTitle("Profile")
         .platformNavigationLargeTitle()

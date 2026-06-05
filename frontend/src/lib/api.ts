@@ -167,14 +167,11 @@ export function websocketUrl(token?: string) {
 }
 
 /**
- * Attach the BetterAuth bearer token. The token is the same one the server
- * issues on sign-in (BetterAuth bearer plugin) and is the only credential the
- * FastAPI backend will accept — clients never claim an identity by themselves,
- * the backend forwards this token to /api/auth/get-session for resolution.
+ * Attach the signed bearer token issued by the Next.js auth route. FastAPI
+ * forwards this token to /api/auth/get-session for resolution.
  *
- * The legacy `withUserHeader` name was misleading (it implied the client
- * decides who it is); keep `userId` as the parameter alias for now to avoid
- * touching every callsite in a single sweep, but treat it as a bearer token.
+ * Keep `userId` as the parameter alias for now to avoid touching every callsite
+ * in a single sweep, but treat it as a bearer token.
  */
 function withAuthHeader(init: RequestInit, token?: string): RequestInit {
   if (!token) return init;

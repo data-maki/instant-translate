@@ -15,15 +15,11 @@ let package = Package(
             targets: ["CottonohaCore"]
         )
     ],
-    dependencies: [
-        .package(url: "https://github.com/ouwargui/BetterAuthSwift.git", .upToNextMajor(from: "2.1.1"))
-    ],
+    dependencies: [],
     targets: [
         .target(
             name: "CottonohaCore",
-            dependencies: [
-                .product(name: "BetterAuth", package: "BetterAuthSwift")
-            ],
+            dependencies: [],
             path: "Sources/CottonohaApp",
             resources: [
                 .process("Resources")

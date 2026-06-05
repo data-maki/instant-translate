@@ -42,14 +42,13 @@ export function ProfileModal({ open, section, defaultName, onClose, onChangeSect
     getServerProfileSnapshot
   );
 
-  const [savedAt, setSavedAt] = useState(0);
+  const [savedVisible, setSavedVisible] = useState(false);
   const savedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const showSaved = savedAt > 0 && Date.now() - savedAt < SAVED_PILL_MS;
 
   function flashSaved() {
     if (savedTimer.current) clearTimeout(savedTimer.current);
-    setSavedAt(Date.now());
-    savedTimer.current = setTimeout(() => setSavedAt(0), SAVED_PILL_MS + 50);
+    setSavedVisible(true);
+    savedTimer.current = setTimeout(() => setSavedVisible(false), SAVED_PILL_MS + 50);
   }
 
   function commit(patch: Partial<TravelerProfile>) {
@@ -117,7 +116,7 @@ export function ProfileModal({ open, section, defaultName, onClose, onChangeSect
               </p>
             </div>
             <span
-              className={`profileSavedPill${showSaved ? " profileSavedPill--on" : ""}`}
+              className={`profileSavedPill${savedVisible ? " profileSavedPill--on" : ""}`}
               role="status"
               aria-live="polite"
             >

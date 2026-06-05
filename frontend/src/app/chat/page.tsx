@@ -1,6 +1,6 @@
 import { TranslatorAppClient } from "@/components/TranslatorAppClient";
 import { fetchLanguages, fetchSessions, Language, SessionSummary } from "@/lib/api";
-import { auth } from "@/lib/auth";
+import { getSession } from "@/lib/auth";
 import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
@@ -8,20 +8,15 @@ export const dynamic = "force-dynamic";
 const INITIAL_SESSION_LIMIT = 8;
 
 export default async function ChatPage() {
-  const session = await auth.api.getSession({
-    headers: await headers()
-  });
+  const session = getSession(await headers());
 
   if (!session) {
     redirect("/sign-in?next=/chat");
   }
 
-  const userId = session.user.id;
   const userName = session.user.name || session.user.email || "";
-  // The BetterAuth bearer plugin makes this token usable as
-  // `Authorization: Bearer <token>` against any service that calls
-  // /api/auth/get-session to validate it. We forward it to the FastAPI
-  // backend instead of letting the client claim an identity.
+  // Forward the signed auth token so FastAPI can resolve it via
+  // /api/auth/get-session instead of trusting a client-supplied user id.
   const authToken = session.session.token;
   let initialLanguages: Language[] = [];
   let initialSourceLanguages = ["ja"];

@@ -1,9 +1,8 @@
 "use client";
 
-import { createContext, useContext, useLayoutEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { createContext, useContext, useMemo, useState, useSyncExternalStore } from "react";
 import {
   loadThemePreference,
-  resolveTheme,
   saveThemePreference,
   themeClass,
   type ResolvedTheme,
@@ -18,10 +17,22 @@ type ThemeContextValue = {
 
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
+function applyThemeClass(resolved: ResolvedTheme): void {
+  const root = document.documentElement;
+  root.classList.remove("theme-light", "theme-dark");
+  root.classList.add(themeClass(resolved));
+}
+
 function subscribeSystemTheme(onStoreChange: () => void): () => void {
   const mq = window.matchMedia("(prefers-color-scheme: dark)");
-  mq.addEventListener("change", onStoreChange);
-  return () => mq.removeEventListener("change", onStoreChange);
+  function handleChange() {
+    if (loadThemePreference() === "system") {
+      applyThemeClass(getSystemThemeSnapshot());
+    }
+    onStoreChange();
+  }
+  mq.addEventListener("change", handleChange);
+  return () => mq.removeEventListener("change", handleChange);
 }
 
 function getSystemThemeSnapshot(): ResolvedTheme {
@@ -29,21 +40,11 @@ function getSystemThemeSnapshot(): ResolvedTheme {
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [preference, setPreferenceState] = useState<ThemePreference>("system");
+  const [preference, setPreferenceState] = useState<ThemePreference>(() => loadThemePreference());
   const systemTheme = useSyncExternalStore(subscribeSystemTheme, getSystemThemeSnapshot, () => "light" as ResolvedTheme);
-
-  useLayoutEffect(() => {
-    setPreferenceState(loadThemePreference());
-  }, []);
 
   const resolved: ResolvedTheme =
     preference === "system" ? systemTheme : preference === "dark" ? "dark" : "light";
-
-  useLayoutEffect(() => {
-    const root = document.documentElement;
-    root.classList.remove("theme-light", "theme-dark");
-    root.classList.add(themeClass(resolved));
-  }, [resolved]);
 
   const value = useMemo(
     () => ({
@@ -52,6 +53,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       setPreference(next: ThemePreference) {
         setPreferenceState(next);
         saveThemePreference(next);
+        applyThemeClass(next === "system" ? getSystemThemeSnapshot() : next);
       }
     }),
     [preference, resolved]

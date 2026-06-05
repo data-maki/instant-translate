@@ -5,9 +5,9 @@ import type { Language, Phrase } from "@/lib/api";
 import {
   adaptationKey,
   buildPhraseDisplayPairs,
-  firstNonEnglishTextLanguage,
   joinDisplayLines,
   phraseSpeakReady,
+  phraseSourceLanguage,
   phraseTargetText,
   type PhraseAdaptation,
   type PhrasePair
@@ -72,7 +72,7 @@ export function PhraseCard({
   const speakerLabel = speakerDrafts[speakerId]?.label.trim() || phrase.speaker_label || fallbackSpeakerLabel(speakerId);
   const speakerInitials = speakerDrafts[speakerId]?.initials?.trim() || initialsFromSpeakerName(speakerLabel, speakerId);
   const isEditingSpeaker = Boolean(speakerId && editingSpeaker === speakerId);
-  const sourceLang = phrase.source_lang || firstNonEnglishTextLanguage(phrase) || activeLeftLanguage;
+  const sourceLang = phraseSourceLanguage(phrase, activeLeftLanguage);
   const isTargetSource = sourceLang === targetLanguage;
   const leftLanguage = isTargetSource
     ? activeLeftLanguage
