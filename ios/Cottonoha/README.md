@@ -5,7 +5,6 @@ Native SwiftUI client for the existing cottonoha backend.
 ## What Is Included
 
 - First-run onboarding screens with the same mecha/Japan visual language as the web landing page.
-- Better Auth email sign-in/sign-up flow, no landing page.
 - Language setup for spoken languages and target language.
 - Live chat transcript view with original text and translations.
 - Session history list, load, rename, and delete.
@@ -15,7 +14,7 @@ Native SwiftUI client for the existing cottonoha backend.
 
 ## First-Run Onboarding
 
-The app shows onboarding before sign-in the first time it launches. Completion is stored with:
+The app shows onboarding the first time it launches. Completion is stored with:
 
 ```swift
 @AppStorage("cottonoha.hasCompletedOnboarding.v1")
@@ -28,28 +27,23 @@ To test onboarding again in the simulator, delete the Cottonoha app from the sim
 The default local URLs are:
 
 - API: `http://localhost:8000`
-- Web: `http://localhost:3000`
-
 For the iOS Simulator, `localhost` points to your Mac, so the defaults work.
 
-For an iPhone on the same Wi-Fi network, `localhost` points to the phone, not your Mac. Run the backend on all interfaces and set both app URLs to your Mac LAN IP:
+For an iPhone on the same Wi-Fi network, `localhost` points to the phone, not your Mac. Run the backend on all interfaces and set the app URL to your Mac LAN IP:
 
 ```bash
 uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port 8000 --reload
-pnpm dev
 ```
 
 Then configure the app like this:
 
 ```swift
 AppConfiguration(
-    apiBaseURL: URL(string: "http://192.168.1.25:8000")!,
-    authBaseURL: URL(string: "http://192.168.1.25:3000")!,
-    authScheme: "cottonoha"
+    apiBaseURL: URL(string: "http://192.168.1.25:8000")!
 )
 ```
 
-The FastAPI CORS config affects browser requests, not native URLSession requests. Better Auth Swift sends the app scheme as the `Origin` header, so the frontend Better Auth config includes `cottonoha://` in `trustedOrigins`.
+The FastAPI CORS config affects browser requests, not native URLSession requests.
 
 ## Launch In Xcode
 
@@ -101,7 +95,6 @@ xcodebuild -version
 The app uses native `Logger`/`OSLog` with subsystem `app.cottonoha.ios` and these categories:
 
 - `app`
-- `auth`
 - `network`
 - `realtime`
 - `audio`
@@ -115,7 +108,7 @@ xcrun simctl spawn booted log stream \
   --style compact
 ```
 
-The log lines intentionally avoid user text, email addresses, auth tokens, and audio payloads.
+The log lines intentionally avoid user text and audio payloads.
 
 ## Recreate The Xcode Project Manually
 
@@ -161,9 +154,7 @@ struct CottonohaIOSApp: App {
         WindowGroup {
             CottonohaRootView(
                 configuration: AppConfiguration(
-                    apiBaseURL: URL(string: "http://192.168.1.25:8000")!,
-                    authBaseURL: URL(string: "http://192.168.1.25:3000")!,
-                    authScheme: "cottonoha"
+                    apiBaseURL: URL(string: "http://192.168.1.25:8000")!
                 )
             )
         }
@@ -224,7 +215,7 @@ If testing on a physical iPhone with a LAN IP such as `192.168.1.25`, either tem
 
 or add a specific ATS exception for your Mac hostname/domain. Do not ship production builds with arbitrary HTTP loads.
 
-If you later add social/OAuth auth callbacks, also register the `cottonoha` URL scheme under the app target `Info -> URL Types`.
+If you later add social/OAuth auth callbacks, register the callback URL scheme under the app target `Info -> URL Types`.
 
 ## Test Checklist
 
@@ -235,8 +226,6 @@ Start the local servers first:
 source venv/bin/activate
 uvicorn app.main:app --app-dir backend --host 127.0.0.1 --port 8000 --reload
 
-# Terminal 2
-pnpm dev
 ```
 
 For physical device testing, use `--host 0.0.0.0` for the backend and your Mac LAN IP in `AppConfiguration`.
@@ -245,13 +234,12 @@ Then in Xcode:
 
 1. Select an iPhone simulator or your connected iPhone.
 2. Press `Cmd+R`.
-3. Sign up or sign in.
-4. Confirm the language rail loads `JA -> EN`.
-5. Tap `Start realtime` or `Start session`.
-6. Accept microphone permission.
-7. Speak a short English/Japanese phrase.
-8. Confirm transcript bubbles appear and the bottom mic/speaker controls respond.
-9. Tap History and Profile to confirm those sheets open.
+3. Confirm the language rail loads `JA -> EN`.
+4. Tap `Start realtime` or `Start session`.
+5. Accept microphone permission.
+6. Speak a short English/Japanese phrase.
+7. Confirm transcript bubbles appear and the bottom mic/speaker controls respond.
+8. Tap History and Profile to confirm those sheets open.
 
 ## Command-Line Verification
 

@@ -22,12 +22,29 @@ export function joinDisplayLines(values: Array<string | undefined | null>): stri
 }
 
 export function firstNonEnglishTextLanguage(phrase: Phrase): string {
-  return Object.keys(phrase.texts).find((code) => code !== ENGLISH_LANGUAGE) || "";
+  return Object.keys(phrase.texts).find((code) => code !== ENGLISH_LANGUAGE && phrase.texts[code]?.trim()) || "";
 }
 
 export function firstNonEnglishText(phrase: Phrase): string {
   const code = firstNonEnglishTextLanguage(phrase);
   return code ? phrase.texts[code] || "" : "";
+}
+
+export function phraseSourceLanguage(phrase: Phrase, preferredLanguage = ""): string {
+  const explicit = (phrase.source_lang || "").trim().toLowerCase();
+  if (explicit && phrase.texts[explicit]?.trim()) {
+    return explicit;
+  }
+
+  const preferred = preferredLanguage.trim().toLowerCase();
+  if (preferred && phrase.texts[preferred]?.trim()) {
+    return preferred;
+  }
+
+  return firstNonEnglishTextLanguage(phrase)
+    || Object.keys(phrase.texts).find((code) => phrase.texts[code]?.trim())
+    || explicit
+    || preferred;
 }
 
 export function adaptationKey(phrase: Phrase, targetLanguage = ""): string {
@@ -91,6 +108,21 @@ function phraseRomanization(phrase: Phrase, langCode: string): string {
   return "";
 }
 
+function phraseSourceText(phrase: Phrase, sourceLanguage: string): string {
+  return phrase.texts[sourceLanguage] || "";
+}
+
+function phraseTranslationText(
+  phrase: Phrase,
+  sourceLanguage: string,
+  translationLanguage: string,
+  adaptations: Record<string, PhraseAdaptation>
+): string {
+  if (!translationLanguage || translationLanguage === sourceLanguage) return "";
+  const adaptation = adaptations[adaptationKey(phrase, translationLanguage)];
+  return phrase.texts[translationLanguage] || adaptation?.target_translation || "";
+}
+
 export function buildPhraseDisplayPairs({
   phrases,
   adaptations,
@@ -111,24 +143,26 @@ export function buildPhraseDisplayPairs({
   showRomaji: boolean;
 }): PhrasePair[] {
   return phrases.map((item) => {
-    const itemSourceLang = item.source_lang || firstNonEnglishTextLanguage(item) || activeLeftLanguage;
-    const romaji = itemSourceLang === leftLanguage || isTargetSource ? phraseRomanization(item, leftLanguage) : "";
+    const itemSourceLang = phraseSourceLanguage(item, activeLeftLanguage);
+    const sourceText = phraseSourceText(item, itemSourceLang);
+    const translationLanguage = itemSourceLang === targetLanguage ? leftLanguage : targetLanguage;
+    const translatedText = phraseTranslationText(item, itemSourceLang, translationLanguage, adaptations);
+    const romaji = phraseRomanization(item, itemSourceLang);
 
     if (isTargetSource) {
-      const englishText = phraseShownTargetText(item, targetLanguage, leftLanguage, adaptations, showEnhancedEnglish);
-      const otherLanguageText = phraseLeftText(item, leftLanguage, targetLanguage, adaptations);
       return {
-        text: englishText,
-        translation: showRomaji && romaji ? romaji : otherLanguageText,
+        text: showEnhancedEnglish && itemSourceLang === ENGLISH_LANGUAGE
+          ? adaptations[adaptationKey(item, leftLanguage)]?.source_rewrite || sourceText
+          : sourceText,
+        translation: showRomaji && romaji ? romaji : translatedText,
         translationRomaji: showRomaji || !romaji ? undefined : romaji
       };
     }
 
-    const originalText = phraseLeftText(item, leftLanguage, targetLanguage, adaptations);
     return {
-      text: showRomaji && romaji ? romaji : originalText,
+      text: showRomaji && romaji ? romaji : sourceText,
       romaji: showRomaji ? "" : romaji,
-      translation: phraseTargetText(item, targetLanguage, adaptations)
+      translation: translatedText
     };
   });
 }

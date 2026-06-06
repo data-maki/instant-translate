@@ -6,12 +6,8 @@
     "build": "pnpm --filter cottonoha-web build",
     "dev": "pnpm --filter cottonoha-web dev",
     "lint": "pnpm --filter cottonoha-web lint",
+    "test:phrase-text": "pnpm --filter cottonoha-web test:phrase-text",
     "typecheck": "pnpm --filter cottonoha-web typecheck"
   },
-  "packageManager": "pnpm@10.33.0",
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "better-sqlite3"
-    ]
-  }
+  "packageManager": "pnpm@10.33.0"
 }

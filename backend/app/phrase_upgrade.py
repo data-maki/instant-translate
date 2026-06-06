@@ -14,6 +14,7 @@ DEEPL_FORMALITY_TARGETS = {"DE", "ES", "FR", "IT", "JA", "NL", "PL", "PT-BR", "P
 LANGUAGE_NAMES = {
     "en": "English",
     "ja": "Japanese",
+    "zh": "Chinese",
     "my": "Burmese",
     "th": "Thai",
     "vi": "Vietnamese",

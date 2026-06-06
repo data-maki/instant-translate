@@ -287,8 +287,15 @@ export function TranslatorApp({
   const selectedPreset = getAudiencePreset(audiencePreset);
   const sessionIntent = selectedPreset.intent;
   const contextBundle = useMemo(
-    () => buildContextBundle(context, audiencePreset, deeplFormality, travelerProfile, sessionPlaceContext),
-    [context, audiencePreset, deeplFormality, travelerProfile, sessionPlaceContext]
+    () => buildContextBundle(
+      context,
+      audiencePreset,
+      deeplFormality,
+      travelerProfile,
+      sessionPlaceContext,
+      [...sourceALanguages, sourceB]
+    ),
+    [context, audiencePreset, deeplFormality, travelerProfile, sessionPlaceContext, sourceALanguages, sourceB]
   );
   const [status, setStatus] = useState<AppStatus>(initialLoadError ? "error" : "idle");
   const [error, setError] = useState(initialLoadError);
@@ -3214,31 +3221,33 @@ function buildContextBundle(
   presetId: string,
   deeplFormality: DeepLFormality,
   profile: TravelerProfile,
-  placeContext: SessionPlaceContext
+  placeContext: SessionPlaceContext,
+  languageScope: string[]
 ): ContextBundle {
   const now = new Date();
   const hour = now.getHours();
   const timeContext = hour < 5 ? "late night" : hour < 11 ? "morning" : hour < 17 ? "afternoon" : "evening";
   const preset = getAudiencePreset(presetId);
   const intent = preset.intent;
+  const includeJapaneseContext = languageScope.includes("ja");
   const effectiveFormality = effectiveDeepLFormality(deeplFormality, preset);
   const inferredPoi = placeContext.poi_type.trim() || inferPoiType(intent);
   const locationEntries = locationGeneralEntries(placeContext.location_context);
   const general = compactGeneral([
-    { key: "domain", value: "Travel conversation in Japan" },
+    { key: "domain", value: includeJapaneseContext ? "Travel conversation in Japan" : "Travel conversation" },
     { key: "session_intent", value: intent },
     { key: "setting", value: inferredPoi },
     { key: "local_time", value: timeContext },
     { key: "date", value: now.toISOString().slice(0, 10) },
     placeContext.location_hint ? { key: "location", value: placeContext.location_hint } : null,
     profileWesternFullName(profile) ? { key: "traveler_name", value: profileWesternFullName(profile) } : null,
-    profile.first_name_katakana.trim()
+    includeJapaneseContext && profile.first_name_katakana.trim()
       ? { key: "traveler_first_name_katakana", value: profile.first_name_katakana.trim() }
       : null,
-    profile.last_name_katakana.trim()
+    includeJapaneseContext && profile.last_name_katakana.trim()
       ? { key: "traveler_last_name_katakana", value: profile.last_name_katakana.trim() }
       : null,
-    profileKatakanaFullDisplay(profile)
+    includeJapaneseContext && profileKatakanaFullDisplay(profile)
       ? { key: "traveler_name_katakana", value: profileKatakanaFullDisplay(profile) }
       : null,
     profile.age ? { key: "traveler_age", value: profile.age } : null,
@@ -3262,11 +3271,11 @@ function buildContextBundle(
     ...splitListText(profile.nearby_places),
     ...splitListText(placeContext.places),
     ...splitListText(placeContext.terms),
-    ...baseTermsForIntent(intent, inferredPoi)
+    ...(includeJapaneseContext ? baseTermsForIntent(intent, inferredPoi) : [])
   ]);
   const translationTerms = dedupeTranslationTerms([
     ...parseTranslationTerms(placeContext.translation_preferences),
-    ...baseTranslationTermsForIntent(intent, inferredPoi)
+    ...(includeJapaneseContext ? baseTranslationTermsForIntent(intent, inferredPoi) : [])
   ]).slice(0, 20);
   const text = [
     stripProfileBlock(stripRegisterBlock(baseContext)).trim(),

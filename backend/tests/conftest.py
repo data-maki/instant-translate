@@ -1,9 +1,9 @@
 """Test fixtures.
 
 Two overrides run for every endpoint test so they don't need to stand up a
-BetterAuth server or backfill user_id on every fixture:
+auth server or backfill user_id on every fixture:
 
-1. `require_user` is replaced with a constant `TEST_USER_ID` — the BetterAuth
+1. `require_user` is replaced with a constant `TEST_USER_ID` — the auth
    round-trip never runs.
 2. `session_belongs_to` is forced to True — ownership checks pass for any
    `user_id`, so existing tests that create sessions without a stored owner

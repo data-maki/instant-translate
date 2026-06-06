@@ -808,7 +808,7 @@ def _dedupe(values: list[str]) -> list[str]:
 
 def _require_owner(state: dict[str, Any] | None, user_id: str) -> None:
     """Enforce that the authenticated user owns this session. The user_id here
-    always comes from a verified BetterAuth session — never from a client
+    always comes from a verified auth session — never from a client
     header — so we don't accept `None`. Sessions without a stored owner are
     treated as not-yours-to-see; that's a conservative default that avoids the
     pre-auth backdoor."""

@@ -1,27 +1,19 @@
 import Foundation
 
-/// Resolves the current BetterAuth bearer token at call time. Returning nil
-/// is allowed for unauthenticated public endpoints; the backend rejects
-/// missing/invalid tokens on protected endpoints with 401.
-public typealias BearerTokenProvider = @Sendable () async -> String?
-
 public actor CottonohaAPIClient {
     private let configuration: AppConfiguration
     private let session: URLSession
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
-    private let tokenProvider: BearerTokenProvider?
 
     public init(
         configuration: AppConfiguration,
-        session: URLSession = .shared,
-        tokenProvider: BearerTokenProvider? = nil
+        session: URLSession = .shared
     ) {
         self.configuration = configuration
         self.session = session
         self.decoder = JSONDecoder()
         self.encoder = JSONEncoder()
-        self.tokenProvider = tokenProvider
     }
 
     public func fetchLanguages() async throws -> LanguagesResponse {
@@ -120,9 +112,6 @@ public actor CottonohaAPIClient {
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try encoder.encode(body)
-        }
-        if let token = await tokenProvider?(), !token.isEmpty {
-            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         AppLog.network.info("API request \(method, privacy: .public) \(path, privacy: .public)")
         let (data, response) = try await session.data(for: request)

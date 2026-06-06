@@ -13,34 +13,17 @@ public actor WebSocketTranscriptionClient {
 
     public func connect(
         startMessage: StartTranscriptionMessage,
-        bearerToken: String? = nil,
         onEvent: @escaping @Sendable (TranscriptEvent) async -> Void,
         onError: @escaping @Sendable (String) async -> Void
     ) async throws {
-        // The browser WebSocket API can't set arbitrary headers, so the
-        // backend accepts the bearer token as a `?token=...` query param.
-        // We match that on iOS too so there's a single contract.
-        let connectURL = Self.attachToken(to: url, token: bearerToken)
-        let socket = session.webSocketTask(with: connectURL)
+        let socket = session.webSocketTask(with: url)
         task = socket
         socket.resume()
-        AppLog.realtime.info("WebSocket connecting to \(connectURL.absoluteString, privacy: .public)")
+        AppLog.realtime.info("WebSocket connecting to \(self.url.absoluteString, privacy: .public)")
         try await sendJSON(startMessage)
         Task {
             await self.receiveLoop(onEvent: onEvent, onError: onError)
         }
-    }
-
-    private static func attachToken(to url: URL, token: String?) -> URL {
-        guard let token, !token.isEmpty,
-              var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
-            return url
-        }
-        var items = components.queryItems ?? []
-        items.removeAll { $0.name == "token" }
-        items.append(URLQueryItem(name: "token", value: token))
-        components.queryItems = items
-        return components.url ?? url
     }
 
     public func sendAudio(_ data: Data) async {

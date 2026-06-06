@@ -1,35 +1,6 @@
 import Foundation
 import Combine
 
-/// Lets the view model read the BetterAuth bearer token without owning the
-/// auth session. Implementations must be safe to read from any actor — the
-/// API client calls this on its own actor before issuing a request.
-public protocol BearerTokenSource: Sendable {
-    func currentToken() async -> String?
-}
-
-public struct NoBearerToken: BearerTokenSource {
-    public init() {}
-    public func currentToken() async -> String? { nil }
-}
-
-/// Reads `bearerToken` from a `BetterAuthSession` on the main actor.
-public struct AuthSessionTokenSource: BearerTokenSource {
-    private let read: @Sendable () async -> String?
-
-    public init(_ session: BetterAuthSession) {
-        // Capture the session by reference but hop to the main actor to read
-        // its @Published bearerToken safely.
-        self.read = { [weak session] in
-            await MainActor.run { session?.bearerToken }
-        }
-    }
-
-    public func currentToken() async -> String? {
-        await read()
-    }
-}
-
 @MainActor
 public final class TranslatorViewModel: ObservableObject {
     public enum Status: String, Sendable {
@@ -77,20 +48,10 @@ public final class TranslatorViewModel: ObservableObject {
     private var shouldSendAudio = true
     private var autoImproveTask: Task<Void, Never>?
 
-    private let tokenSource: BearerTokenSource
-
-    public init(configuration: AppConfiguration, tokenSource: BearerTokenSource = NoBearerToken()) {
+    public init(configuration: AppConfiguration) {
         self.configuration = configuration
-        self.tokenSource = tokenSource
-        self.api = CottonohaAPIClient(
-            configuration: configuration,
-            tokenProvider: { await tokenSource.currentToken() }
-        )
+        self.api = CottonohaAPIClient(configuration: configuration)
         self.profile = profileStore.load()
-    }
-
-    fileprivate func currentBearerToken() async -> String? {
-        await tokenSource.currentToken()
     }
 
     public var isLive: Bool {
@@ -308,10 +269,8 @@ public final class TranslatorViewModel: ObservableObject {
             )
             startMessage.sessionName = resumeSessionName
 
-            let token = await currentBearerToken()
             try await socket.connect(
                 startMessage: startMessage,
-                bearerToken: token,
                 onEvent: { [weak self] event in
                     await self?.handle(event)
                 },
