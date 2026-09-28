@@ -48,7 +48,7 @@ function harness(active = '') {
     adaptationRequestsRef: ref(new Set()), shouldFollowFeedRef: ref(true),
     cancelAutoImprove: noop, clearProviderSignals: noop, clearRealtimeCaptionDrafts: noop,
     resetAdaptations: noop, startDurationTimer: noop, stopDurationTimer: noop,
-    resetSpeechQueue: noop,
+    resetSpeechQueue: noop, ttsModeRef: ref('push'), warmTtsPlayback: async () => {},
     stopRealtimeSessions: noop, refreshSessions: noop, scheduleAutoImprove: noop,
     stripProfileBlock: x => x, stripRegisterBlock: x => x, durationFromPhrases: () => 0,
     websocketUrl: () => 'ws://test.invalid', WebSocket: Socket,

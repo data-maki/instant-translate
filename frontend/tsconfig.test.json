@@ -17,6 +17,8 @@
     "src/lib/phrase-text.ts",
     "src/lib/phrase-text.test.ts",
     "src/lib/autospeak.ts",
-    "src/lib/autospeak.test.ts"
+    "src/lib/autospeak.test.ts",
+    "src/lib/tts-cache.test.ts",
+    "src/lib/tts-playback.test.ts"
   ]
 }

@@ -6,11 +6,12 @@ We use both, but for different moments in the workflow.
 
 | Path | Current model | When it runs | What it does |
 |---|---|---|---|
-| Live session | Soniox realtime `stt-rt-v4` | While the browser is recording | Live transcription, language ID, speaker diarization, endpoint detection, and two-way JA/EN draft translation |
+| Live session | Soniox realtime `stt-rt-v4` | While the browser is recording | Live transcription, language ID, speaker diarization, and two-way translation for the selected language pair; endpoint detection stays off to preserve speaker context |
 | Live phrase adaptation | Groq `GROQ_REWRITE_MODEL`, default `qwen/qwen3-32b` | After finalized English phrases appear | Rewrites the English utterance into clearer, tone-aware English for Soniox to translate |
 | Improve transcript, speaker step | Soniox async `stt-async-v4` | After a session has saved audio | Re-runs diarization/transcription over the full audio file, then remaps speaker IDs onto the current transcript tokens |
 | Improve transcript, translation step | OpenAI `gpt-4o` | After a session has transcript tokens | Revises the Soniox draft translations while preserving the transcript shape |
 | Comparison record | See `docs/evaluation-decision-record.md` | Documentation only | Historical vendor comparison; not wired into the app runtime |
+| Web autospeak | ElevenLabs `eleven_flash_v2_5` where supported, otherwise `eleven_v3` | Eligible finalized English turns | Streamed PCM through WebRTC echo cancellation, one-reply lookahead, and bounded audio caching; see [latency measurements](autospeak-latency.md) |
 
 So the default app is Soniox realtime. The only post-processing UI action is `Improve transcript`; internally it runs the speaker step first and the translation step second.
 
@@ -63,7 +64,7 @@ Current limitation: live Groq/Qwen adaptation is display-only. It runs after Son
         | - model: stt-rt-v4
         | - enable_language_identification: true
         | - enable_speaker_diarization: true
-        | - enable_endpoint_detection: true
+        | - enable_endpoint_detection: false
         | - translation: two_way
         | - context: structured Soniox context when available
         v

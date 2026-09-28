@@ -5,7 +5,7 @@ import { test } from "node:test";
 import ts from "typescript";
 import { AutoSpeakQueue } from "../.test-build/lib/autospeak.js";
 
-const names = ["changeTtsMode", "speakPhraseText", "playSpeechItem", "speechOptions", "getSpeechQueue", "resetSpeechQueue", "refreshAutoSpeak", "maybeAutoSpeakPhrases", "setTtsStatusFor"];
+const names = ["changeTtsMode", "speakPhraseText", "prepareSpeechItem", "playSpeechItem", "speechOptions", "getSpeechQueue", "resetSpeechQueue", "refreshAutoSpeak", "maybeAutoSpeakPhrases", "setTtsStatusFor"];
 const source = ts.createSourceFile("TranslatorApp.tsx", readFileSync("src/components/TranslatorApp.tsx", "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const functions = new Map();
 function visit(node) {
@@ -23,7 +23,7 @@ function deferred() {
   return { promise, resolve };
 }
 async function flush() { for (let i = 0; i < 10; i += 1) await Promise.resolve(); }
-const result = { mime_type: "audio/mpeg", audio_base64: "test" };
+const result = {};
 function phrase(id, source = "en") {
   return { id, source_lang: source, texts: { en: `English ${id}`, bg: `Български ${id}` }, is_final: true };
 }
@@ -35,12 +35,13 @@ function harness(phrases) {
     ttsQueueRef: { current: null }, ttsAudioRef: { current: null }, adaptationsRef: { current: {} },
     ttsSpeakLanguage: "bg", travelerProfile: {}, userId: "test-user", setTtsMode: () => {},
     setTtsStatus: update => Object.assign(statuses, { value: update(statuses.value || {}) }),
-    generateTts: (payload, _user, signal) => {
+    warmTtsPlayback: async () => {},
+    generateTtsStream: (payload, _user, signal) => {
       const request = { ...deferred(), payload, signal };
       requests.push(request);
       return request.promise;
     },
-    playTtsThroughAec: async (_src, signal) => {
+    playPcmTtsThroughAec: async (_src, signal) => {
       const done = deferred();
       const playback = { done: done.promise, finish: done.resolve, stopped: false, stop() { this.stopped = true; done.resolve(); } };
       audio.push(playback);
@@ -60,7 +61,8 @@ test("toggle starts at the latest box, queues new English turns, and ignores Bul
   h.requests[0].resolve(result);
   await flush();
   h.api.maybeAutoSpeakPhrases([...history, phrase("reply", "bg"), phrase("new")], {});
-  assert.equal(h.requests.length, 1);
+  assert.equal(h.requests.length, 2); // Next reply synthesizes during playback.
+  assert.equal(h.audio.length, 1); // It cannot speak until the current one ends.
   h.audio[0].finish();
   await flush();
   assert.equal(h.requests[1].payload.text, "Български new");

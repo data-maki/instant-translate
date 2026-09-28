@@ -11,7 +11,7 @@ import {
   fetchPlacesContext,
   fetchSessionDetail,
   fetchSessions,
-  generateTts,
+  generateTtsStream,
   Language,
   Phrase,
   rediarizeSession,
@@ -47,7 +47,7 @@ import {
   speakerEditableName,
   speakerKey
 } from "@/lib/speaker";
-import { playTtsThroughAec, type TtsPlayback } from "@/lib/tts-playback";
+import { playPcmTtsThroughAec, warmTtsPlayback, type TtsPlayback } from "@/lib/tts-playback";
 import { AutoSpeakQueue, type SpeechItem, type SpeechOptions } from "@/lib/autospeak";
 
 type AppStatus =
@@ -595,7 +595,10 @@ export function TranslatorApp({
   function changeTtsMode(mode: TtsMode) {
     ttsModeRef.current = mode;
     setTtsMode(mode);
-    if (mode === "auto") getSpeechQueue().enable(phrases, speechOptions());
+    if (mode === "auto") {
+      void warmTtsPlayback().catch(() => {});
+      getSpeechQueue().enable(phrases, speechOptions());
+    }
     else getSpeechQueue().disable();
     if (typeof window !== "undefined") {
       try {
@@ -624,18 +627,23 @@ export function TranslatorApp({
     const cleanText = (text || "").replace(/\s+/g, " ").trim();
     if (!cleanText) return;
     const language = (languageCode || "").trim().toLowerCase() || ttsSpeakLanguage;
+    void warmTtsPlayback().catch(() => {});
     getSpeechQueue().speakNow({ key, text: cleanText, language }, speechOptions());
   }
 
-  async function playSpeechItem(item: SpeechItem, signal: AbortSignal): Promise<TtsPlayback> {
+  function prepareSpeechItem(item: SpeechItem, signal: AbortSignal): Promise<Response> {
     const profileVoice = travelerProfile.tts_voice_id?.trim();
-    const result = await generateTts({
+    return generateTtsStream({
       text: item.text,
       target_language: item.language,
       voice_id: item.language === "ja" && profileVoice ? profileVoice : undefined
     }, userId, signal);
+  }
+
+  async function playSpeechItem(item: SpeechItem, signal: AbortSignal, prepared?: Promise<Response>): Promise<TtsPlayback> {
+    const result = await (prepared ?? prepareSpeechItem(item, signal));
     signal.throwIfAborted();
-    const playback = await playTtsThroughAec(`data:${result.mime_type};base64,${result.audio_base64}`, signal);
+    const playback = await playPcmTtsThroughAec(result, signal);
     if (signal.aborted) {
       playback.stop();
       signal.throwIfAborted();
@@ -652,6 +660,8 @@ export function TranslatorApp({
       language: ttsSpeakLanguage,
       latency: ttsLatencyRef.current,
       adaptations: adaptationsSnapshot,
+      prepare: prepareSpeechItem,
+      preparationKey: JSON.stringify([userId, travelerProfile.tts_voice_id]),
       play: playSpeechItem,
       status: setTtsStatusFor
     };
@@ -841,6 +851,7 @@ export function TranslatorApp({
 
   async function start(forceRealtime = openAIRealtimeEnabled) {
     if (postProcessing) return;
+    if (ttsModeRef.current === "auto") void warmTtsPlayback().catch(() => {});
     // A pending history response belongs to the view that requested it.
     // Replacing the cache object invalidates that request without losing cache entries.
     sessionDetailCacheRef.current = { ...sessionDetailCacheRef.current };
