@@ -250,7 +250,7 @@ function SpeechText({
   onSpeak: SpeakHandler;
   state?: TtsPlaybackState;
 }) {
-  const action = state === "error" ? "Retry" : state === "playing" ? "Replay" : "Play";
+  const action = state === "error" ? "Retry" : state === "playing" ? "Replay" : state === "loading" ? "Preparing audio for" : "Play";
   const hue = languageHue(code);
   const style = { "--language-color": hue === undefined
     ? "var(--muted)"
@@ -281,14 +281,34 @@ function SpeechText({
     >
       <span aria-hidden="true" className="phraseLanguageLabel">
         {code.toUpperCase()}
-        {speech ? <span className={`ttsSpeakerButton ${state || ""}`}>
-          {state === "loading" ? "..." : state === "playing" ? "🔊" : state === "error" ? "⚠︎" : "🔈"}
-        </span> : null}
+        {speech ? <SpeechPlaybackIcon state={state} /> : null}
       </span>{"\u00a0"}
       <span className="phraseTextContent">
         <span className={translation ? "bubbleTranslation" : "bubbleOriginal"}>{text || "..."}</span>
         {reading ? <> <span className="inlineRomaji" lang={`${code}-Latn`} title="Latin reading. Tap to hear the pronunciation.">[{reading}]</span></> : null}
       </span>
+    </span>
+  );
+}
+
+function SpeechPlaybackIcon({ state }: { state?: TtsPlaybackState }) {
+  return (
+    <span className={`ttsSpeakerButton ${state || ""}`}>
+      {state === "playing" ? (
+        <span className="ttsWaveform">
+          <span /><span /><span /><span />
+        </span>
+      ) : (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" focusable="false">
+          {state === "error" ? <>
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 7v6m0 4h.01" />
+          </> : <>
+            <path d="M11 4 6 8H3v8h3l5 4V4Z" />
+            <path d="M15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14" />
+          </>}
+        </svg>
+      )}
     </span>
   );
 }
