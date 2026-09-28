@@ -25,6 +25,9 @@ async function ensureLoopback(): Promise<Loopback> {
     if (loopback.context.state === "suspended") {
       await loopback.context.resume();
     }
+    // A connected remote track can still be silent: autoplay may leave the
+    // final output element paused. Explicit playback also surfaces rejection.
+    await loopback.sink.play();
     return loopback;
   }
   if (loopbackPromise) return loopbackPromise;
@@ -62,6 +65,7 @@ async function ensureLoopback(): Promise<Loopback> {
     await outbound.setRemoteDescription(answer);
 
     loopback = { context, destination, sink };
+    await sink.play();
     return loopback;
   })();
 

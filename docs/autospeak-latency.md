@@ -30,6 +30,10 @@ Repeated text + same user/language/voice → memory cache → WebRTC audio
   waiting for a complete compressed file or decoding it in the browser.
 - Playback remains on the WebRTC echo-reference path. PCM chunks are scheduled in
   order with 40 ms of initial buffering. A late network chunk can still cause a gap.
+- Starting or reusing playback explicitly awaits the final audio element's
+  `play()` call. A connected WebRTC track can carry speech while browser autoplay
+  leaves its output paused; received samples alone are not proof of playback.
+  A rejected output start reaches the existing retry/error state.
 - The queue prepares at most one future eligible reply. A draft translation must
   remain unchanged for 150 ms before synthesis starts; final text skips that wait.
   It reuses the request only if the confirmed text matches exactly. Corrections,
@@ -50,11 +54,20 @@ Repeated text + same user/language/voice → memory cache → WebRTC audio
 
 ## Manual playback and Bulgarian readings
 
-Each source sentence and translation is clickable, including saved history and
-available text beside an unfinished turn. Clicking a sentence, its Latin reading,
-or its speaker icon plays that sentence in its own language. Another click stops
-the current playback and plays the requested text. Manual playback does not use
-autospeak's English-only direction, latest-box cursor, or finality restrictions.
+Each paragraph has two language-labeled speaker buttons: source and translation.
+These are small, borderless controls in the bubble's top-right corner; text wraps
+around them without a separate toolbar row. Both remain visible on touch screens.
+Either button reads all available sentences in that paragraph in order, including
+saved history and available draft text. Missing translations do not block source
+playback. Clicking another language or paragraph interrupts the current playback;
+clicking the same button replays from the beginning. The text remains selectable.
+Manual playback does not use autospeak's English-only direction, latest-box cursor,
+or finality restrictions.
+
+The queue splits text longer than the backend's 1,500-character request limit at
+word boundaries, preserving Unicode characters, and plays each chunk sequentially.
+The paragraph keeps one playback identity until its final chunk finishes; newly
+arriving autospeak turns wait behind it. Interruption cancels the remaining chunks.
 
 Bulgarian text includes a Latin reading in brackets beside the Cyrillic by default; the
 Script/Latin toggle can show only the reading. Readings are generated locally

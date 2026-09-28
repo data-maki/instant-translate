@@ -162,8 +162,8 @@ export function buildPhraseDisplayPairs({
       romaji: showRomaji ? "" : romaji,
       translation: showRomaji && translationRomaji ? translationRomaji : translatedText,
       translationRomaji: showRomaji ? "" : translationRomaji,
-      // Manual playback is per visible phrase/language, including history and
-      // the available text of a live draft. Autospeak owns finality separately.
+      // Paragraph playback joins these original-language payloads, including
+      // history and available draft text. Autospeak owns finality separately.
       sourceSpeech: shownSource.trim() ? { key: `tts:${item.id}:${itemSourceLang}`, text: shownSource, language: itemSourceLang } : undefined,
       translationSpeech: translatedText.trim() ? { key: `tts:${item.id}:${translationLanguage}`, text: translatedText, language: translationLanguage } : undefined
     };

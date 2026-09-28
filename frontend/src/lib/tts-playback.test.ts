@@ -37,7 +37,16 @@ async function flush() { for (let i = 0; i < 10; i += 1) await Promise.resolve()
 
 test("PCM starts before EOF, preserves split samples, and abort stops scheduled audio", async () => {
   const originals = { AudioContext: globalThis.AudioContext, RTCPeerConnection: globalThis.RTCPeerConnection, document: globalThis.document };
-  Object.assign(globalThis, { AudioContext: FakeContext, RTCPeerConnection: FakePeer, document: { createElement: () => ({ setAttribute() {} }) } });
+  const sink = {
+    paused: true,
+    playError: null as Error | null,
+    setAttribute() {},
+    async play() {
+      if (this.playError) throw this.playError;
+      this.paused = false;
+    }
+  };
+  Object.assign(globalThis, { AudioContext: FakeContext, RTCPeerConnection: FakePeer, document: { createElement: () => sink } });
   try {
     await warmTtsPlayback();
     let controller!: ReadableStreamDefaultController<Uint8Array>;
@@ -49,6 +58,8 @@ test("PCM starts before EOF, preserves split samples, and abort stops scheduled 
     const starting = playPcmTtsThroughAec(response, abort.signal);
     controller.enqueue(new Uint8Array([0, 128, 255])); // -32768, then half of +32767
     const playback = await starting;
+    // Receiving samples is not audible playback if autoplay left the sink paused.
+    assert.equal(sink.paused, false);
     assert.equal(nodes.length, 1);
     assert.equal(nodes[0]!.buffer.samples[0], -1);
     assert.equal(nodes[0]!.at, 1.04);
@@ -74,5 +85,12 @@ test("PCM starts before EOF, preserves split samples, and abort stops scheduled 
     failure.error(new Error("stream disconnected"));
     await assert.rejects(broken.done, /stream disconnected/);
     assert.ok(nodes.at(-1)!.stopped);
+
+    sink.paused = true;
+    sink.playError = new DOMException("Output blocked", "NotAllowedError");
+    await assert.rejects(playPcmTtsThroughAec(new Response(new Uint8Array([1, 0]))), /Output blocked/);
+    sink.playError = null;
+    await warmTtsPlayback();
+    assert.equal(sink.paused, false); // A later user click can retry the output.
   } finally { Object.assign(globalThis, originals); }
 });

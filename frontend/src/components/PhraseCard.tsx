@@ -203,23 +203,31 @@ function SpeechBubble({
   translationLabel: string;
   ttsStatus: Record<string, TtsPlaybackState>;
 }) {
+  const sourceParts = pairs.flatMap(pair => pair.sourceSpeech ? [pair.sourceSpeech] : []);
+  const translationParts = pairs.flatMap(pair => pair.translationSpeech ? [pair.translationSpeech] : []);
+  const sourceSpeech = paragraphSpeech(sourceParts);
+  const translationSpeech = paragraphSpeech(translationParts);
   return (
     <div className={`speechBubble ${code === "ja" ? "japanese" : ""} ${enhanced ? "aiEnhanced" : ""}`} dir="auto" lang={code} title={label}>
       <div className="speechBubbleBody">
+        <div className="paragraphPlayback" dir="ltr">
+          <ParagraphPlayButton code={code} label={label} side="source" speech={sourceSpeech} onSpeak={onSpeak}
+            state={paragraphPlaybackState(sourceSpeech, sourceParts, ttsStatus)} />
+          <ParagraphPlayButton code={translationCode} label={translationLabel} side="translation" speech={translationSpeech} onSpeak={onSpeak}
+            state={paragraphPlaybackState(translationSpeech, translationParts, ttsStatus)} />
+        </div>
         {pairs.map((pair, index) => (
           <div className="phrasePairLine" key={pair.sourceSpeech?.key || index}>
             <SpeechText
               code={code} label={label} text={pair.text} reading={pair.romaji}
-              speech={pair.sourceSpeech} onSpeak={onSpeak}
-              state={pair.sourceSpeech ? ttsStatus[pair.sourceSpeech.key] : undefined}
+              speech={pair.sourceSpeech}
             />
             {pair.translation ? (
               <>
                 <span aria-hidden="true" className="phraseTranslationSeparator"> · </span>
                 <SpeechText
                   code={translationCode} label={translationLabel} text={pair.translation} reading={pair.translationRomaji}
-                  speech={pair.translationSpeech} onSpeak={onSpeak} translation
-                  state={pair.translationSpeech ? ttsStatus[pair.translationSpeech.key] : undefined}
+                  speech={pair.translationSpeech} translation
                 />
               </>
             ) : null}
@@ -231,15 +239,57 @@ function SpeechBubble({
   );
 }
 
+function paragraphSpeech(parts: PhraseSpeech[]): PhraseSpeech | undefined {
+  const first = parts[0];
+  if (!first) return undefined;
+  return { key: first.key.replace(/^tts:/, "tts:paragraph:"), language: first.language,
+    text: parts.map(part => part.text.trim()).join(" ") };
+}
+
+function paragraphPlaybackState(speech: PhraseSpeech | undefined, parts: PhraseSpeech[], statuses: Record<string, TtsPlaybackState>) {
+  if (speech && statuses[speech.key]) return statuses[speech.key];
+  // Autospeak still advances sentence by sentence; show its activity on the
+  // matching paragraph/language control without changing the manual payload.
+  const states = parts.map(part => statuses[part.key]);
+  return (["playing", "loading", "error"] as const).find(state => states.includes(state));
+}
+
+function languageStyle(code: string): CSSProperties {
+  const hue = languageHue(code);
+  return { "--language-color": hue === undefined
+    ? "var(--muted)"
+    : `hsl(${hue} var(--language-saturation) var(--language-lightness))`
+  } as CSSProperties;
+}
+
+function ParagraphPlayButton({ code, label, side, speech, onSpeak, state }: {
+  code: string;
+  label: string;
+  side: "source" | "translation";
+  speech?: PhraseSpeech;
+  onSpeak: SpeakHandler;
+  state?: TtsPlaybackState;
+}) {
+  const action = state === "error" ? "Retry" : state === "playing" ? "Replay" : state === "loading" ? "Preparing" : "Play";
+  const description = `${action} paragraph in ${label} (${side})`;
+  return (
+    <button aria-label={description} aria-busy={state === "loading"}
+      className={`paragraphPlayButton ${side} ${state || ""}`} disabled={!speech}
+      onClick={() => { if (speech) onSpeak(speech.key, speech.text, speech.language); }}
+      style={languageStyle(code)} title={speech ? description : `${label} text is not available yet`} type="button">
+      <span aria-hidden="true">{code.toUpperCase()}</span>
+      <span aria-hidden="true"><SpeechPlaybackIcon state={state} /></span>
+    </button>
+  );
+}
+
 function SpeechText({
   code,
   label,
   text,
   reading,
   speech,
-  translation = false,
-  onSpeak,
-  state
+  translation = false
 }: {
   code: string;
   label: string;
@@ -247,45 +297,20 @@ function SpeechText({
   reading?: string;
   speech?: PhraseSpeech;
   translation?: boolean;
-  onSpeak: SpeakHandler;
-  state?: TtsPlaybackState;
 }) {
-  const action = state === "error" ? "Retry" : state === "playing" ? "Replay" : state === "loading" ? "Preparing audio for" : "Play";
-  const hue = languageHue(code);
-  const style = { "--language-color": hue === undefined
-    ? "var(--muted)"
-    : `hsl(${hue} var(--language-saturation) var(--language-lightness))`
-  } as CSSProperties;
   return (
     <span
-      aria-label={`${action} ${label}: ${text}`}
-      aria-busy={state === "loading"}
-      aria-disabled={!speech}
-      className={`phraseTextButton ${translation ? "translation" : "original"} ${state || ""}`}
+      className={`phraseText ${translation ? "translation" : "original"}`}
       dir="auto"
       lang={speech && text !== speech.text && supportsRomanization(code) ? `${code}-Latn` : code}
-      onClick={(event) => {
-        event.stopPropagation();
-        if (speech) onSpeak(speech.key, speech.text, speech.language);
-      }}
-      onKeyDown={(event) => {
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        event.stopPropagation();
-        if (speech && !event.repeat) onSpeak(speech.key, speech.text, speech.language);
-      }}
-      role="button"
-      tabIndex={speech ? 0 : undefined}
-      title={`${action} ${label}`}
-      style={style}
+      style={languageStyle(code)}
     >
-      <span aria-hidden="true" className="phraseLanguageLabel">
+      <span className="phraseLanguageLabel" title={label}>
         {code.toUpperCase()}
-        {speech ? <SpeechPlaybackIcon state={state} /> : null}
       </span>{"\u00a0"}
       <span className="phraseTextContent">
         <span className={translation ? "bubbleTranslation" : "bubbleOriginal"}>{text || "..."}</span>
-        {reading ? <> <span className="inlineRomaji" lang={`${code}-Latn`} title="Latin reading. Tap to hear the pronunciation.">[{reading}]</span></> : null}
+        {reading ? <> <span className="inlineRomaji" lang={`${code}-Latn`} title="Latin reading">[{reading}]</span></> : null}
       </span>
     </span>
   );
