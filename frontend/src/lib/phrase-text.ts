@@ -1,4 +1,5 @@
 import type { Phrase } from "@/lib/api";
+import { romanizeBulgarian } from "./romanization";
 
 export const ENGLISH_LANGUAGE = "en";
 
@@ -8,11 +9,15 @@ export type PhraseAdaptation = {
   status: "loading" | "ready" | "error";
 };
 
+export type PhraseSpeech = { key: string; text: string; language: string };
+
 export type PhrasePair = {
   text: string;
   romaji?: string;
   translation?: string;
   translationRomaji?: string;
+  sourceSpeech?: PhraseSpeech;
+  translationSpeech?: PhraseSpeech;
 };
 
 export type TranscriptLatencyMode = "fast" | "slow";
@@ -103,7 +108,8 @@ export function phraseShownTargetText(
   return showEnhancedEnglish && adaptation?.source_rewrite ? adaptation.source_rewrite : original;
 }
 
-function phraseRomanization(phrase: Phrase, langCode: string): string {
+function phraseRomanization(phrase: Phrase, langCode: string, text: string): string {
+  if (langCode === "bg") return romanizeBulgarian(text);
   if (langCode === "ja") return phrase.romaji_ja || "";
   return "";
 }
@@ -146,22 +152,20 @@ export function buildPhraseDisplayPairs({
     const sourceText = phraseSourceText(item, itemSourceLang);
     const translationLanguage = itemSourceLang === targetLanguage ? leftLanguage : targetLanguage;
     const translatedText = phraseTranslationText(item, itemSourceLang, translationLanguage, adaptations);
-    const romaji = phraseRomanization(item, itemSourceLang);
-
-    if (isTargetSource) {
-      return {
-        text: showEnhancedEnglish && itemSourceLang === ENGLISH_LANGUAGE
-          ? adaptations[adaptationKey(item, leftLanguage)]?.source_rewrite || sourceText
-          : sourceText,
-        translation: showRomaji && romaji ? romaji : translatedText,
-        translationRomaji: showRomaji || !romaji ? undefined : romaji
-      };
-    }
-
+    const shownSource = isTargetSource && showEnhancedEnglish && itemSourceLang === ENGLISH_LANGUAGE
+      ? adaptations[adaptationKey(item, leftLanguage)]?.source_rewrite || sourceText
+      : sourceText;
+    const romaji = phraseRomanization(item, itemSourceLang, shownSource);
+    const translationRomaji = phraseRomanization(item, translationLanguage, translatedText);
     return {
-      text: showRomaji && romaji ? romaji : sourceText,
+      text: showRomaji && romaji ? romaji : shownSource,
       romaji: showRomaji ? "" : romaji,
-      translation: translatedText
+      translation: showRomaji && translationRomaji ? translationRomaji : translatedText,
+      translationRomaji: showRomaji ? "" : translationRomaji,
+      // Manual playback is per visible phrase/language, including history and
+      // the available text of a live draft. Autospeak owns finality separately.
+      sourceSpeech: shownSource.trim() ? { key: `tts:${item.id}:${itemSourceLang}`, text: shownSource, language: itemSourceLang } : undefined,
+      translationSpeech: translatedText.trim() ? { key: `tts:${item.id}:${translationLanguage}`, text: translatedText, language: translationLanguage } : undefined
     };
   });
 }
@@ -179,5 +183,5 @@ export function phraseSpeakReady(
 }
 
 export function supportsRomanization(langCode: string): boolean {
-  return langCode === "ja";
+  return langCode === "ja" || langCode === "bg";
 }

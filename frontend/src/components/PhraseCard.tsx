@@ -5,12 +5,11 @@ import type { Language, Phrase } from "@/lib/api";
 import {
   adaptationKey,
   buildPhraseDisplayPairs,
-  joinDisplayLines,
-  phraseSpeakReady,
   phraseSourceLanguage,
-  phraseTargetText,
+  supportsRomanization,
   type PhraseAdaptation,
-  type PhrasePair
+  type PhrasePair,
+  type PhraseSpeech
 } from "@/lib/phrase-text";
 import {
   fallbackSpeakerLabel,
@@ -30,6 +29,7 @@ type SpeakerDraft = {
 
 type TtsPlaybackState = "loading" | "playing" | "error";
 type LeftLanguageSelection = "all" | string;
+type SpeakHandler = (key: string, text: string, language: string) => void;
 
 export function PhraseCard({
   activeLeftLanguage,
@@ -40,7 +40,6 @@ export function PhraseCard({
   onEditSpeaker,
   onSpeak,
   phrases,
-  speakLanguage,
   speakerDrafts,
   showEnhancedEnglish,
   showRomaji,
@@ -53,9 +52,8 @@ export function PhraseCard({
   leftLanguageSelection: LeftLanguageSelection;
   languageMap: Map<string, Language>;
   onEditSpeaker: (speakerId: string, label: string) => void;
-  onSpeak: (key: string, text: string, language: string) => void;
+  onSpeak: SpeakHandler;
   phrases: Phrase[];
-  speakLanguage: string;
   speakerDrafts: Record<string, SpeakerDraft>;
   showEnhancedEnglish: boolean;
   showRomaji: boolean;
@@ -92,22 +90,8 @@ export function PhraseCard({
   const hasEnhancedEnglish = phrases.some((item) => Boolean(adaptations[adaptationKey(item, activeLeftLanguage)]?.source_rewrite?.trim()));
   const loading = phrases.some((item) => adaptations[adaptationKey(item, activeLeftLanguage)]?.status === "loading");
 
-  const firstPhrase = phrases[0]!;
-  const sourceSpeakText = isTargetSource
-    ? joinDisplayLines(phrases.map((item) => phraseTargetText(item, speakLanguage, adaptations)))
-    : joinDisplayLines(phrases.map((item) => item.texts[speakLanguage] || ""));
-  const sourceSpeakKey = speakLanguage ? `tts:${firstPhrase.id}:${speakLanguage}` : "";
-  const sourceSpeakable =
-    Boolean(speakLanguage) &&
-    sourceSpeakText.trim().length > 0 &&
-    phrases.every((item) => phraseSpeakReady(item, adaptations, speakLanguage));
-  const sourceOnSpeak = sourceSpeakable
-    ? () => onSpeak(sourceSpeakKey, sourceSpeakText, speakLanguage)
-    : undefined;
-  const sourceTtsState = sourceSpeakable ? ttsStatus[sourceSpeakKey] : undefined;
-
-  const bubbleCode = isTargetSource ? targetLanguage : leftLanguage;
-  const bubbleLabel = isTargetSource ? targetLabel : leftLabel;
+  const bubbleCode = sourceLang;
+  const bubbleLabel = languageLabel(languageMap, sourceLang);
   const translationCode = isTargetSource ? leftLanguage : targetLanguage;
   const translationLabel = isTargetSource ? leftLabel : targetLabel;
 
@@ -120,14 +104,14 @@ export function PhraseCard({
         label={bubbleLabel}
         loading={loading}
         onEditSpeaker={onEditSpeaker}
-        onSpeak={sourceOnSpeak}
+        onSpeak={onSpeak}
         pairs={phrasePairs}
         speakerId={speakerId}
         speakerInitials={speakerInitials}
         speakerLabel={speakerLabel}
         translationCode={translationCode}
         translationLabel={translationLabel}
-        ttsState={sourceTtsState}
+        ttsStatus={ttsStatus}
       />
     </article>
   );
@@ -152,7 +136,7 @@ function BubbleWithSpeaker({
   speakerLabel,
   translationCode,
   translationLabel,
-  ttsState
+  ttsStatus
 }: {
   code: string;
   editingSpeaker: boolean;
@@ -160,14 +144,14 @@ function BubbleWithSpeaker({
   label: string;
   loading?: boolean;
   onEditSpeaker: (speakerId: string, label: string) => void;
-  onSpeak?: () => void;
+  onSpeak: SpeakHandler;
   pairs: PhrasePair[];
   speakerId: string;
   speakerInitials: string;
   speakerLabel: string;
   translationCode: string;
   translationLabel: string;
-  ttsState?: TtsPlaybackState;
+  ttsStatus: Record<string, TtsPlaybackState>;
 }) {
   return (
     <div className={`bubbleWithSpeaker ${editingSpeaker ? "editingSpeaker" : ""}`}>
@@ -182,7 +166,7 @@ function BubbleWithSpeaker({
           pairs={pairs}
           translationCode={translationCode}
           translationLabel={translationLabel}
-          ttsState={ttsState}
+          ttsStatus={ttsStatus}
         />
       </div>
     </div>
@@ -206,75 +190,85 @@ function SpeechBubble({
   pairs,
   translationCode,
   translationLabel,
-  ttsState
+  ttsStatus
 }: {
   code: string;
   enhanced?: boolean;
   label: string;
   loading?: boolean;
-  onSpeak?: () => void;
+  onSpeak: SpeakHandler;
   pairs: PhrasePair[];
   translationCode: string;
   translationLabel: string;
-  ttsState?: TtsPlaybackState;
+  ttsStatus: Record<string, TtsPlaybackState>;
 }) {
   return (
     <div className={`speechBubble ${code === "ja" ? "japanese" : ""} ${enhanced ? "aiEnhanced" : ""}`} dir="auto" lang={code} title={label}>
       <div className="speechBubbleBody">
         {pairs.map((pair, index) => (
-          <div className="phrasePairLine" key={index}>
-            <span className="lineText">
-              <span className="bubbleOriginal">{pair.text || "..."}</span>
-              {pair.romaji ? <span className="inlineRomaji"> ({pair.romaji})</span> : null}
-              {pair.translation ? (
-                <>
-                  {" "}
-                  <span className="bubbleTranslation" dir="auto" lang={translationCode} title={translationLabel}>
-                    {pair.translation}
-                  </span>
-                  {pair.translationRomaji ? <span className="inlineRomaji"> ({pair.translationRomaji})</span> : null}
-                </>
-              ) : null}
-            </span>
+          <div className="phrasePairLine" key={pair.sourceSpeech?.key || index}>
+            <SpeechText
+              code={code} label={label} text={pair.text} reading={pair.romaji}
+              speech={pair.sourceSpeech} onSpeak={onSpeak}
+              state={pair.sourceSpeech ? ttsStatus[pair.sourceSpeech.key] : undefined}
+            />
+            {pair.translation ? (
+              <SpeechText
+                code={translationCode} label={translationLabel} text={pair.translation} reading={pair.translationRomaji}
+                speech={pair.translationSpeech} onSpeak={onSpeak} translation
+                state={pair.translationSpeech ? ttsStatus[pair.translationSpeech.key] : undefined}
+              />
+            ) : null}
           </div>
         ))}
-        {onSpeak ? <TtsSpeakerButton onSpeak={onSpeak} state={ttsState} /> : null}
       </div>
-      {loading ? <span className="romaji">Adapting...</span> : null}
+      {loading ? <span className="romaji">Translating...</span> : null}
     </div>
   );
 }
 
-function TtsSpeakerButton({
-  disabled = false,
+function SpeechText({
+  code,
+  label,
+  text,
+  reading,
+  speech,
+  translation = false,
   onSpeak,
   state
 }: {
-  disabled?: boolean;
-  onSpeak: () => void;
+  code: string;
+  label: string;
+  text: string;
+  reading?: string;
+  speech?: PhraseSpeech;
+  translation?: boolean;
+  onSpeak: SpeakHandler;
   state?: TtsPlaybackState;
 }) {
-  const label =
-    state === "loading"
-      ? "Loading speech"
-      : state === "playing"
-        ? "Playing"
-        : state === "error"
-          ? "Speech failed (tap to retry)"
-          : "Play translation";
+  const action = state === "error" ? "Retry" : state === "playing" ? "Replay" : "Play";
   return (
     <button
-      aria-label={label}
-      className={`ttsSpeakerButton ${state || ""}`}
-      disabled={disabled || state === "loading"}
+      aria-label={`${action} ${label}: ${text}`}
+      aria-busy={state === "loading"}
+      className={`phraseTextButton ${translation ? "translation" : "original"} ${state || ""}`}
+      disabled={!speech}
+      dir="auto"
+      lang={speech && text !== speech.text && supportsRomanization(code) ? `${code}-Latn` : code}
       onClick={(event) => {
         event.stopPropagation();
-        onSpeak();
+        if (speech) onSpeak(speech.key, speech.text, speech.language);
       }}
-      title={label}
+      title={`${action} ${label}`}
       type="button"
     >
-      {state === "loading" ? "..." : state === "playing" ? "🔊" : state === "error" ? "⚠︎" : "🔈"}
+      <span className="phraseTextContent">
+        <span className={translation ? "bubbleTranslation" : "bubbleOriginal"}>{text || "..."}</span>
+        {reading ? <span className="inlineRomaji" lang={`${code}-Latn`} title="Latin reading. Tap to hear the pronunciation.">{reading}</span> : null}
+      </span>
+      {speech ? <span aria-hidden="true" className={`ttsSpeakerButton ${state || ""}`}>
+        {state === "loading" ? "..." : state === "playing" ? "🔊" : state === "error" ? "⚠︎" : "🔈"}
+      </span> : null}
     </button>
   );
 }

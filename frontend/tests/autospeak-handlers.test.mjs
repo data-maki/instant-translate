@@ -195,3 +195,38 @@ test("requesting another display language translates only that missing language"
   assert.equal(h.timers.length, 0);
   assert.equal(h.rewrites.length, 0);
 });
+
+test("manual mode can replay any past box in its own language without reading the backlog", async () => {
+  const h = harness([phrase("old"), phrase("latest")]);
+  h.api.speakPhraseText("tts:old:en", "English old", "en");
+  assert.equal(h.requests[0].payload.target_language, "en");
+  assert.equal(h.requests[0].payload.text, "English old");
+  h.requests[0].resolve(result);
+  await flush();
+  h.api.speakPhraseText("tts:old:bg", "Български old", "bg");
+  assert.ok(h.audio[0].stopped);
+  assert.equal(h.requests[1].payload.target_language, "bg");
+  h.requests[1].resolve(result);
+  await flush();
+  h.audio[1].finish();
+  await flush();
+  assert.equal(h.requests.length, 2);
+  h.api.speakPhraseText("tts:old:en", "English old", "en");
+  assert.equal(h.requests[2].payload.text, "English old");
+  h.api.changeTtsMode("push");
+});
+
+test("a manual history click interrupts autospeak and does not replay its old backlog", async () => {
+  const history = [phrase("old"), phrase("latest")];
+  const h = harness(history);
+  h.api.changeTtsMode("auto");
+  h.api.speakPhraseText("tts:old:en", "English old", "en");
+  assert.ok(h.requests[0].signal.aborted);
+  assert.equal(h.requests[1].payload.target_language, "en");
+  h.requests[1].resolve(result);
+  await flush();
+  h.audio[0].finish();
+  await flush();
+  assert.equal(h.requests.length, 2);
+  h.api.changeTtsMode("push");
+});

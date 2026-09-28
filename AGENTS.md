@@ -11,6 +11,7 @@
 - During active user testing, do not navigate, select history, reload, or otherwise change any existing user browser tab for verification. An apparently idle second tab is still the user's workspace. Use isolated automated tests; perform interactive verification only in an explicitly separate test session.
 - Session navigation changes must pass `pnpm --filter cottonoha-web test:session-navigation`. Exercise delayed history loads, save events, renames, and deletions after New chat; a response may update history but must not select a previous conversation.
 - Live translation and autospeak changes must pass `pnpm --filter cottonoha-web test:autospeak`. Existing target-language text goes directly to speech in both display modes, with zero automatic translation/rewrite requests. Translate a missing language once; never require an English rewrite to speak an available translation.
+- Phrase display and manual playback changes must pass `pnpm --filter cottonoha-web test:phrase-text`. Every displayed sentence/language, including history, is independently playable; autospeak direction, cursor, and finality restrictions must not disable manual playback. Romanized readings never replace the original-language TTS payload.
 - Do not overengineer; start with the simplest working solution.
 - Do not add abstractions, edge-case handling, or additional security work unless requested or required for production-level functionality or correctness.
 - Push back when a request is overly complex, risky, or wasteful.

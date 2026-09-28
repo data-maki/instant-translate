@@ -648,9 +648,9 @@ export function TranslatorApp({
       signal.throwIfAborted();
     }
     ttsAudioRef.current = playback;
-    void playback.done.then(() => {
+    void playback.done.finally(() => {
       if (ttsAudioRef.current === playback) ttsAudioRef.current = null;
-    });
+    }).catch(() => {}); // The queue reports playback errors through its status.
     return playback;
   }
 
@@ -1675,10 +1675,10 @@ export function TranslatorApp({
                 {supportsRomanization(activeLeftLanguage) ? (
                   <DualLabelToggle
                     leftLabel="script"
-                    rightLabel="romaji"
+                    rightLabel={activeLeftLanguage === "ja" ? "romaji" : "latin"}
                     rightSelected={showRomaji}
                     onChange={setShowRomaji}
-                    title="Script shows original characters. Romaji shows only the phonetic romanization."
+                    title="Script shows the original text with a Latin reading below it. Latin shows just the reading. Tap either to hear the original pronunciation."
                   />
                 ) : null}
                 <DualLabelToggle
@@ -1769,7 +1769,6 @@ export function TranslatorApp({
                       onEditSpeaker={openSpeakerEditor}
                       onSpeak={speakPhraseText}
                       phrases={phraseGroup}
-                      speakLanguage={ttsSpeakLanguage}
                       speakerDrafts={speakerDrafts}
                       showEnhancedEnglish={showEnhancedEnglish}
                       showRomaji={showRomaji}

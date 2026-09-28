@@ -48,6 +48,25 @@ Repeated text + same user/language/voice → memory cache → WebRTC audio
 - The existing `/tts/speak` MP3/JSON contract remains available for iOS. Web clients
   also fall back to it when a running older backend lacks `/tts/stream`.
 
+## Manual playback and Bulgarian readings
+
+Each source sentence and translation is clickable, including saved history and
+available text beside an unfinished turn. Clicking a sentence, its Latin reading,
+or its speaker icon plays that sentence in its own language. Another click stops
+the current playback and plays the requested text. Manual playback does not use
+autospeak's English-only direction, latest-box cursor, or finality restrictions.
+
+Bulgarian text includes a Latin reading below the Cyrillic by default; the
+Script/Latin toggle can show only the reading. Readings are generated locally
+from the displayed text, so old sessions and fallback translations work without
+another translation request. TTS always receives the original Cyrillic. The
+mapping follows the [Bulgarian Transliteration Act, Articles 4–6](https://www.mrrb.bg/en/transliteration-act/),
+including word-final `ия → ia` and `България → Bulgaria`. It is a reading aid;
+it does not mark stress or represent all pronunciation differences.
+
+Regression checks: `pnpm --filter cottonoha-web test:phrase-text` and
+`pnpm --filter cottonoha-web test:autospeak`.
+
 ## Measurements, 2026-09-28
 
 Local frontend/backend; synthetic Bulgarian; live ElevenLabs requests. These are
