@@ -93,7 +93,8 @@ def test_final_tokens_after_stop_are_saved_listed_and_reopened(tmp_path, monkeyp
 
 
 def transcript_tokens_with_resolved_language():
-    return [{**token, "resolved_language": token["language"]} for token in transcript_tokens()]
+    return [{**token, "resolved_language": token["language"], "provider_speaker": token["speaker"],
+             "recording_segment": 1} for token in transcript_tokens()]
 
 
 def test_failed_ai_title_still_has_title_after_reload(tmp_path, monkeypatch):

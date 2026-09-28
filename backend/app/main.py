@@ -50,6 +50,7 @@ from .sessions import (
     write_session_summary,
 )
 from .soniox import NUM_CHANNELS, SAMPLE_RATE, run_transcription_bridge
+from .speaker_audit import audit_speakers, audit_summary
 from cli.live_transcriber.async_diarize import AsyncDiarizeError, redo_diarization
 
 
@@ -1105,11 +1106,14 @@ def rediarize_session(
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     rediarized_tokens = _apply_async_speakers(_latest_tokens_for_session(session_dir, state), tokens)
+    speaker_audit = audit_speakers(audio_path, rediarized_tokens)
+    speaker_audit["summary"] = audit_summary(speaker_audit)
     out_json = session_dir / "rediarized.json"
     out_txt = session_dir / "rediarized.txt"
     speakers = sorted({str(t.get("speaker")) for t in rediarized_tokens if t.get("speaker") is not None})
     out_json.write_text(
-        json.dumps({"tokens": rediarized_tokens, "speakers": speakers, "async_tokens": tokens}, ensure_ascii=False, indent=2),
+        json.dumps({"tokens": rediarized_tokens, "speakers": speakers, "async_tokens": tokens,
+                    "speaker_audit": speaker_audit}, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
 
@@ -1127,6 +1131,7 @@ def rediarize_session(
         "path": str(out_json),
         "speakers": speakers,
         "speaker_count": len(speakers),
+        "speaker_audit": speaker_audit,
         "token_count": len(rediarized_tokens),
         "phrases": build_phrases(session, []),
     }
@@ -1361,7 +1366,9 @@ def _apply_async_speakers(realtime_tokens: list[dict[str, Any]], async_tokens: l
             key = (str(token.get("speaker")), str(token.get("source_language")))
             span = source_spans.get(key)
             if span:
-                updated["speaker"] = _best_speaker_for_window(*span, speaker_segments)
+                speaker = _best_speaker_for_window(*span, speaker_segments)
+                if speaker is not None:
+                    updated["speaker"] = speaker
             translating = True
         elif isinstance(start, (int, float)) and isinstance(end, (int, float)) and end > start:
             key = (str(token.get("speaker")), str(token.get("language")))
@@ -1389,13 +1396,11 @@ def _best_speaker_for_window(start_ms: float, end_ms: float, segments: list[dict
             speaker = str(segment["speaker"])
             overlaps[speaker] = overlaps.get(speaker, 0.0) + overlap
     if not overlaps:
-        midpoint = (start_ms + end_ms) / 2.0
-        nearest = min(
-            segments,
-            key=lambda segment: min(abs(midpoint - float(segment["start_ms"])), abs(midpoint - float(segment["end_ms"]))),
-        )
-        return str(nearest["speaker"])
-    return max(overlaps, key=overlaps.get)
+        # Silence or missing coverage is not evidence for the nearest person.
+        return None
+    winner = max(overlaps, key=overlaps.get)
+    # Overlapping voices / a tie do not establish a unique speaker.
+    return winner if overlaps[winner] > sum(overlaps.values()) / 2 else None
 
 
 def _translation_samples_from_tokens(tokens: list[dict[str, Any]]) -> list[dict[str, Any]]:

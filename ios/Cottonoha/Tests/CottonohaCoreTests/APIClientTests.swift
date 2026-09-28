@@ -58,12 +58,14 @@ private final class StubProtocol: URLProtocol, @unchecked Sendable {
     }
 
     @Test func cleanupReturnsCorrectedPhrases() async throws {
-        StubProtocol.state.prepare(#"{"session":"meeting","token_count":3,"phrases":[],"speaker_count":2}"#)
+        StubProtocol.state.prepare(#"{"session":"meeting","token_count":3,"phrases":[],"speaker_count":2,"speaker_audit":{"status":"needs_review","summary":"Possible merged voices near 0:20."}}"#)
         let client = CottonohaAPIClient(configuration: config, session: session())
         let response = try await client.rediarizeSession("meeting")
         #expect(response.session == "meeting")
         #expect(response.tokenCount == 3)
         #expect(response.phrases == [])
+        #expect(response.speakerAudit?.status == "needs_review")
+        #expect(response.speakerAudit?.summary == "Possible merged voices near 0:20.")
     }
 
     @Test func typedTranslationDecodesItsResult() async throws {

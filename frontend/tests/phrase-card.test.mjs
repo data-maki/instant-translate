@@ -106,6 +106,14 @@ test("different paragraphs have independent payloads, including the same speaker
   ]);
 });
 
+test("unknown voices cannot be renamed together as if they were one person", () => {
+  const h = render([{ ...old, speaker: null, speaker_label: "Unknown" }]);
+  const tag = elements(h.tree).find(node => node.props.className === "speakerTag");
+  assert.equal(tag.props.disabled, true);
+  assert.equal(tag.props["aria-label"], "Voice not identified");
+  assert.ok(h.buttons.every(button => !button.props.disabled));
+});
+
 test("paragraph and autospeak activity animate the correct language control", () => {
   const h = render([old], { ttsStatus: { "tts:paragraph:old:bg": "playing", "tts:old:en": "loading" } });
   assert.ok(h.buttons[0].props["aria-busy"]);

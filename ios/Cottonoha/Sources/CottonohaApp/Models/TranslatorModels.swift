@@ -48,6 +48,7 @@ public struct Phrase: Codable, Identifiable, Hashable, Sendable {
     public var romajiJa: String?
     public var isFinal: Bool
     public var time: FlexibleString?
+    public var timeMilliseconds: Double? = nil
 
     enum CodingKeys: String, CodingKey {
         case id
@@ -58,6 +59,7 @@ public struct Phrase: Codable, Identifiable, Hashable, Sendable {
         case romajiJa = "romaji_ja"
         case isFinal = "is_final"
         case time
+        case timeMilliseconds = "time_ms"
     }
 }
 
@@ -98,13 +100,20 @@ public struct SessionImproveResponse: Codable, Sendable {
     public var path: String?
     public var tokenCount: Int?
     public var phrases: [Phrase]?
+    public var speakerAudit: SpeakerAuditSummary?
 
     enum CodingKeys: String, CodingKey {
         case session
         case path
         case tokenCount = "token_count"
         case phrases
+        case speakerAudit = "speaker_audit"
     }
+}
+
+public struct SpeakerAuditSummary: Codable, Sendable {
+    public var status: String
+    public var summary: String?
 }
 
 public struct AudiencePreset: Identifiable, Hashable, Sendable {

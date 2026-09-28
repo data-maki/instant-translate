@@ -16,6 +16,18 @@ export function speakerKey(speaker: number | string | null): string {
   return String(speaker);
 }
 
+export function sameKnownSpeaker(left: number | string | null, right: number | string | null): boolean {
+  const key = speakerKey(left).trim();
+  return key !== "" && key === speakerKey(right).trim();
+}
+
+export function speakerTurnSeconds(phrase: { time?: number | string | null; time_ms?: number | null }): number | null {
+  if (typeof phrase.time_ms === "number" && Number.isFinite(phrase.time_ms)) return phrase.time_ms / 1000;
+  const value = typeof phrase.time === "number" ? phrase.time : Number.parseFloat(phrase.time ?? "");
+  // Compatibility with older servers; new responses specify the unit explicitly.
+  return Number.isFinite(value) ? value > 10_000 ? value / 1000 : value : null;
+}
+
 export function speakerColor(id: string): string {
   if (!id) {
     return "#BC002D";

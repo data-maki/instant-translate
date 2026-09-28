@@ -44,7 +44,8 @@ import {
   initialsFromSpeakerName,
   normalizeInitials,
   speakerEditableName,
-  speakerKey
+  sameKnownSpeaker,
+  speakerTurnSeconds
 } from "@/lib/speaker";
 import { playPcmTtsThroughAec, warmTtsPlayback, type TtsPlayback } from "@/lib/tts-playback";
 import { AutoSpeakQueue, type SpeechItem, type SpeechOptions } from "@/lib/autospeak";
@@ -534,8 +535,10 @@ export function TranslatorApp({
   function realtimeDraftToPhrase(draft: RealtimeCaptionDraft, isFinal: boolean): Phrase {
     return {
       id: draft.id,
-      speaker: draft.sourceLanguage === ENGLISH_LANGUAGE ? "typed" : "realtime-listener",
-      speaker_label: draft.sourceLanguage === ENGLISH_LANGUAGE ? "You" : "Them",
+      // Translation direction identifies a language, not a person. Soniox's
+      // parallel transcript supplies acoustic speaker labels when available.
+      speaker: null,
+      speaker_label: "Unknown",
       source_lang: draft.sourceLanguage,
       texts: {
         [draft.sourceLanguage]: draft.input.trim(),
@@ -1489,7 +1492,8 @@ export function TranslatorApp({
         setSpeakerEditorDraft(null);
         const expected = Number(expectedSpeakerCount);
         const countNote = expected > result.speaker_count ? ` You expected ${expectedSpeakerCount === "6" ? "6+" : expected}.` : "";
-        setRediarizeStatus(`Audio reviewed: ${result.speaker_count} speakers detected.${countNote} Review the labels below.`);
+        const voiceCheck = result.speaker_audit?.summary || "Review the labels below.";
+        setRediarizeStatus(`Audio reviewed: ${result.speaker_count} speaker labels.${countNote} ${voiceCheck}`);
       }
     } catch (err: unknown) {
       if (activeSessionRef.current === sessionName) {
@@ -3103,7 +3107,7 @@ function groupDisplayPhrases(phrases: Phrase[]): Phrase[][] {
 }
 
 function shouldShareDisplayBubble(previous: Phrase, next: Phrase): boolean {
-  if (speakerKey(previous.speaker) !== speakerKey(next.speaker)) {
+  if (!sameKnownSpeaker(previous.speaker, next.speaker)) {
     return false;
   }
   if (displaySourceLanguage(previous) !== displaySourceLanguage(next)) {
@@ -3114,7 +3118,8 @@ function shouldShareDisplayBubble(previous: Phrase, next: Phrase): boolean {
   if (previousSeconds === null || nextSeconds === null) {
     return true;
   }
-  return Math.max(0, nextSeconds - previousSeconds) <= DISPLAY_GROUP_PAUSE_SECONDS;
+  const gap = nextSeconds - previousSeconds;
+  return gap >= 0 && gap <= DISPLAY_GROUP_PAUSE_SECONDS;
 }
 
 function displaySourceLanguage(phrase: Phrase): string {
@@ -3122,16 +3127,7 @@ function displaySourceLanguage(phrase: Phrase): string {
 }
 
 function phraseSeconds(phrase: Phrase): number | null {
-  if (typeof phrase.time === "number") {
-    return phrase.time > 10_000 ? phrase.time / 1000 : phrase.time;
-  }
-  if (typeof phrase.time === "string") {
-    const value = Number.parseFloat(phrase.time);
-    if (Number.isFinite(value)) {
-      return value > 10_000 ? value / 1000 : value;
-    }
-  }
-  return null;
+  return speakerTurnSeconds(phrase);
 }
 
 function dedupeList(values: string[]): string[] {

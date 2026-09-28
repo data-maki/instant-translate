@@ -14,6 +14,7 @@ export type Phrase = {
   romaji_ja?: string | null;
   is_final: boolean;
   time?: number | string | null;
+  time_ms?: number | null;
 };
 
 export type TranscriptEvent =
@@ -69,6 +70,7 @@ export type RediarizeResult = {
   speaker_count: number;
   token_count: number;
   phrases: Phrase[];
+  speaker_audit?: { status: string; summary?: string };
 };
 
 export type RetranslateResult = {

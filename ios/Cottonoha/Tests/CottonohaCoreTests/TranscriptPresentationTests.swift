@@ -35,6 +35,27 @@ private func phrase(_ id: String, source: String = "en", speaker: String = "1", 
         }
     }
 
+    @Test func unknownVoicesAreNotGroupedAsOnePerson() {
+        var first = phrase("unknown-1", time: "1")
+        var second = phrase("unknown-2", time: "2")
+        first.speaker = nil
+        second.speaker = nil
+        #expect(TranscriptPresentation.paragraphs([first, second]).count == 2)
+        first.speaker = FlexibleString("")
+        second.speaker = FlexibleString("")
+        #expect(TranscriptPresentation.paragraphs([first, second]).count == 2)
+    }
+
+    @Test func explicitMillisecondsPreserveLongPausesAndTimeOrder() {
+        var first = phrase("first", time: "8000")
+        var second = phrase("later", time: "30000")
+        first.timeMilliseconds = 8000
+        second.timeMilliseconds = 30000
+        #expect(TranscriptPresentation.paragraphs([first, second]).count == 2)
+        second.timeMilliseconds = 3000
+        #expect(TranscriptPresentation.paragraphs([first, second]).count == 2)
+    }
+
     @Test @MainActor func paragraphPlaybackKeepsCyrillicInLatinDisplayMode() {
         let model = TranslatorViewModel(configuration: AppConfiguration())
         model.showRomaji = true

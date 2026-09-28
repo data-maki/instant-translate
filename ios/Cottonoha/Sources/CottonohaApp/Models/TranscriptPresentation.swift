@@ -38,7 +38,8 @@ enum TranscriptPresentation {
         var groups: [TranscriptParagraph] = []
         for phrase in phrases {
             if let last = groups.last?.phrases.last,
-               last.speaker?.value == phrase.speaker?.value,
+               let speaker = last.speaker?.value, !speaker.isEmpty,
+               speaker == phrase.speaker?.value,
                sourceLanguage(last) == sourceLanguage(phrase), closeInTime(last, phrase) {
                 groups[groups.count - 1].phrases.append(phrase)
             } else { groups.append(TranscriptParagraph(phrases: [phrase])) }
@@ -47,8 +48,13 @@ enum TranscriptPresentation {
     }
 
     private static func closeInTime(_ first: Phrase, _ second: Phrase) -> Bool {
-        guard let a = Double(first.time?.value ?? ""), let b = Double(second.time?.value ?? "") else { return true }
-        return max(0, (b > 10_000 ? b / 1000 : b) - (a > 10_000 ? a / 1000 : a)) <= 10
+        func seconds(_ phrase: Phrase) -> Double? {
+            if let ms = phrase.timeMilliseconds { return ms / 1000 }
+            guard let legacy = Double(phrase.time?.value ?? "") else { return nil }
+            return legacy > 10_000 ? legacy / 1000 : legacy
+        }
+        guard let a = seconds(first), let b = seconds(second) else { return true }
+        return b >= a && b - a <= 10
     }
 
     static func speechID(_ phrases: [Phrase], language: String) -> String {

@@ -231,9 +231,11 @@ public final class TranslatorViewModel: ObservableObject {
         improvingTranscript = true
         improveStatus = "Improving transcript…"
         defer { improvingTranscript = false }
+        var voiceReview = ""
         do {
             let diarized = try await api.rediarizeSession(sessionName)
             guard activeSessionName == sessionName else { return }
+            voiceReview = diarized.speakerAudit?.summary ?? ""
             if let next = diarized.phrases, !next.isEmpty {
                 phrases = next
             }
@@ -243,11 +245,13 @@ public final class TranslatorViewModel: ObservableObject {
                 phrases = next
             }
             tokenCount = translated.tokenCount ?? diarized.tokenCount ?? phrases.count
-            improveStatus = "Transcript improved."
+            improveStatus = ["Transcript improved.", voiceReview].filter { !$0.isEmpty }.joined(separator: " ")
             resetSpeechQueue()
             try? await refreshSessions()
         } catch {
-            improveStatus = friendlyError(error)
+            if activeSessionName == sessionName {
+                improveStatus = [voiceReview, friendlyError(error)].filter { !$0.isEmpty }.joined(separator: " ")
+            }
         }
     }
 
@@ -598,8 +602,11 @@ public final class TranslatorViewModel: ObservableObject {
             try? await Task.sleep(nanoseconds: TranslatorViewModel.autoImproveDelay)
             if Task.isCancelled { return }
             do {
-                _ = try await api.rediarizeSession(sessionName)
+                let reviewed = try await api.rediarizeSession(sessionName)
                 if Task.isCancelled { return }
+                if let self, self.activeSessionName == sessionName, !self.isLive {
+                    self.improveStatus = reviewed.speakerAudit?.summary ?? ""
+                }
                 _ = try await api.retranslateSession(sessionName)
                 AppLog.realtime.info("Auto-improve completed for session=\(sessionName, privacy: .public)")
             } catch {

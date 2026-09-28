@@ -393,6 +393,7 @@ def build_phrases(session: Session, partial_tokens: list[dict[str, Any]] | None 
     seen_translation = False
     buffer_is_final = True
     last_time: Any = None
+    last_time_ms: int | float | None = None
 
     all_tokens = list(session.final_tokens)
     if partial_tokens:
@@ -402,7 +403,7 @@ def build_phrases(session: Session, partial_tokens: list[dict[str, Any]] | None 
         return text.replace("<end>", "").replace("<END>", "").strip()
 
     def flush() -> None:
-        nonlocal texts, seen_translation, buffer_is_final, last_time
+        nonlocal texts, seen_translation, buffer_is_final, last_time, last_time_ms
         cleaned = {lang: clean(text) for lang, text in texts.items()}
         cleaned = {lang: text for lang, text in cleaned.items() if text}
         if cleaned:
@@ -418,23 +419,33 @@ def build_phrases(session: Session, partial_tokens: list[dict[str, Any]] | None 
                 "romaji_ja": to_romaji(cleaned.get("ja", "")) if "ja" in cleaned else None,
                 "is_final": buffer_is_final,
                 "time": last_time,
+                "time_ms": last_time_ms,
             })
         texts = {}
         seen_translation = False
         buffer_is_final = True
         last_time = None
+        last_time_ms = None
 
     for token in all_tokens:
         token_text = token.get("text", "")
-        speaker = token.get("speaker")
+        if token_text.strip().lower() == "<end>":
+            flush()
+            current_speaker = None
+            current_source_lang = None
+            continue
+        raw_speaker = token.get("speaker")
+        speaker = str(raw_speaker) if raw_speaker is not None and str(raw_speaker).strip() else None
         language = token.get("language")
         is_translation = token.get("translation_status") == "translation"
         is_final = token.get("is_final", True)
         source_lang = token.get("source_language")
         utterance_source = source_lang if is_translation else language
-        token_time = token.get("start_ms") or token.get("start_time") or token.get("time")
+        token_ms = token.get("start_ms")
+        token_time = token_ms if token_ms is not None else token.get("start_time", token.get("time"))
 
-        if speaker is not None and speaker != current_speaker:
+        # Unattributed words must not silently inherit the preceding person.
+        if speaker != current_speaker:
             flush()
             current_speaker = speaker
             current_source_lang = utterance_source
@@ -466,6 +477,7 @@ def build_phrases(session: Session, partial_tokens: list[dict[str, Any]] | None 
             buffer_is_final = False
         if token_time is not None:
             last_time = token_time
+            last_time_ms = token_ms if isinstance(token_ms, (int, float)) else None
         if language:
             texts[language] = texts.get(language, "") + token_text
         if is_translation:

@@ -12,6 +12,7 @@ import websockets
 from starlette.websockets import WebSocketDisconnect
 
 from .provider_streams import ProviderFanout
+from .speakers import StreamSpeakerIds
 from .sessions import (
     DEFAULT_CONTEXT,
     build_phrases,
@@ -149,6 +150,7 @@ async def run_transcription_bridge(
     session.context = context_summary(context)
     session.expected_speaker_count = parse_expected_speaker_count(start_message.get("expected_speaker_count"))
     session.expected_speaker_names = parse_expected_speaker_names(start_message.get("expected_speaker_names"))
+    speaker_ids = StreamSpeakerIds(session.final_tokens, session.segment_count + 1)
     _persist_session_start(session)
     safe_send_event = _make_safe_send_event(send_event)
 
@@ -222,7 +224,7 @@ async def run_transcription_bridge(
 
                     _final, partial_tokens = process_soniox_tokens(
                         session,
-                        response.get("tokens", []),
+                        speaker_ids.apply(response.get("tokens", [])),
                     )
                     await safe_send_event({
                         "type": "transcript",
@@ -317,7 +319,8 @@ async def run_openai_realtime_overdub_bridge(
             "end_ms": elapsed_ms,
             "confidence": 1.0,
             "is_final": True,
-            "speaker": "1",
+            # This translation transport does not provide diarization.
+            "speaker": None,
             "language": language,
             "translation_status": translation_status,
             "resolved_language": language,
