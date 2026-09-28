@@ -13,6 +13,22 @@ export type SpeechOptions = {
   status: (key: string, value: "loading" | "playing" | "error" | null) => void;
 };
 
+// Both backend speech routes cap requests at 1,500 characters. Keep the entire
+// paragraph, splitting on word boundaries and never inside a surrogate pair.
+function splitSpeechText(text: string): string[] {
+  const chunks: string[] = [];
+  let remaining = text.replace(/\s+/g, " ").trim();
+  while (remaining.length > 1500) {
+    const limit = /[\uD800-\uDBFF]/.test(remaining[1499]!) ? 1499 : 1500;
+    const space = remaining.lastIndexOf(" ", limit);
+    const end = space > 0 ? space : limit;
+    chunks.push(remaining.slice(0, end));
+    remaining = remaining.slice(end).trimStart();
+  }
+  if (remaining) chunks.push(remaining);
+  return chunks;
+}
+
 /** One audio job at a time. The cursor includes unfinished turns so a later
  * translation cannot overtake an earlier English utterance still being translated. */
 export class AutoSpeakQueue {
@@ -118,7 +134,7 @@ export class AutoSpeakQueue {
         // before any audio is played. Corrections invalidate this exact-text key.
         if (!phraseSpeakReady({ ...phrase, is_final: true }, options.adaptations, options.language)) break;
         const item = { key: `tts:${phrase.id}:${options.language}`, language: options.language,
-          text: phraseTargetText(phrase, options.language, options.adaptations).replace(/\s+/g, " ").trim() };
+          text: splitSpeechText(phraseTargetText(phrase, options.language, options.adaptations))[0] || "" };
         if (!item.text) break;
         const identity = this.identity(item, options);
         if (this.prepared?.identity === identity) {
@@ -157,21 +173,27 @@ export class AutoSpeakQueue {
   }
 
   private play(item: SpeechItem, options: SpeechOptions) {
-    const prepared = this.prepared?.identity === this.identity(item, options) ? this.prepared : null;
+    const chunks = splitSpeechText(item.text);
+    const prepared = this.prepared?.identity === this.identity({ ...item, text: chunks[0] || "" }, options) ? this.prepared : null;
     if (prepared) this.prepared = null;
     const active = { controller: prepared?.controller ?? new AbortController(), item, options, playback: undefined as TtsPlayback | undefined };
     this.active = active;
     options.status(item.key, "loading");
     void (async () => {
       try {
-        const playback = await options.play(item, active.controller.signal, prepared?.response);
-        if (active.controller.signal.aborted) {
-          playback.stop();
-          return;
+        for (const [index, text] of chunks.entries()) {
+          active.controller.signal.throwIfAborted();
+          if (index > 0) options.status(item.key, "loading");
+          const playback = await options.play({ ...item, text }, active.controller.signal, index === 0 ? prepared?.response : undefined);
+          if (active.controller.signal.aborted) {
+            playback.stop();
+            return;
+          }
+          active.playback = playback;
+          options.status(item.key, "playing");
+          await playback.done;
+          active.playback = undefined;
         }
-        active.playback = playback;
-        options.status(item.key, "playing");
-        await playback.done;
         if (!active.controller.signal.aborted) options.status(item.key, null);
       } catch {
         if (!active.controller.signal.aborted) options.status(item.key, "error");

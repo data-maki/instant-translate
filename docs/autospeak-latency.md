@@ -54,11 +54,18 @@ Repeated text + same user/language/voice → memory cache → WebRTC audio
 
 ## Manual playback and Bulgarian readings
 
-Each source sentence and translation is clickable, including saved history and
-available text beside an unfinished turn. Clicking a sentence, its Latin reading,
-or its speaker icon plays that sentence in its own language. Another click stops
-the current playback and plays the requested text. Manual playback does not use
-autospeak's English-only direction, latest-box cursor, or finality restrictions.
+Each paragraph has two language-labeled speaker buttons: source and translation.
+Either button reads all available sentences in that paragraph in order, including
+saved history and available draft text. Missing translations do not block source
+playback. Clicking another language or paragraph interrupts the current playback;
+clicking the same button replays from the beginning. The text remains selectable.
+Manual playback does not use autospeak's English-only direction, latest-box cursor,
+or finality restrictions.
+
+The queue splits text longer than the backend's 1,500-character request limit at
+word boundaries, preserving Unicode characters, and plays each chunk sequentially.
+The paragraph keeps one playback identity until its final chunk finishes; newly
+arriving autospeak turns wait behind it. Interruption cancels the remaining chunks.
 
 Bulgarian text includes a Latin reading in brackets beside the Cyrillic by default; the
 Script/Latin toggle can show only the reading. Readings are generated locally

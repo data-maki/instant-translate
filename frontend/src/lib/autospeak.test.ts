@@ -153,6 +153,79 @@ test("manual playback interrupts the backlog; new turns queue behind it", async 
   assert.equal(jobs[2]!.item.text, "Български three");
 });
 
+test("a long manual paragraph plays fully in order before new autospeak turns", async () => {
+  const { queue, options, jobs } = harness();
+  const text = "Това е изречение. ".repeat(200).trim();
+  const status: Array<string | null> = [];
+  options.status = (key, value) => { if (key === "paragraph") status.push(value); };
+  queue.enable([], options);
+  queue.speakNow({ key: "paragraph", text, language: "bg" }, options);
+  queue.update([phrase("next")], options);
+  await flush();
+  assert.equal(jobs.length, 1); // Never overlap chunk playback.
+  for (let i = 0; jobs[i]?.item.key === "paragraph"; i += 1) {
+    assert.ok(jobs[i]!.item.text.length <= 1500);
+    assert.equal(jobs[i]!.item.language, "bg");
+    jobs[i]!.done.resolve();
+    await flush();
+  }
+  const chunks = jobs.filter(job => job.item.key === "paragraph");
+  assert.ok(chunks.length > 1);
+  assert.equal(chunks.map(job => job.item.text).join(" "), text);
+  assert.equal(jobs.at(-1)!.item.text, "Български next");
+  assert.equal(status.filter(value => value === null).length, 1);
+});
+
+test("changing paragraph or language cancels all remaining chunks", async () => {
+  const { queue, options, jobs } = harness();
+  queue.speakNow({ key: "paragraph:bg", text: "Дълъг текст. ".repeat(250), language: "bg" }, options);
+  await flush();
+  queue.speakNow({ key: "paragraph:en", text: "Read the source instead.", language: "en" }, options);
+  await flush();
+  assert.ok(jobs[0]!.stopped);
+  assert.ok(jobs[0]!.signal.aborted);
+  jobs[1]!.done.resolve();
+  await flush();
+  assert.deepEqual(jobs.map(job => job.item.key), ["paragraph:bg", "paragraph:en"]);
+});
+
+test("long autospeak reuses the prepared first chunk and retains the rest", async () => {
+  const { queue, options, jobs } = harness();
+  const prepared: SpeechItem[] = [];
+  const response = Promise.resolve(new Response());
+  options.prepare = item => { prepared.push(item); return response; };
+  const play = options.play;
+  options.play = async (item, signal, cached) => {
+    assert.equal(await cached, jobs.length === 0 ? await response : undefined);
+    return play(item, signal);
+  };
+  const text = "A sentence. ".repeat(150).trim();
+  queue.enable([{ ...phrase("long"), texts: { en: "Source", bg: text } }], options);
+  await flush();
+  assert.equal(prepared.length, 1);
+  assert.deepEqual(prepared[0], jobs[0]!.item);
+  jobs[0]!.done.resolve();
+  await flush();
+  assert.equal(jobs.map(job => job.item.text).join(" "), text);
+  queue.disable();
+});
+
+test("chunking keeps text at the limit intact and never splits Unicode characters", async () => {
+  for (const text of ["Б".repeat(1500), "Б".repeat(1499) + "😀" + "Б".repeat(1501)]) {
+    const { queue, options, jobs } = harness();
+    queue.speakNow({ key: "paragraph", text, language: "bg" }, options);
+    await flush();
+    for (let i = 0; i < jobs.length; i += 1) {
+      assert.ok(jobs[i]!.item.text.length <= 1500);
+      assert.ok(!/[\uD800-\uDBFF]$/.test(jobs[i]!.item.text));
+      jobs[i]!.done.resolve();
+      await flush();
+    }
+    assert.equal(jobs.map(job => job.item.text).join(""), text);
+    if (text.length === 1500) assert.equal(jobs.length, 1);
+  }
+});
+
 test("a failed synthesis releases the next queued turn", async () => {
   const { queue, options, jobs } = harness();
   const normalPlay = options.play;

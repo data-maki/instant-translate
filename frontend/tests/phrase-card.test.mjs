@@ -28,13 +28,13 @@ function elements(node) {
   return [node, ...elements(node.props?.children)];
 }
 
-function render(phrases, { showRomaji = false, adaptations = {}, leftLanguageSelection = "all" } = {}) {
+function render(phrases, { showRomaji = false, adaptations = {}, leftLanguageSelection = "all", ttsStatus = {} } = {}) {
   const played = [];
   const tree = PhraseCard({ phrases, adaptations, activeLeftLanguage: "bg", targetLanguage: "en",
     editingSpeaker: null, leftLanguageSelection, speakerDrafts: {}, showEnhancedEnglish: false,
-    showRomaji, ttsStatus: {}, onEditSpeaker: () => {}, onSpeak: (...args) => played.push(args),
+    showRomaji, ttsStatus, onEditSpeaker: () => {}, onSpeak: (...args) => played.push(args),
     languageMap: new Map([["bg", { name: "Bulgarian", flag: "🇧🇬" }], ["en", { name: "English", flag: "🇬🇧" }]]) });
-  const buttons = elements(tree).filter(node => node.props.role === "button" && node.props.className?.includes("phraseTextButton"));
+  const buttons = elements(tree).filter(node => node.type === "button" && node.props.className?.includes("paragraphPlayButton"));
   return { tree, buttons, played };
 }
 
@@ -42,45 +42,75 @@ const old = { id: "old", source_lang: "en", speaker: 1, speaker_label: "You", is
   texts: { en: "Where is the station?", bg: "Къде е гарата?" } };
 const click = button => button.props.onClick({ stopPropagation() {} });
 
-test("each old sentence can be replayed in either language even beside an unfinished turn", () => {
-  const h = render([old, { ...old, id: "new", is_final: false, texts: { en: "New words" } }]);
-  assert.equal(h.buttons.length, 3);
-  assert.ok(h.buttons.every(button => !button.props["aria-disabled"]));
+test("one pair of controls plays every sentence in the paragraph in either language", () => {
+  const h = render([old, { ...old, id: "next", texts: { en: "Is it nearby?", bg: "Наблизо ли е?" } }]);
+  assert.equal(h.buttons.length, 2);
+  assert.ok(h.buttons.every(button => !button.props.disabled));
   click(h.buttons[0]);
   click(h.buttons[1]);
   click(h.buttons[0]);
   assert.deepEqual(h.played, [
-    ["tts:old:en", "Where is the station?", "en"],
-    ["tts:old:bg", "Къде е гарата?", "bg"],
-    ["tts:old:en", "Where is the station?", "en"]
+    ["tts:paragraph:old:en", "Where is the station? Is it nearby?", "en"],
+    ["tts:paragraph:old:bg", "Къде е гарата? Наблизо ли е?", "bg"],
+    ["tts:paragraph:old:en", "Where is the station? Is it nearby?", "en"]
+  ]);
+  assert.equal(elements(h.tree).filter(node => node.props.role === "button").length, 0);
+});
+
+test("unfinished text and a missing translation do not disable available paragraph speech", () => {
+  const h = render([old, { ...old, id: "new", is_final: false, texts: { en: "New words" } }]);
+  click(h.buttons[0]);
+  click(h.buttons[1]);
+  assert.deepEqual(h.played, [
+    ["tts:paragraph:old:en", "Where is the station? New words", "en"],
+    ["tts:paragraph:old:bg", "Къде е гарата?", "bg"]
   ]);
 });
 
-test("a history box with only its source text still has a manual play action", () => {
+test("source-only history enables source playback and disables the unavailable translation", () => {
   const h = render([{ ...old, source_lang: "bg", texts: { bg: "Здравей" } }]);
-  assert.equal(h.buttons.length, 1);
+  assert.equal(h.buttons.length, 2);
+  assert.equal(h.buttons[0].props.disabled, false);
+  assert.equal(h.buttons[1].props.disabled, true);
   click(h.buttons[0]);
-  assert.deepEqual(h.played, [["tts:old:bg", "Здравей", "bg"]]);
-});
-
-test("the Latin text is clickable but playback still receives Cyrillic", () => {
-  const h = render([old], { showRomaji: true });
-  assert.ok(h.buttons[1].props["aria-label"].includes("Kade e garata?"));
-  assert.equal(h.buttons[1].props.lang, "bg-Latn");
-  assert.equal(h.buttons[1].props.tabIndex, 0);
   click(h.buttons[1]);
-  for (const key of ["Enter", " "]) {
-    let prevented = false;
-    h.buttons[1].props.onKeyDown({ key, preventDefault() { prevented = true; }, stopPropagation() {} });
-    assert.ok(prevented); // Space plays the phrase rather than scrolling the page.
-  }
-  assert.deepEqual(h.played, Array(3).fill(["tts:old:bg", "Къде е гарата?", "bg"]));
+  assert.deepEqual(h.played, [["tts:paragraph:old:bg", "Здравей", "bg"]]);
 });
 
-test("a saved source language keeps its label and playback language when the selection differs", () => {
+test("Latin-only display still speaks the full Cyrillic paragraph", () => {
+  const h = render([old, { ...old, id: "next", texts: { en: "Thanks!", bg: "Благодаря!" } }], { showRomaji: true });
+  const translations = elements(h.tree).filter(node => node.props.className === "phraseText translation");
+  assert.ok(translations.every(node => node.props.lang === "bg-Latn"));
+  assert.ok(elements(h.tree).some(node => node.props.children === "Kade e garata?"));
+  assert.equal(h.buttons[1].type, "button"); // Native Enter/Space activation.
+  click(h.buttons[1]);
+  assert.deepEqual(h.played, [["tts:paragraph:old:bg", "Къде е гарата? Благодаря!", "bg"]]);
+});
+
+test("a saved source retains its language even when the selection differs", () => {
   const h = render([{ ...old, source_lang: "fr", texts: { fr: "Bonjour", en: "Hello" } }], { leftLanguageSelection: "bg" });
-  assert.equal(h.buttons[0].props.lang, "fr");
-  assert.equal(h.buttons[0].props["aria-label"], "Play FR: Bonjour");
+  assert.equal(h.buttons[0].props["aria-label"], "Play paragraph in FR (source)");
   click(h.buttons[0]);
-  assert.deepEqual(h.played, [["tts:old:fr", "Bonjour", "fr"]]);
+  assert.deepEqual(h.played, [["tts:paragraph:old:fr", "Bonjour", "fr"]]);
+});
+
+test("different paragraphs have independent payloads, including the same speaker returning later", () => {
+  const first = render([old]);
+  const reply = render([{ ...old, id: "reply", speaker: 2, source_lang: "bg", texts: { bg: "Там", en: "There" } }]);
+  const later = render([{ ...old, id: "later", texts: { en: "Thank you", bg: "Благодаря" } }]);
+  for (const h of [first, reply, later]) click(h.buttons[0]);
+  assert.deepEqual([first.played, reply.played, later.played], [
+    [["tts:paragraph:old:en", "Where is the station?", "en"]],
+    [["tts:paragraph:reply:bg", "Там", "bg"]],
+    [["tts:paragraph:later:en", "Thank you", "en"]]
+  ]);
+});
+
+test("paragraph and autospeak activity animate the correct language control", () => {
+  const h = render([old], { ttsStatus: { "tts:paragraph:old:bg": "playing", "tts:old:en": "loading" } });
+  assert.ok(h.buttons[0].props["aria-busy"]);
+  assert.equal(h.buttons[1].props["aria-label"], "Replay paragraph in 🇧🇬 Bulgarian (translation)");
+  assert.equal(elements(h.tree).filter(node => node.props.className === "ttsWaveform").length, 1);
+  click(h.buttons[1]);
+  assert.deepEqual(h.played, [["tts:paragraph:old:bg", "Къде е гарата?", "bg"]]);
 });

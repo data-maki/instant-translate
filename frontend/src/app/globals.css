@@ -3646,11 +3646,11 @@ button.sidebarProfileChip {
 .ttsWaveform > span:nth-child(3) { height: 10px; animation-delay: -180ms; }
 .ttsWaveform > span:nth-child(4) { height: 6px; animation-delay: -540ms; }
 
-.phraseTextButton:is(.loading, .playing) .phraseLanguageLabel {
+.paragraphPlayButton:is(.loading, .playing) {
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--language-color) 35%, transparent);
 }
 
-.phraseTextButton.error .phraseLanguageLabel {
+.paragraphPlayButton.error {
   color: var(--color-danger-text);
 }
 
@@ -3766,13 +3766,46 @@ button.sidebarProfileChip {
   min-width: 0;
 }
 
-.phraseTextButton {
-  /* An inline button role lets a long utterance wrap as text, not one box. */
+.paragraphPlayback {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.paragraphPlayButton {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  min-height: 32px;
+  padding: 5px 9px;
+  border: 1px solid color-mix(in srgb, var(--language-color) 20%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--language-color) 10%, transparent);
+  color: var(--language-color);
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 750;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.paragraphPlayButton:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--language-color) 18%, transparent);
+}
+
+.paragraphPlayButton:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.paragraphPlayButton:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.phraseText {
   display: inline;
-  padding: 2px 0;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
   color: var(--foreground);
   font: inherit;
   text-align: start;
@@ -3780,25 +3813,7 @@ button.sidebarProfileChip {
   white-space: pre-wrap;
   font-size: 0.95rem;
   line-height: inherit;
-  cursor: pointer;
   user-select: text;
-  -webkit-box-decoration-break: clone;
-  box-decoration-break: clone;
-}
-
-.phraseTextButton:hover:not([aria-disabled="true"]),
-.phraseTextButton:focus-visible {
-  background: color-mix(in srgb, var(--language-color) 10%, transparent);
-}
-
-.phraseTextButton:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-.phraseTextButton[aria-disabled="true"] {
-  opacity: 1;
-  cursor: default;
 }
 
 .phraseLanguageLabel {
@@ -3826,7 +3841,7 @@ button.sidebarProfileChip {
   font-weight: 400;
 }
 
-.japanese .phraseTextButton {
+.japanese .phraseText {
   font-family: var(--font-geist-sans), "Hiragino Sans", "Yu Gothic", "Noto Sans JP", sans-serif;
   font-size: 1.02rem;
 }
