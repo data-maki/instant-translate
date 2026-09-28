@@ -3,8 +3,29 @@ import type { Phrase } from "./api";
 import {
   adaptationKey,
   buildPhraseDisplayPairs,
+  phraseSpeakReady,
+  phraseTargetText,
   phraseSourceLanguage
 } from "./phrase-text";
+
+{
+  const item: Phrase = { id: "reuse-bg", is_final: true, speaker: 1, speaker_label: "You",
+    source_lang: "en", texts: { en: "Where is the station?", bg: "Къде е гарата?" } };
+  const saved = { [adaptationKey(item, "bg")]: {
+    source_rewrite: "", target_translation: "Друга версия", status: "loading" as const
+  } };
+  assert.equal(phraseTargetText(item, "bg", saved), item.texts.bg);
+  assert.equal(phraseSpeakReady(item, saved, "bg"), true);
+  assert.equal(phraseSpeakReady({ ...item, is_final: false }, saved, "bg"), false);
+  const missing = { ...item, texts: { en: item.texts.en!, bg: "   " } };
+  assert.equal(phraseSpeakReady(missing, {}, "bg"), false);
+  assert.equal(phraseTargetText(missing, "bg", saved), "Друга версия");
+  assert.equal(phraseSpeakReady(missing, saved, "bg"), true);
+  const display = buildPhraseDisplayPairs({ phrases: [missing], adaptations: saved,
+    activeLeftLanguage: "bg", targetLanguage: "en", leftLanguage: "bg", isTargetSource: true,
+    showEnhancedEnglish: false, showRomaji: false });
+  assert.equal(display[0]!.translation, phraseTargetText(missing, "bg", saved));
+}
 
 const SUPPORTED_LANGUAGE_CODES = [
   "ar",

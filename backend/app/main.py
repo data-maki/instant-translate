@@ -10,11 +10,14 @@ import html
 import urllib.error
 import urllib.parse
 import urllib.request
+from contextlib import asynccontextmanager
 from typing import Any
 
+import httpx
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 from .auth import require_user, resolve_user_from_token
 
@@ -54,7 +57,19 @@ GOOGLE_PLACES_NEARBY_URL = "https://places.googleapis.com/v1/places:searchNearby
 
 load_dotenv()
 
-app = FastAPI(title="cottonoha API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Reuse TLS connections across turns instead of reconnecting for every reply.
+    async with httpx.AsyncClient(
+        timeout=30,
+        limits=httpx.Limits(keepalive_expiry=60),
+        headers={"User-Agent": "OpenAI File Downloader, XaiImageApiFetch/1.0"},
+    ) as client:
+        app.state.tts_client = client
+        yield
+
+
+app = FastAPI(title="cottonoha API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -389,13 +404,14 @@ def languages() -> dict[str, Any]:
 
 # ElevenLabs voice / language coverage map.
 #
-# `eleven_v3` is our primary model (~70 languages). We keep
-# `eleven_multilingual_v2` as a fallback for the rare case where a voice is not
-# yet enrolled in v3. Any v3 voice speaks every supported language — the model
-# auto-detects from the text — so we just need one good multilingual male voice
-# (Adam) plus a curated Japanese voice (Shohei).
+# Keep v3 for broad language coverage; conversational playback uses Flash where
+# supported. Coverage verified against ElevenLabs /v1/models (2026-09-28).
 ELEVENLABS_PRIMARY_MODEL = "eleven_v3"
 ELEVENLABS_FALLBACK_MODEL = "eleven_multilingual_v2"
+ELEVENLABS_FAST_MODEL = "eleven_flash_v2_5"
+ELEVENLABS_FAST_LANGUAGES = set(
+    "en ja zh de hi fr ko pt it es ru id nl tr tl pl sv bg ro ar cs el fi hr ms sk da ta uk hu no vi".split()
+)
 # Soniox languages eleven_v3 still does not cover well. The fallback model will
 # not rescue these either.
 ELEVENLABS_V3_UNSUPPORTED = {"eu"}  # Basque
@@ -404,9 +420,7 @@ ELEVENLABS_DEFAULT_VOICE_ID = "pNInz6obpgDQGcFmaJgB"  # Adam — multilingual ma
 _ADAM = ELEVENLABS_DEFAULT_VOICE_ID
 _SHOHEI = "NO5A3b3sSzDyJQF7MiNS"  # Curated Japanese voice (matches the profile picker)
 
-# Officially supported by eleven_multilingual_v2 (29 languages). For the remaining
-# Soniox languages we still send the request, but TTS quality may be poor or
-# pronounce text as if it were English.
+# Voice selection is independent of the model's language coverage.
 ELEVENLABS_LANGUAGE_DEFAULT_VOICES: dict[str, str] = {
     "ar": _ADAM,  # Arabic
     "bg": _ADAM,  # Bulgarian
@@ -437,10 +451,7 @@ ELEVENLABS_LANGUAGE_DEFAULT_VOICES: dict[str, str] = {
     "tr": _ADAM,  # Turkish
     "uk": _ADAM,  # Ukrainian
     "zh": _ADAM,  # Chinese
-    # Soniox languages NOT officially in eleven_multilingual_v2's 29-language set.
-    # They are still routable to Adam; output may be mispronounced or rendered as
-    # if English. ElevenLabs `eleven_v3` (alpha) covers most of these but is not
-    # yet wired up here.
+    # Additional Soniox languages, mostly requiring the broader v3 model.
     "bs": _ADAM,  # Bosnian
     "ca": _ADAM,  # Catalan
     "et": _ADAM,  # Estonian
@@ -479,6 +490,8 @@ def tts_voices() -> dict[str, Any]:
         "default_voice_id": ELEVENLABS_DEFAULT_VOICE_ID,
         "primary_model_id": ELEVENLABS_PRIMARY_MODEL,
         "fallback_model_id": ELEVENLABS_FALLBACK_MODEL,
+        "fast_model_id": ELEVENLABS_FAST_MODEL,
+        "fast_languages": sorted(ELEVENLABS_FAST_LANGUAGES),
         "language_voices": dict(ELEVENLABS_LANGUAGE_DEFAULT_VOICES),
         "officially_supported_languages": sorted(
             code
@@ -505,6 +518,7 @@ def _elevenlabs_request(
             "xi-api-key": api_key,
             "Content-Type": "application/json",
             "Accept": "audio/mpeg",
+            "User-Agent": "OpenAI File Downloader, XaiImageApiFetch/1.0",
         },
         json={"text": text, "model_id": model_id, "voice_settings": settings},
         timeout=30,
@@ -567,6 +581,56 @@ def tts_speak(
         "voice_id": voice_id,
         "model_id": used_model,
     }
+
+
+@app.post("/tts/stream")
+async def tts_stream(
+    payload: dict[str, Any],
+    user_id: str = Depends(require_user),
+) -> StreamingResponse:
+    """Stream mono PCM as it is generated; keep /tts/speak compatible with iOS."""
+    api_key = os.environ.get("ELEVENLABS_API_KEY")
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Missing ELEVENLABS_API_KEY.")
+    text = str(payload.get("text") or "").strip()[:1500]
+    if not text:
+        raise HTTPException(status_code=400, detail="Expected non-empty text.")
+    language = str(payload.get("target_language") or "").strip().lower()
+    voice = str(payload.get("voice_id") or "").strip() or ELEVENLABS_LANGUAGE_DEFAULT_VOICES.get(language, ELEVENLABS_DEFAULT_VOICE_ID)
+    model = ELEVENLABS_FAST_MODEL if language in ELEVENLABS_FAST_LANGUAGES else ELEVENLABS_PRIMARY_MODEL
+    candidates = list(dict.fromkeys([model, ELEVENLABS_PRIMARY_MODEL, ELEVENLABS_FALLBACK_MODEL]))
+    client = app.state.tts_client
+    try:
+        for candidate in candidates:
+            body = {"text": text, "model_id": candidate, "voice_settings": {"stability": 0.5, "similarity_boost": 0.75}}
+            if language and candidate != ELEVENLABS_FALLBACK_MODEL:
+                body["language_code"] = "fil" if language == "tl" else language
+            request = client.build_request(
+                "POST", f"https://api.elevenlabs.io/v1/text-to-speech/{urllib.parse.quote(voice, safe='')}/stream",
+                params={"output_format": "pcm_24000"},
+                headers={"xi-api-key": api_key}, json=body,
+            )
+            response = await client.send(request, stream=True)
+            if response.is_success:
+                break
+            await response.aclose()
+        else:
+            raise HTTPException(status_code=502, detail="ElevenLabs could not synthesize speech.")
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=502, detail="ElevenLabs speech service is unavailable.") from exc
+
+    async def audio():
+        try:
+            # Do not specify a chunk size: that can hold back the first audio.
+            async for chunk in response.aiter_bytes():
+                yield chunk
+        finally:
+            await response.aclose()
+
+    return StreamingResponse(audio(), media_type="application/octet-stream", headers={
+        "Cache-Control": "no-store", "X-Accel-Buffering": "no", "X-TTS-Model": candidate,
+        "X-Audio-Sample-Rate": "24000",
+    })
 
 
 def _google_maps_api_key() -> str | None:

@@ -79,6 +79,100 @@ export type TtsPlayback = {
   stop: () => void;
 };
 
+/** Called from a click/start handler to unlock audio and negotiate AEC early. */
+export async function warmTtsPlayback(): Promise<void> {
+  await ensureLoopback();
+}
+
+/** Play 24 kHz signed little-endian PCM immediately, without a complete MP3 or
+ * decodeAudioData. Every chunk still goes through the WebRTC echo reference. */
+export async function playPcmTtsThroughAec(response: Response, signal?: AbortSignal): Promise<TtsPlayback> {
+  if (response.headers.get("Content-Type")?.startsWith("audio/mpeg")) {
+    const url = URL.createObjectURL(await response.blob());
+    try {
+      const playback = await playTtsThroughAec(url, signal);
+      void playback.done.finally(() => URL.revokeObjectURL(url));
+      return playback;
+    } catch (error) {
+      URL.revokeObjectURL(url);
+      throw error;
+    }
+  }
+  const { context, destination } = await ensureLoopback();
+  signal?.throwIfAborted();
+  if (!response.body) throw new Error("Missing speech audio");
+  const reader = response.body.getReader();
+  const sources = new Set<AudioBufferSourceNode>();
+  let finished = false;
+  let ended = false;
+  let scheduledUntil = context.currentTime;
+  let trailingByte: number | undefined;
+  let resolveDone!: () => void;
+  let rejectDone!: (error: unknown) => void;
+  const done = new Promise<void>((resolve, reject) => { resolveDone = resolve; rejectDone = reject; });
+  // A stream can fail before the caller receives the playback handle.
+  void done.catch(() => {});
+  let resolveStarted!: () => void;
+  let rejectStarted!: (error: unknown) => void;
+  const started = new Promise<void>((resolve, reject) => { resolveStarted = resolve; rejectStarted = reject; });
+  const finish = (error?: unknown) => {
+    if (finished) return;
+    finished = true;
+    signal?.removeEventListener("abort", stop);
+    void reader.cancel().catch(() => {});
+    for (const source of sources) { source.onended = null; source.stop(); source.disconnect(); }
+    sources.clear();
+    rejectStarted(error ?? new DOMException("Speech stopped", "AbortError"));
+    if (error) rejectDone(error);
+    else resolveDone();
+  };
+  const stop = () => finish();
+  signal?.addEventListener("abort", stop, { once: true });
+  void (async () => {
+    try {
+      while (!finished) {
+        const { value, done: eof } = await reader.read();
+        if (finished) return;
+        if (eof) {
+          if (trailingByte !== undefined) throw new Error("Incomplete speech audio sample");
+          ended = true;
+          if (!sources.size) finish();
+          return;
+        }
+        let bytes = value;
+        if (trailingByte !== undefined) {
+          bytes = new Uint8Array(value.length + 1);
+          bytes[0] = trailingByte;
+          bytes.set(value, 1);
+          trailingByte = undefined;
+        }
+        if (bytes.length % 2) trailingByte = bytes[bytes.length - 1];
+        const samples = Math.floor(bytes.length / 2);
+        if (!samples) continue;
+        const buffer = context.createBuffer(1, samples, 24000);
+        const channel = buffer.getChannelData(0);
+        const view = new DataView(bytes.buffer, bytes.byteOffset, samples * 2);
+        for (let i = 0; i < samples; i += 1) channel[i] = view.getInt16(i * 2, true) / 32768;
+        const source = context.createBufferSource();
+        source.buffer = buffer;
+        source.connect(destination);
+        sources.add(source);
+        source.onended = () => {
+          sources.delete(source);
+          source.disconnect();
+          if (ended && !sources.size) finish();
+        };
+        const at = Math.max(scheduledUntil, context.currentTime + 0.04);
+        scheduledUntil = at + buffer.duration;
+        source.start(at);
+        resolveStarted();
+      }
+    } catch (error) { finish(error); }
+  })();
+  await started;
+  return { done, stop };
+}
+
 export async function playTtsThroughAec(src: string, signal?: AbortSignal): Promise<TtsPlayback> {
   const { context, destination } = await ensureLoopback();
   signal?.throwIfAborted();

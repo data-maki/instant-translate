@@ -1,4 +1,5 @@
 import type { Phrase } from "@/lib/api";
+import { romanizeBulgarian } from "./romanization";
 
 export const ENGLISH_LANGUAGE = "en";
 
@@ -8,11 +9,15 @@ export type PhraseAdaptation = {
   status: "loading" | "ready" | "error";
 };
 
+export type PhraseSpeech = { key: string; text: string; language: string };
+
 export type PhrasePair = {
   text: string;
   romaji?: string;
   translation?: string;
   translationRomaji?: string;
+  sourceSpeech?: PhraseSpeech;
+  translationSpeech?: PhraseSpeech;
 };
 
 export type TranscriptLatencyMode = "fast" | "slow";
@@ -84,7 +89,7 @@ export function phraseTargetText(
     return phrase.texts[targetLanguage] || "";
   }
   const adaptation = adaptations[adaptationKey(phrase, targetLanguage)];
-  return phrase.texts[targetLanguage] || adaptation?.target_translation || "";
+  return phrase.texts[targetLanguage]?.trim() ? phrase.texts[targetLanguage] : adaptation?.target_translation || "";
 }
 
 export function phraseShownTargetText(
@@ -103,7 +108,8 @@ export function phraseShownTargetText(
   return showEnhancedEnglish && adaptation?.source_rewrite ? adaptation.source_rewrite : original;
 }
 
-function phraseRomanization(phrase: Phrase, langCode: string): string {
+function phraseRomanization(phrase: Phrase, langCode: string, text: string): string {
+  if (langCode === "bg") return romanizeBulgarian(text);
   if (langCode === "ja") return phrase.romaji_ja || "";
   return "";
 }
@@ -119,8 +125,7 @@ function phraseTranslationText(
   adaptations: Record<string, PhraseAdaptation>
 ): string {
   if (!translationLanguage || translationLanguage === sourceLanguage) return "";
-  const adaptation = adaptations[adaptationKey(phrase, translationLanguage)];
-  return phrase.texts[translationLanguage] || adaptation?.target_translation || "";
+  return phraseTargetText(phrase, translationLanguage, adaptations);
 }
 
 export function buildPhraseDisplayPairs({
@@ -147,22 +152,20 @@ export function buildPhraseDisplayPairs({
     const sourceText = phraseSourceText(item, itemSourceLang);
     const translationLanguage = itemSourceLang === targetLanguage ? leftLanguage : targetLanguage;
     const translatedText = phraseTranslationText(item, itemSourceLang, translationLanguage, adaptations);
-    const romaji = phraseRomanization(item, itemSourceLang);
-
-    if (isTargetSource) {
-      return {
-        text: showEnhancedEnglish && itemSourceLang === ENGLISH_LANGUAGE
-          ? adaptations[adaptationKey(item, leftLanguage)]?.source_rewrite || sourceText
-          : sourceText,
-        translation: showRomaji && romaji ? romaji : translatedText,
-        translationRomaji: showRomaji || !romaji ? undefined : romaji
-      };
-    }
-
+    const shownSource = isTargetSource && showEnhancedEnglish && itemSourceLang === ENGLISH_LANGUAGE
+      ? adaptations[adaptationKey(item, leftLanguage)]?.source_rewrite || sourceText
+      : sourceText;
+    const romaji = phraseRomanization(item, itemSourceLang, shownSource);
+    const translationRomaji = phraseRomanization(item, translationLanguage, translatedText);
     return {
-      text: showRomaji && romaji ? romaji : sourceText,
+      text: showRomaji && romaji ? romaji : shownSource,
       romaji: showRomaji ? "" : romaji,
-      translation: translatedText
+      translation: showRomaji && translationRomaji ? translationRomaji : translatedText,
+      translationRomaji: showRomaji ? "" : translationRomaji,
+      // Manual playback is per visible phrase/language, including history and
+      // the available text of a live draft. Autospeak owns finality separately.
+      sourceSpeech: shownSource.trim() ? { key: `tts:${item.id}:${itemSourceLang}`, text: shownSource, language: itemSourceLang } : undefined,
+      translationSpeech: translatedText.trim() ? { key: `tts:${item.id}:${translationLanguage}`, text: translatedText, language: translationLanguage } : undefined
     };
   });
 }
@@ -170,31 +173,15 @@ export function buildPhraseDisplayPairs({
 export function phraseSpeakReady(
   phrase: Phrase,
   adaptations: Record<string, PhraseAdaptation>,
-  speakLanguage: string,
-  latencyMode: TranscriptLatencyMode
+  speakLanguage: string
 ): boolean {
   if (!phrase.is_final) return false;
   if (!speakLanguage) return false;
-  const sourceLang = phrase.source_lang || firstNonEnglishTextLanguage(phrase) || speakLanguage;
-  if (sourceLang === speakLanguage) {
-    return Boolean(phrase.texts[speakLanguage]?.trim());
-  }
-  const adaptation = adaptations[adaptationKey(phrase, speakLanguage)];
-  if (!adaptation?.target_translation?.trim() && !phrase.texts[speakLanguage]?.trim()) {
-    return false;
-  }
-  if (latencyMode === "slow") {
-    if (sourceLang === "en") {
-      if (adaptation?.status !== "ready" || !adaptation.source_rewrite?.trim()) {
-        return false;
-      }
-    } else if (adaptation?.status !== "ready") {
-      return false;
-    }
-  }
-  return true;
+  // Display mode and optional English polishing never block an existing
+  // translation. Use exactly the same text as the transcript and TTS payload.
+  return Boolean(phraseTargetText(phrase, speakLanguage, adaptations).trim());
 }
 
 export function supportsRomanization(langCode: string): boolean {
-  return langCode === "ja";
+  return langCode === "ja" || langCode === "bg";
 }

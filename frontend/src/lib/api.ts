@@ -364,6 +364,63 @@ export async function generateTts(payload: {
   }, userId), "Could not synthesize speech");
 }
 
+// Session-memory cache only. Never persist conversation audio or share it across
+// users/voices. In-flight work is owned and reused by AutoSpeakQueue.
+const ttsCache = new Map<string, { audio: Uint8Array; expires: number }>();
+const TTS_CACHE_BYTES = 8 * 1024 * 1024;
+const TTS_CLIP_BYTES = 4 * 1024 * 1024;
+
+export async function generateTtsStream(payload: {
+  text: string;
+  target_language: string;
+  voice_id?: string;
+}, userId?: string, signal?: AbortSignal): Promise<Response> {
+  signal?.throwIfAborted();
+  const key = JSON.stringify([userId, payload.target_language, payload.voice_id, payload.text]);
+  for (const [key, value] of ttsCache) {
+    if (value.expires <= Date.now()) ttsCache.delete(key);
+  }
+  const cached = ttsCache.get(key);
+  if (cached) {
+    ttsCache.delete(key);
+    ttsCache.set(key, cached);
+    return new Response(cached.audio.slice());
+  }
+  const response = await fetch(`${apiBaseUrl()}/tts/stream`, withUserHeader({
+    method: "POST", signal, headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload)
+  }, userId));
+  // A dev tab can refresh before an actively recording backend can restart.
+  if (response.status === 404) {
+    const legacy = await generateTts(payload, userId, signal);
+    const audio = Uint8Array.from(atob(legacy.audio_base64), char => char.charCodeAt(0));
+    return new Response(audio, { headers: { "Content-Type": legacy.mime_type } });
+  }
+  if (!response.ok || !response.body) throw new Error("Could not synthesize speech");
+  const chunks: Uint8Array[] = [];
+  let bytes = 0;
+  return new Response(response.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      controller.enqueue(chunk);
+      bytes += chunk.byteLength;
+      if (bytes <= TTS_CLIP_BYTES) chunks.push(chunk);
+      else chunks.length = 0;
+    },
+    flush() {
+      if (!bytes || bytes > TTS_CLIP_BYTES || signal?.aborted) return;
+      const audio = new Uint8Array(bytes);
+      let offset = 0;
+      for (const chunk of chunks) { audio.set(chunk, offset); offset += chunk.byteLength; }
+      ttsCache.set(key, { audio, expires: Date.now() + 5 * 60_000 });
+      let total = [...ttsCache.values()].reduce((sum, entry) => sum + entry.audio.byteLength, 0);
+      for (const [oldKey, entry] of ttsCache) {
+        if (total <= TTS_CACHE_BYTES && ttsCache.size <= 32) break;
+        ttsCache.delete(oldKey);
+        total -= entry.audio.byteLength;
+      }
+    }
+  })), { headers: response.headers });
+}
+
 export type NameKatakanaOption = {
   first_katakana: string;
   last_katakana: string;

@@ -5,13 +5,12 @@ import Link from "next/link";
 import Image from "next/image";
 import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
-  adaptPhrase,
   createRealtimeTranslationSession,
   deleteSession as deleteSavedSession,
   fetchPlacesContext,
   fetchSessionDetail,
   fetchSessions,
-  generateTts,
+  generateTtsStream,
   Language,
   Phrase,
   rediarizeSession,
@@ -47,7 +46,7 @@ import {
   speakerEditableName,
   speakerKey
 } from "@/lib/speaker";
-import { playTtsThroughAec, type TtsPlayback } from "@/lib/tts-playback";
+import { playPcmTtsThroughAec, warmTtsPlayback, type TtsPlayback } from "@/lib/tts-playback";
 import { AutoSpeakQueue, type SpeechItem, type SpeechOptions } from "@/lib/autospeak";
 
 type AppStatus =
@@ -595,7 +594,10 @@ export function TranslatorApp({
   function changeTtsMode(mode: TtsMode) {
     ttsModeRef.current = mode;
     setTtsMode(mode);
-    if (mode === "auto") getSpeechQueue().enable(phrases, speechOptions());
+    if (mode === "auto") {
+      void warmTtsPlayback().catch(() => {});
+      getSpeechQueue().enable(phrases, speechOptions());
+    }
     else getSpeechQueue().disable();
     if (typeof window !== "undefined") {
       try {
@@ -624,26 +626,31 @@ export function TranslatorApp({
     const cleanText = (text || "").replace(/\s+/g, " ").trim();
     if (!cleanText) return;
     const language = (languageCode || "").trim().toLowerCase() || ttsSpeakLanguage;
+    void warmTtsPlayback().catch(() => {});
     getSpeechQueue().speakNow({ key, text: cleanText, language }, speechOptions());
   }
 
-  async function playSpeechItem(item: SpeechItem, signal: AbortSignal): Promise<TtsPlayback> {
+  function prepareSpeechItem(item: SpeechItem, signal: AbortSignal): Promise<Response> {
     const profileVoice = travelerProfile.tts_voice_id?.trim();
-    const result = await generateTts({
+    return generateTtsStream({
       text: item.text,
       target_language: item.language,
       voice_id: item.language === "ja" && profileVoice ? profileVoice : undefined
     }, userId, signal);
+  }
+
+  async function playSpeechItem(item: SpeechItem, signal: AbortSignal, prepared?: Promise<Response>): Promise<TtsPlayback> {
+    const result = await (prepared ?? prepareSpeechItem(item, signal));
     signal.throwIfAborted();
-    const playback = await playTtsThroughAec(`data:${result.mime_type};base64,${result.audio_base64}`, signal);
+    const playback = await playPcmTtsThroughAec(result, signal);
     if (signal.aborted) {
       playback.stop();
       signal.throwIfAborted();
     }
     ttsAudioRef.current = playback;
-    void playback.done.then(() => {
+    void playback.done.finally(() => {
       if (ttsAudioRef.current === playback) ttsAudioRef.current = null;
-    });
+    }).catch(() => {}); // The queue reports playback errors through its status.
     return playback;
   }
 
@@ -652,6 +659,8 @@ export function TranslatorApp({
       language: ttsSpeakLanguage,
       latency: ttsLatencyRef.current,
       adaptations: adaptationsSnapshot,
+      prepare: prepareSpeechItem,
+      preparationKey: JSON.stringify([userId, travelerProfile.tts_voice_id]),
       play: playSpeechItem,
       status: setTtsStatusFor
     };
@@ -685,9 +694,7 @@ export function TranslatorApp({
   }
 
   function requestAdaptationsFor(phrasesToInspect: Phrase[], targetLanguage = activeLeftLanguage) {
-    const phrasesForRewrite = phrasesToInspect;
-
-    for (const phrase of phrasesForRewrite) {
+    for (const phrase of phrasesToInspect) {
       const sourceLang = phrase.source_lang || firstNonEnglishTextLanguage(phrase);
       const sourceText = sourceLang ? phrase.texts[sourceLang]?.trim() : "";
       if (!sourceLang || !sourceText || !phrase.is_final) {
@@ -695,9 +702,8 @@ export function TranslatorApp({
       }
       const neededTargets = dedupeList([sourceB, targetLanguage]).filter((target) => target && target !== sourceLang);
       for (const target of neededTargets) {
-        if (sourceLang === ENGLISH_LANGUAGE && target === targetLanguage && target !== ENGLISH_LANGUAGE) {
-          continue;
-        }
+        // Soniox already translated this turn. Only fill genuinely missing
+        // languages (including typed input); never rewrite/retranslate for TTS.
         if (phrase.texts[target]?.trim()) {
           continue;
         }
@@ -721,7 +727,7 @@ export function TranslatorApp({
           draft_translation: "",
           rewrite_context: {
             tone: contextBundle.rewriteTone,
-            recent_dialogue: recentDialogueForRewrite(phrasesForRewrite, adaptationsRef.current, translationKey, target)
+            recent_dialogue: recentDialogueForRewrite(phrasesToInspect, adaptationsRef.current, translationKey, target)
           }
         }, userId)
           .then((result) => {
@@ -748,99 +754,12 @@ export function TranslatorApp({
             }));
           });
       }
-
-      const key = adaptationKey(phrase, targetLanguage);
-      if (
-        !key ||
-        adaptationsRef.current[key] ||
-        adaptationRequestsRef.current.has(key) ||
-        sourceLang !== ENGLISH_LANGUAGE ||
-        targetLanguage === ENGLISH_LANGUAGE ||
-        !phrase.is_final
-      ) {
-        continue;
-      }
-      const draftTranslation = phrase.texts[targetLanguage]?.trim();
-      if (!sourceText) {
-        continue;
-      }
-      adaptationRequestsRef.current.add(key);
-      const baseRewriteContext = {
-        tone: contextBundle.rewriteTone,
-        recent_dialogue: recentDialogueForRewrite(phrasesForRewrite, adaptationsRef.current, key, targetLanguage)
-      };
-      translatePhrase({
-        source_language: ENGLISH_LANGUAGE,
-        target_language: targetLanguage,
-        source_text: sourceText,
-        draft_translation: draftTranslation,
-        rewrite_context: baseRewriteContext
-      }, userId)
-        .then((result) => {
-          const nextAdaptation = {
-            source_rewrite: adaptationsRef.current[key]?.source_rewrite || "",
-            target_translation: result.target_translation,
-            status: "ready" as const
-          };
-          persistAdaptation(key, nextAdaptation);
-          setAdaptationsSynced((current) => ({
-            ...current,
-            [key]: nextAdaptation
-          }));
-          refreshAutoSpeak();
-        })
-        .catch(() => {
-          // Keep Soniox's provisional translation if the fast DeepL pass misses.
-        });
-      window.setTimeout(() => {
-        const signals = providerSignalsRef.current;
-        setAdaptationsSynced((current) => ({
-          ...current,
-          [key]: {
-            source_rewrite: current[key]?.source_rewrite || "",
-            target_translation: current[key]?.target_translation || "",
-            status: "loading"
-          }
-        }));
-        adaptPhrase({
-          source_language: ENGLISH_LANGUAGE,
-          target_language: targetLanguage,
-          source_text: sourceText,
-          draft_translation: draftTranslation,
-          rewrite_context: {
-            ...baseRewriteContext,
-            transcription_candidates: [sourceText, ...signals.transcripts.slice(-4)],
-            translation_candidates: [
-              ...(draftTranslation ? [draftTranslation] : []),
-              ...signals.translations.slice(-4)
-            ]
-          }
-        }, userId)
-          .then((result) => {
-            const nextAdaptation = { ...result, status: "ready" as const };
-            persistAdaptation(key, nextAdaptation);
-            setAdaptationsSynced((current) => ({
-              ...current,
-              [key]: nextAdaptation
-            }));
-            refreshAutoSpeak();
-          })
-          .catch(() => {
-            setAdaptationsSynced((current) => ({
-              ...current,
-              [key]: {
-                source_rewrite: current[key]?.source_rewrite || "",
-                target_translation: current[key]?.target_translation || "",
-                status: "error"
-              }
-            }));
-          });
-      }, 350);
     }
   }
 
   async function start(forceRealtime = openAIRealtimeEnabled) {
     if (postProcessing) return;
+    if (ttsModeRef.current === "auto") void warmTtsPlayback().catch(() => {});
     // A pending history response belongs to the view that requested it.
     // Replacing the cache object invalidates that request without losing cache entries.
     sessionDetailCacheRef.current = { ...sessionDetailCacheRef.current };
@@ -1756,10 +1675,10 @@ export function TranslatorApp({
                 {supportsRomanization(activeLeftLanguage) ? (
                   <DualLabelToggle
                     leftLabel="script"
-                    rightLabel="romaji"
+                    rightLabel={activeLeftLanguage === "ja" ? "romaji" : "latin"}
                     rightSelected={showRomaji}
                     onChange={setShowRomaji}
-                    title="Script shows original characters. Romaji shows only the phonetic romanization."
+                    title="Script shows the original text with a Latin reading in brackets. Latin shows just the reading. Tap either to hear the original pronunciation."
                   />
                 ) : null}
                 <DualLabelToggle
@@ -1771,14 +1690,14 @@ export function TranslatorApp({
                     setTranscriptLatencyMode(ttsLatencyRef.current);
                     refreshAutoSpeak();
                   }}
-                  title="Slow mode waits for the AI to polish the wording and translation before showing the bubble. Fast skips the polish step."
+                  title="Slow waits for translations before showing the bubble. Fast shows drafts as they arrive."
                 />
                 <DualLabelToggle
                   leftLabel="original"
                   rightLabel="enhanced"
                   rightSelected={showEnhancedEnglish}
                   onChange={setShowEnhancedEnglish}
-                  title="Enhanced shows the AI-polished English so the translation reads naturally. Original shows the verbatim transcript."
+                  title="Enhanced shows saved English wording improvements when available. Original shows the verbatim transcript."
                 />
                 <DualLabelToggle
                   leftLabel="push"
@@ -1836,7 +1755,7 @@ export function TranslatorApp({
                   />
                 ) : visiblePhraseGroups.length === 0 ? (
                   <div className="emptyState">
-                    <strong>Waiting for corrections...</strong>
+                    <strong>Waiting for translations...</strong>
                   </div>
                 ) : (
                   visiblePhraseGroups.map((phraseGroup) => (
@@ -1845,13 +1764,11 @@ export function TranslatorApp({
                       adaptations={adaptations}
                       activeLeftLanguage={activeLeftLanguage}
                       editingSpeaker={editingSpeaker}
-                      latencyMode={transcriptLatencyMode}
                       leftLanguageSelection={leftLanguageSelection}
                       languageMap={languageMap}
                       onEditSpeaker={openSpeakerEditor}
                       onSpeak={speakPhraseText}
                       phrases={phraseGroup}
-                      speakLanguage={ttsSpeakLanguage}
                       speakerDrafts={speakerDrafts}
                       showEnhancedEnglish={showEnhancedEnglish}
                       showRomaji={showRomaji}

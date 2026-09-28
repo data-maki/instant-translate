@@ -2,15 +2,15 @@
 
 import type { CSSProperties } from "react";
 import type { Language, Phrase } from "@/lib/api";
+import { languageHue } from "@/lib/language-colors";
 import {
   adaptationKey,
   buildPhraseDisplayPairs,
-  joinDisplayLines,
-  phraseSpeakReady,
   phraseSourceLanguage,
-  phraseTargetText,
+  supportsRomanization,
   type PhraseAdaptation,
-  type PhrasePair
+  type PhrasePair,
+  type PhraseSpeech
 } from "@/lib/phrase-text";
 import {
   fallbackSpeakerLabel,
@@ -29,20 +29,18 @@ type SpeakerDraft = {
 };
 
 type TtsPlaybackState = "loading" | "playing" | "error";
-type TranscriptLatencyMode = "fast" | "slow";
 type LeftLanguageSelection = "all" | string;
+type SpeakHandler = (key: string, text: string, language: string) => void;
 
 export function PhraseCard({
   activeLeftLanguage,
   adaptations,
   editingSpeaker,
-  latencyMode,
   leftLanguageSelection,
   languageMap,
   onEditSpeaker,
   onSpeak,
   phrases,
-  speakLanguage,
   speakerDrafts,
   showEnhancedEnglish,
   showRomaji,
@@ -52,13 +50,11 @@ export function PhraseCard({
   activeLeftLanguage: string;
   adaptations: Record<string, PhraseAdaptation>;
   editingSpeaker: string | null;
-  latencyMode: TranscriptLatencyMode;
   leftLanguageSelection: LeftLanguageSelection;
   languageMap: Map<string, Language>;
   onEditSpeaker: (speakerId: string, label: string) => void;
-  onSpeak: (key: string, text: string, language: string) => void;
+  onSpeak: SpeakHandler;
   phrases: Phrase[];
-  speakLanguage: string;
   speakerDrafts: Record<string, SpeakerDraft>;
   showEnhancedEnglish: boolean;
   showRomaji: boolean;
@@ -95,22 +91,8 @@ export function PhraseCard({
   const hasEnhancedEnglish = phrases.some((item) => Boolean(adaptations[adaptationKey(item, activeLeftLanguage)]?.source_rewrite?.trim()));
   const loading = phrases.some((item) => adaptations[adaptationKey(item, activeLeftLanguage)]?.status === "loading");
 
-  const firstPhrase = phrases[0]!;
-  const sourceSpeakText = isTargetSource
-    ? joinDisplayLines(phrases.map((item) => phraseTargetText(item, speakLanguage, adaptations)))
-    : joinDisplayLines(phrases.map((item) => item.texts[speakLanguage] || ""));
-  const sourceSpeakKey = speakLanguage ? `tts:${firstPhrase.id}:${speakLanguage}` : "";
-  const sourceSpeakable =
-    Boolean(speakLanguage) &&
-    sourceSpeakText.trim().length > 0 &&
-    phrases.every((item) => phraseSpeakReady(item, adaptations, speakLanguage, latencyMode));
-  const sourceOnSpeak = sourceSpeakable
-    ? () => onSpeak(sourceSpeakKey, sourceSpeakText, speakLanguage)
-    : undefined;
-  const sourceTtsState = sourceSpeakable ? ttsStatus[sourceSpeakKey] : undefined;
-
-  const bubbleCode = isTargetSource ? targetLanguage : leftLanguage;
-  const bubbleLabel = isTargetSource ? targetLabel : leftLabel;
+  const bubbleCode = sourceLang;
+  const bubbleLabel = languageLabel(languageMap, sourceLang);
   const translationCode = isTargetSource ? leftLanguage : targetLanguage;
   const translationLabel = isTargetSource ? leftLabel : targetLabel;
 
@@ -123,14 +105,14 @@ export function PhraseCard({
         label={bubbleLabel}
         loading={loading}
         onEditSpeaker={onEditSpeaker}
-        onSpeak={sourceOnSpeak}
+        onSpeak={onSpeak}
         pairs={phrasePairs}
         speakerId={speakerId}
         speakerInitials={speakerInitials}
         speakerLabel={speakerLabel}
         translationCode={translationCode}
         translationLabel={translationLabel}
-        ttsState={sourceTtsState}
+        ttsStatus={ttsStatus}
       />
     </article>
   );
@@ -155,7 +137,7 @@ function BubbleWithSpeaker({
   speakerLabel,
   translationCode,
   translationLabel,
-  ttsState
+  ttsStatus
 }: {
   code: string;
   editingSpeaker: boolean;
@@ -163,14 +145,14 @@ function BubbleWithSpeaker({
   label: string;
   loading?: boolean;
   onEditSpeaker: (speakerId: string, label: string) => void;
-  onSpeak?: () => void;
+  onSpeak: SpeakHandler;
   pairs: PhrasePair[];
   speakerId: string;
   speakerInitials: string;
   speakerLabel: string;
   translationCode: string;
   translationLabel: string;
-  ttsState?: TtsPlaybackState;
+  ttsStatus: Record<string, TtsPlaybackState>;
 }) {
   return (
     <div className={`bubbleWithSpeaker ${editingSpeaker ? "editingSpeaker" : ""}`}>
@@ -185,7 +167,7 @@ function BubbleWithSpeaker({
           pairs={pairs}
           translationCode={translationCode}
           translationLabel={translationLabel}
-          ttsState={ttsState}
+          ttsStatus={ttsStatus}
         />
       </div>
     </div>
@@ -209,75 +191,124 @@ function SpeechBubble({
   pairs,
   translationCode,
   translationLabel,
-  ttsState
+  ttsStatus
 }: {
   code: string;
   enhanced?: boolean;
   label: string;
   loading?: boolean;
-  onSpeak?: () => void;
+  onSpeak: SpeakHandler;
   pairs: PhrasePair[];
   translationCode: string;
   translationLabel: string;
-  ttsState?: TtsPlaybackState;
+  ttsStatus: Record<string, TtsPlaybackState>;
 }) {
   return (
     <div className={`speechBubble ${code === "ja" ? "japanese" : ""} ${enhanced ? "aiEnhanced" : ""}`} dir="auto" lang={code} title={label}>
       <div className="speechBubbleBody">
         {pairs.map((pair, index) => (
-          <div className="phrasePairLine" key={index}>
-            <span className="lineText">
-              <span className="bubbleOriginal">{pair.text || "..."}</span>
-              {pair.romaji ? <span className="inlineRomaji"> ({pair.romaji})</span> : null}
-              {pair.translation ? (
-                <>
-                  {" "}
-                  <span className="bubbleTranslation" dir="auto" lang={translationCode} title={translationLabel}>
-                    {pair.translation}
-                  </span>
-                  {pair.translationRomaji ? <span className="inlineRomaji"> ({pair.translationRomaji})</span> : null}
-                </>
-              ) : null}
-            </span>
+          <div className="phrasePairLine" key={pair.sourceSpeech?.key || index}>
+            <SpeechText
+              code={code} label={label} text={pair.text} reading={pair.romaji}
+              speech={pair.sourceSpeech} onSpeak={onSpeak}
+              state={pair.sourceSpeech ? ttsStatus[pair.sourceSpeech.key] : undefined}
+            />
+            {pair.translation ? (
+              <>
+                <span aria-hidden="true" className="phraseTranslationSeparator"> · </span>
+                <SpeechText
+                  code={translationCode} label={translationLabel} text={pair.translation} reading={pair.translationRomaji}
+                  speech={pair.translationSpeech} onSpeak={onSpeak} translation
+                  state={pair.translationSpeech ? ttsStatus[pair.translationSpeech.key] : undefined}
+                />
+              </>
+            ) : null}
           </div>
         ))}
-        {onSpeak ? <TtsSpeakerButton onSpeak={onSpeak} state={ttsState} /> : null}
       </div>
-      {loading ? <span className="romaji">Adapting...</span> : null}
+      {loading ? <span className="romaji">Translating...</span> : null}
     </div>
   );
 }
 
-function TtsSpeakerButton({
-  disabled = false,
+function SpeechText({
+  code,
+  label,
+  text,
+  reading,
+  speech,
+  translation = false,
   onSpeak,
   state
 }: {
-  disabled?: boolean;
-  onSpeak: () => void;
+  code: string;
+  label: string;
+  text: string;
+  reading?: string;
+  speech?: PhraseSpeech;
+  translation?: boolean;
+  onSpeak: SpeakHandler;
   state?: TtsPlaybackState;
 }) {
-  const label =
-    state === "loading"
-      ? "Loading speech"
-      : state === "playing"
-        ? "Playing"
-        : state === "error"
-          ? "Speech failed (tap to retry)"
-          : "Play translation";
+  const action = state === "error" ? "Retry" : state === "playing" ? "Replay" : state === "loading" ? "Preparing audio for" : "Play";
+  const hue = languageHue(code);
+  const style = { "--language-color": hue === undefined
+    ? "var(--muted)"
+    : `hsl(${hue} var(--language-saturation) var(--language-lightness))`
+  } as CSSProperties;
   return (
-    <button
-      aria-label={label}
-      className={`ttsSpeakerButton ${state || ""}`}
-      disabled={disabled || state === "loading"}
+    <span
+      aria-label={`${action} ${label}: ${text}`}
+      aria-busy={state === "loading"}
+      aria-disabled={!speech}
+      className={`phraseTextButton ${translation ? "translation" : "original"} ${state || ""}`}
+      dir="auto"
+      lang={speech && text !== speech.text && supportsRomanization(code) ? `${code}-Latn` : code}
       onClick={(event) => {
         event.stopPropagation();
-        onSpeak();
+        if (speech) onSpeak(speech.key, speech.text, speech.language);
       }}
-      title={label}
-      type="button"
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (speech && !event.repeat) onSpeak(speech.key, speech.text, speech.language);
+      }}
+      role="button"
+      tabIndex={speech ? 0 : undefined}
+      title={`${action} ${label}`}
+      style={style}
     >
-      {state === "loading" ? "..." : state === "playing" ? "🔊" : state === "error" ? "⚠︎" : "🔈"}
-    </button>
+      <span aria-hidden="true" className="phraseLanguageLabel">
+        {code.toUpperCase()}
+        {speech ? <SpeechPlaybackIcon state={state} /> : null}
+      </span>{"\u00a0"}
+      <span className="phraseTextContent">
+        <span className={translation ? "bubbleTranslation" : "bubbleOriginal"}>{text || "..."}</span>
+        {reading ? <> <span className="inlineRomaji" lang={`${code}-Latn`} title="Latin reading. Tap to hear the pronunciation.">[{reading}]</span></> : null}
+      </span>
+    </span>
+  );
+}
+
+function SpeechPlaybackIcon({ state }: { state?: TtsPlaybackState }) {
+  return (
+    <span className={`ttsSpeakerButton ${state || ""}`}>
+      {state === "playing" ? (
+        <span className="ttsWaveform">
+          <span /><span /><span /><span />
+        </span>
+      ) : (
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" focusable="false">
+          {state === "error" ? <>
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 7v6m0 4h.01" />
+          </> : <>
+            <path d="M11 4 6 8H3v8h3l5 4V4Z" />
+            <path d="M15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14" />
+          </>}
+        </svg>
+      )}
+    </span>
   );
 }
