@@ -55,6 +55,8 @@ Repeated text + same user/language/voice → memory cache → WebRTC audio
 ## Manual playback and Bulgarian readings
 
 Each paragraph has two language-labeled speaker buttons: source and translation.
+These are small, borderless controls in the bubble's top-right corner; text wraps
+around them without a separate toolbar row. Both remain visible on touch screens.
 Either button reads all available sentences in that paragraph in order, including
 saved history and available draft text. Missing translations do not block source
 playback. Clicking another language or paragraph interrupts the current playback;

@@ -3647,7 +3647,7 @@ button.sidebarProfileChip {
 .ttsWaveform > span:nth-child(4) { height: 6px; animation-delay: -540ms; }
 
 .paragraphPlayButton:is(.loading, .playing) {
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--language-color) 35%, transparent);
+  background: color-mix(in srgb, var(--language-color) 10%, transparent);
 }
 
 .paragraphPlayButton.error {
@@ -3759,6 +3759,7 @@ button.sidebarProfileChip {
 }
 
 .speechBubbleBody {
+  display: flow-root;
   line-height: 1.65;
 }
 
@@ -3767,31 +3768,34 @@ button.sidebarProfileChip {
 }
 
 .paragraphPlayback {
+  float: right;
   display: flex;
-  gap: 6px;
+  gap: 2px;
   align-items: center;
+  margin: -2px -4px 0 8px;
+  white-space: nowrap;
 }
 
 .paragraphPlayButton {
   display: inline-flex;
-  gap: 6px;
+  gap: 3px;
   align-items: center;
   justify-content: center;
-  min-height: 32px;
-  padding: 5px 9px;
-  border: 1px solid color-mix(in srgb, var(--language-color) 20%, transparent);
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--language-color) 10%, transparent);
+  min-height: 24px;
+  padding: 3px 4px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
   color: var(--language-color);
   font: inherit;
-  font-size: 0.7rem;
-  font-weight: 750;
+  font-size: 0.6rem;
+  font-weight: 650;
   line-height: 1;
   cursor: pointer;
 }
 
 .paragraphPlayButton:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--language-color) 18%, transparent);
+  background: color-mix(in srgb, var(--language-color) 10%, transparent);
 }
 
 .paragraphPlayButton:focus-visible {

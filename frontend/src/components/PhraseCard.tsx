@@ -209,13 +209,13 @@ function SpeechBubble({
   const translationSpeech = paragraphSpeech(translationParts);
   return (
     <div className={`speechBubble ${code === "ja" ? "japanese" : ""} ${enhanced ? "aiEnhanced" : ""}`} dir="auto" lang={code} title={label}>
-      <div className="paragraphPlayback">
-        <ParagraphPlayButton code={code} label={label} side="source" speech={sourceSpeech} onSpeak={onSpeak}
-          state={paragraphPlaybackState(sourceSpeech, sourceParts, ttsStatus)} />
-        <ParagraphPlayButton code={translationCode} label={translationLabel} side="translation" speech={translationSpeech} onSpeak={onSpeak}
-          state={paragraphPlaybackState(translationSpeech, translationParts, ttsStatus)} />
-      </div>
       <div className="speechBubbleBody">
+        <div className="paragraphPlayback" dir="ltr">
+          <ParagraphPlayButton code={code} label={label} side="source" speech={sourceSpeech} onSpeak={onSpeak}
+            state={paragraphPlaybackState(sourceSpeech, sourceParts, ttsStatus)} />
+          <ParagraphPlayButton code={translationCode} label={translationLabel} side="translation" speech={translationSpeech} onSpeak={onSpeak}
+            state={paragraphPlaybackState(translationSpeech, translationParts, ttsStatus)} />
+        </div>
         {pairs.map((pair, index) => (
           <div className="phrasePairLine" key={pair.sourceSpeech?.key || index}>
             <SpeechText
