@@ -7,6 +7,8 @@
 - Prefer minimal diffs and preserve existing structure.
 - Before handing over a local app URL, verify the matching backend's `/health` and `/languages`, plus an authenticated `/sessions` request. A listening port is not proof of the correct service. When changing ports, align frontend `NEXT_PUBLIC_API_BASE_URL` and backend `AUTH_BASE_URL`.
 - Session-title fixes must verify a topic-based generated title reaching the recording tab after Stop and surviving reload; an opening-text excerpt is only a fallback. Check the current recording state immediately before restarting its backend.
+- During active user testing, do not navigate, select history, reload, or otherwise change any existing user browser tab for verification. An apparently idle second tab is still the user's workspace. Use isolated automated tests; perform interactive verification only in an explicitly separate test session.
+- Session navigation changes must pass `pnpm --filter cottonoha-web test:session-navigation`. Exercise delayed history loads, save events, renames, and deletions after New chat; a response may update history but must not select a previous conversation.
 - Do not overengineer; start with the simplest working solution.
 - Do not add abstractions, edge-case handling, or additional security work unless requested or required for production-level functionality or correctness.
 - Push back when a request is overly complex, risky, or wasteful.
