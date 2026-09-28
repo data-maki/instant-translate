@@ -113,3 +113,42 @@ Translation caveat: the item-level judge did not show a large enough lift to rep
 - If we revisit speaker quality, complete the human diarization audit. The current decision used speaker-count error as a proxy.
 - If we revisit Soniox realtime, rerun fixtures with `stt-rt-v4`; older saved realtime rows may reflect `stt-rt-v3`.
 - The product preference is still: over-identify speakers first, then support fast human label/merge at the end of the meeting.
+
+## 2026-09-27 — Bulgarian speaker attribution check
+
+Authenticated Soniox `/v1/models` reports that the configured `stt-rt-v4` and
+`stt-async-v4` names already alias v5. Changing only the model string would not
+upgrade the model. Bulgarian is supported. The current API does not expose an
+expected-speaker-count control; the app's count is a reference for checking results.
+
+Disabled live endpoint detection following Soniox's documented warning that
+premature finalization reduces diarization accuracy. Partial text still streams.
+Fixed cleanup attribution for untimed translated tokens by associating them with
+their original speaker/language utterance. Cleanup now has an explicit saved-chat
+button, updates the displayed transcript, and survives translation-service failures.
+Cleanup of resumed recordings is rejected because stream timestamps restart at
+zero and the old implementation applied only the latest audio to the whole chat.
+
+Two existing Bulgarian/English recordings were reprocessed with the async model:
+
+| Saved session | Original live clusters | Async clusters |
+| --- | ---: | ---: |
+| Sample A | 2 | 2 |
+| Sample B | 4 | 3 |
+
+Replaying the first recording in real time with endpoint detection off produced
+2 clusters, first final tokens 4.7 seconds after connection, and completed in
+107.6 seconds. These are operational and cluster-count measurements, **not
+speaker accuracy measurements**. No human speaker reference is available yet.
+The live cleanup endpoint returned HTTP 200 and a subsequent GET preserved all
+952 original/translated text tokens with the new speaker assignments.
+
+Validation: 49 backend tests; frontend typecheck and ESLint error check passed.
+Regression coverage includes untimed translations, delayed translations, splitting
+a merged voice across turns, unchanged text, reopening, and resumed-audio protection.
+Before claiming better recognition or choosing another provider, annotate a short
+representative clip with actual people/turns and compare missed speakers, false
+splits, speaker switches, and overlap errors against that reference.
+
+Sources: [Soniox diarization guidance](https://soniox.com/docs/stt/concepts/speaker-diarization),
+[WebSocket token schema](https://soniox.com/docs/stt/api-reference/websocket-api).

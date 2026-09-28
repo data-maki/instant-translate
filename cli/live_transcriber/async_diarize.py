@@ -53,7 +53,10 @@ def redo_diarization(
         raise AsyncDiarizeError(f"Audio file not found: {audio_path}")
 
     log = progress or (lambda _msg: None)
-    headers = {"Authorization": f"Bearer {api_key}"}
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "User-Agent": "OpenAI File Downloader, XaiImageApiFetch/1.0",
+    }
 
     file_id = _upload_file(audio_path, headers, log)
     log(f"Uploaded {os.path.basename(audio_path)} (file_id={file_id[:8]}...)")
@@ -109,7 +112,7 @@ def _create_transcription(
             "target_language": target_language,
         }
     if context:
-        body["context"] = context
+        body["context"] = {"text": context} if isinstance(context, str) else context
 
     resp = requests.post(
         f"{SONIOX_API_BASE}/transcriptions",

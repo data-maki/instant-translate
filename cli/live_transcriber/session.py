@@ -107,6 +107,7 @@ class Session:
         self.audio_frames: list[bytes] = []
         self.translation_update_stats: dict = self._empty_translation_update_stats()
         self.user_id: Optional[str] = None
+        self.title: Optional[str] = None
         self._was_resumed = False
         self._dirty = False
 
@@ -141,6 +142,7 @@ class Session:
                     self.source_languages = state["source_languages"]
                     self.target_language = state["target_language"]
                 self.context = state.get("context")
+                self.title = state.get("title")
                 loaded_user = state.get("user_id")
                 if isinstance(loaded_user, str) and loaded_user:
                     self.user_id = loaded_user
@@ -187,6 +189,7 @@ class Session:
             "name": self.name,
             "updated": datetime.now().isoformat(),
             "user_id": self.user_id,
+            "title": self.title,
             "source_languages": self.source_languages,
             "target_language": self.target_language,
             "context": self.context,
