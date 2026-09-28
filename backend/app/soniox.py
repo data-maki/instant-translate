@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 import websockets
+from starlette.websockets import WebSocketDisconnect
 
 from .provider_streams import ProviderFanout
 from .sessions import (
@@ -16,8 +17,9 @@ from .sessions import (
     build_phrases,
     make_session,
     process_soniox_tokens,
-    read_session_summary,
-    schedule_session_summary,
+    read_session_state,
+    summarize_session_for_save,
+    session_display_title,
 )
 
 
@@ -26,6 +28,7 @@ SONIOX_MODEL = "stt-rt-v4"
 AUDIO_FORMAT = "pcm_s16le"
 SAMPLE_RATE = 16000
 NUM_CHANNELS = 1
+FINALIZE_TIMEOUT_SECONDS = 15
 
 SendEvent = Callable[[dict[str, Any]], Awaitable[None]]
 
@@ -45,7 +48,7 @@ def _make_safe_send_event(send_event: SendEvent) -> SendEvent:
         async with send_lock:
             try:
                 await send_event(event)
-            except RuntimeError:
+            except (RuntimeError, WebSocketDisconnect, OSError):
                 # Client disconnected before the bridge finished (send after close).
                 pass
 
@@ -71,7 +74,9 @@ def get_soniox_config(
         "language_hints": hints,
         "enable_language_identification": True,
         "enable_speaker_diarization": True,
-        "enable_endpoint_detection": True,
+        # Early finalization reduces the acoustic context available for
+        # diarization. Partial tokens still provide the live transcript.
+        "enable_endpoint_detection": False,
         "translation": {
             "type": "two_way",
             "language_a": lang_a,
@@ -231,17 +236,31 @@ async def run_transcription_bridge(
 
             sender = asyncio.create_task(browser_to_soniox())
             receiver = asyncio.create_task(soniox_to_browser())
-            done, pending = await asyncio.wait(
-                {sender, receiver},
-                return_when=asyncio.FIRST_COMPLETED,
-            )
-            stop_event.set()
-            for task in pending:
-                task.cancel()
-            for task in done:
-                task.result()
-            providers.cancel()
+            try:
+                done, _ = await asyncio.wait(
+                    {sender, receiver},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if sender in done:
+                    sender.result()
+                    # Stop sends end-of-audio. Soniox still needs to finalize
+                    # the last words and translations before we save them.
+                    await asyncio.wait_for(receiver, timeout=FINALIZE_TIMEOUT_SECONDS)
+                else:
+                    receiver.result()
+            finally:
+                stop_event.set()
+                for task in (sender, receiver):
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(sender, receiver, return_exceptions=True)
+                providers.cancel()
 
+    except asyncio.TimeoutError:
+        await safe_send_event({
+            "type": "error",
+            "message": "Transcription finalization timed out. Saving the confirmed transcript.",
+        })
     except Exception as exc:
         await safe_send_event({"type": "error", "message": str(exc)})
     finally:
@@ -251,21 +270,10 @@ async def run_transcription_bridge(
             except OSError as exc:
                 await safe_send_event({"type": "error", "message": f"Failed to save session: {exc}"})
             else:
-                cached = read_session_summary(Path(session.session_dir))
-                await safe_send_event(saved_transcript_event(session, path, cached))
-
-                async def push_rename(summary: dict[str, str]) -> None:
-                    try:
-                        await safe_send_event({
-                            "type": "session_renamed",
-                            "session": session.name,
-                            "title": summary["title"],
-                            "summary": summary.get("summary"),
-                        })
-                    except Exception:
-                        pass
-
-                schedule_session_summary(session, push_rename)
+                # The transcript is already durable. Complete naming while
+                # this socket is still open so the recording tab receives it.
+                summary = await summarize_session_for_save(session)
+                await safe_send_event(saved_transcript_event(session, path, summary))
         await safe_send_event({"type": "status", "status": "stopped"})
 
 
@@ -368,21 +376,10 @@ async def run_openai_realtime_overdub_bridge(
             except OSError as exc:
                 await safe_send_event({"type": "error", "message": f"Failed to save session: {exc}"})
             else:
-                cached = read_session_summary(Path(session.session_dir))
-                await safe_send_event(saved_transcript_event(session, path, cached))
-
-                async def push_rename(summary: dict[str, str]) -> None:
-                    try:
-                        await safe_send_event({
-                            "type": "session_renamed",
-                            "session": session.name,
-                            "title": summary["title"],
-                            "summary": summary.get("summary"),
-                        })
-                    except Exception:
-                        pass
-
-                schedule_session_summary(session, push_rename)
+                # The transcript is already durable. Complete naming while
+                # this socket is still open so the recording tab receives it.
+                summary = await summarize_session_for_save(session)
+                await safe_send_event(saved_transcript_event(session, path, summary))
         await safe_send_event({"type": "status", "status": "stopped"})
 
 
@@ -425,7 +422,7 @@ def saved_transcript_event(session, path, summary: dict[str, str] | None = None)
         "type": "saved",
         "session": session.name,
         "path": str(path),
-        "title": summary.get("title") if summary else "New chat",
+        "title": session_display_title(Path(session.session_dir), read_session_state(session.name)),
         "summary": summary.get("summary") if summary else None,
         "phrases": build_phrases(session, []),
         "token_count": len(session.final_tokens),

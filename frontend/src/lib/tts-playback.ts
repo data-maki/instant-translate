@@ -79,8 +79,9 @@ export type TtsPlayback = {
   stop: () => void;
 };
 
-export async function playTtsThroughAec(src: string): Promise<TtsPlayback> {
+export async function playTtsThroughAec(src: string, signal?: AbortSignal): Promise<TtsPlayback> {
   const { context, destination } = await ensureLoopback();
+  signal?.throwIfAborted();
 
   const element = document.createElement("audio");
   element.src = src;
@@ -100,6 +101,7 @@ export async function playTtsThroughAec(src: string): Promise<TtsPlayback> {
   const finish = () => {
     if (finished) return;
     finished = true;
+    signal?.removeEventListener("abort", stop);
     try {
       source.disconnect();
     } catch {
@@ -108,6 +110,12 @@ export async function playTtsThroughAec(src: string): Promise<TtsPlayback> {
     element.src = "";
     resolveDone();
   };
+
+  const stop = () => {
+    element.pause();
+    finish();
+  };
+  signal?.addEventListener("abort", stop, { once: true });
 
   element.onended = finish;
   element.onerror = finish;
@@ -121,9 +129,6 @@ export async function playTtsThroughAec(src: string): Promise<TtsPlayback> {
 
   return {
     done,
-    stop: () => {
-      element.pause();
-      finish();
-    },
+    stop,
   };
 }

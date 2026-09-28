@@ -43,6 +43,7 @@ from .sessions import (
     session_belongs_to,
     session_display_title,
     session_duration_seconds,
+    session_title_model,
     write_session_summary,
 )
 from .soniox import NUM_CHANNELS, SAMPLE_RATE, run_transcription_bridge
@@ -942,17 +943,16 @@ def auto_title_session(
 ) -> dict[str, Any]:
     """Generate a title for a session that was never titled (or force a refresh).
 
-    This is the catch-up path for sessions whose fire-and-forget rename never
-    completed at close time (e.g., the server restarted, the OpenAI API was
-    down, or the session predates the auto-rename feature).
+    This is the retry path for sessions whose title provider was unavailable
+    at save time, or which predate automatic topic titles.
     """
     state = read_session_state(session_name)
     if not state:
         raise HTTPException(status_code=404, detail="Session not found.")
     _require_owner(state, user_id)
 
-    if not os.environ.get("OPENAI_API_KEY"):
-        raise HTTPException(status_code=503, detail="OPENAI_API_KEY is not configured.")
+    if not (os.environ.get("GROQ_API_KEY") or os.environ.get("OPENAI_API_KEY")):
+        raise HTTPException(status_code=503, detail="No title generation provider is configured.")
 
     safe_name = sanitize_session_name(session_name)
     session_dir = shared.REPO_ROOT / "output" / safe_name
@@ -975,19 +975,7 @@ def auto_title_session(
     if not result:
         raise HTTPException(status_code=502, detail="Title generation failed. See server logs for details.")
 
-    model = os.environ.get("OPENAI_SESSION_TITLE_MODEL", "gpt-4o-mini")
-    write_session_summary(session_dir, result["summary"], result["title"], model)
-
-    state_title = str(state.get("title") or "").strip()
-    if not state_title or state_title.lower() == "new chat":
-        state["title"] = result["title"][:48]
-        try:
-            (session_dir / "session_state.json").write_text(
-                json.dumps(state, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-        except OSError:
-            pass
+    write_session_summary(session_dir, result["summary"], result["title"], session_title_model(), len(tokens))
 
     return {
         "name": safe_name,
@@ -1034,6 +1022,10 @@ def rediarize_session(
     audio_path = _latest_audio_path(session_dir)
     if audio_path is None:
         raise HTTPException(status_code=404, detail="No saved MP3/WAV audio found for this session.")
+    if state.get("segment_count", 0) > 1:
+        # Each resumed stream restarts its timestamps at zero. Applying the
+        # latest audio to the cumulative transcript would relabel older turns.
+        raise HTTPException(status_code=409, detail="Speaker cleanup currently supports a single recording. This conversation contains resumed recordings.")
 
     source_languages = state.get("source_languages") or DEFAULT_SOURCE_LANGUAGES
     target_language = state.get("target_language") or DEFAULT_TARGET_LANGUAGE
@@ -1042,7 +1034,7 @@ def rediarize_session(
             api_key=api_key,
             audio_path=str(audio_path),
             source_languages=source_languages,
-            target_language=target_language,
+            target_language="",  # Only acoustic speaker labels are needed.
             context=state.get("context") or DEFAULT_CONTEXT,
         )
     except AsyncDiarizeError as exc:
@@ -1281,6 +1273,7 @@ def _apply_async_speakers(realtime_tokens: list[dict[str, Any]], async_tokens: l
         token
         for token in async_tokens
         if token.get("speaker") is not None
+        and token.get("translation_status") != "translation"
         and isinstance(token.get("start_ms"), (int, float))
         and isinstance(token.get("end_ms"), (int, float))
         and token.get("end_ms") > token.get("start_ms")
@@ -1289,14 +1282,37 @@ def _apply_async_speakers(realtime_tokens: list[dict[str, Any]], async_tokens: l
         return realtime_tokens
 
     remapped = []
+    source_spans: dict[tuple[str, str], tuple[float, float]] = {}
+    last_source_key = None
+    translating = False
     for token in realtime_tokens:
         updated = dict(token)
         start = updated.get("start_ms")
         end = updated.get("end_ms")
-        if isinstance(start, (int, float)) and isinstance(end, (int, float)) and end > start:
+        is_translation = token.get("translation_status") == "translation"
+        if is_translation:
+            # Translation tokens have no audio timestamps. Associate them with
+            # their source utterance, using the original stream's IDs/language
+            # before remapping. Keep spans by key for delayed translations.
+            key = (str(token.get("speaker")), str(token.get("source_language")))
+            span = source_spans.get(key)
+            if span:
+                updated["speaker"] = _best_speaker_for_window(*span, speaker_segments)
+            translating = True
+        elif isinstance(start, (int, float)) and isinstance(end, (int, float)) and end > start:
+            key = (str(token.get("speaker")), str(token.get("language")))
+            if key != last_source_key or translating:
+                source_spans[key] = (float(start), float(end))
+            else:
+                previous = source_spans[key]
+                source_spans[key] = (min(previous[0], float(start)), max(previous[1], float(end)))
+            last_source_key = key
+            translating = False
             speaker = _best_speaker_for_window(float(start), float(end), speaker_segments)
             if speaker is not None:
                 updated["speaker"] = speaker
+        elif str(token.get("text", "")).lower() == "<end>":
+            last_source_key = None
         remapped.append(updated)
     return remapped
 
