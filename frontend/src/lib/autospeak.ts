@@ -86,7 +86,7 @@ export class AutoSpeakQueue {
         this.cursor += 1;
         continue;
       }
-      if (!phraseSpeakReady(phrase, options.adaptations, options.language, options.latency)) return;
+      if (!phraseSpeakReady(phrase, options.adaptations, options.language)) return;
       const text = phraseTargetText(phrase, options.language, options.adaptations).replace(/\s+/g, " ").trim();
       if (!text) return;
       this.cursor += 1;
@@ -116,7 +116,7 @@ export class AutoSpeakQueue {
         if (phrase.source_lang?.trim().toLowerCase() !== "en" || options.language === "en") continue;
         // Synthesize a stable draft early, but drain() still requires final text
         // before any audio is played. Corrections invalidate this exact-text key.
-        if (!phraseSpeakReady({ ...phrase, is_final: true }, options.adaptations, options.language, options.latency)) break;
+        if (!phraseSpeakReady({ ...phrase, is_final: true }, options.adaptations, options.language)) break;
         const item = { key: `tts:${phrase.id}:${options.language}`, language: options.language,
           text: phraseTargetText(phrase, options.language, options.adaptations).replace(/\s+/g, " ").trim() };
         if (!item.text) break;

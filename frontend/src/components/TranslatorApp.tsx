@@ -5,7 +5,6 @@ import Link from "next/link";
 import Image from "next/image";
 import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
-  adaptPhrase,
   createRealtimeTranslationSession,
   deleteSession as deleteSavedSession,
   fetchPlacesContext,
@@ -695,9 +694,7 @@ export function TranslatorApp({
   }
 
   function requestAdaptationsFor(phrasesToInspect: Phrase[], targetLanguage = activeLeftLanguage) {
-    const phrasesForRewrite = phrasesToInspect;
-
-    for (const phrase of phrasesForRewrite) {
+    for (const phrase of phrasesToInspect) {
       const sourceLang = phrase.source_lang || firstNonEnglishTextLanguage(phrase);
       const sourceText = sourceLang ? phrase.texts[sourceLang]?.trim() : "";
       if (!sourceLang || !sourceText || !phrase.is_final) {
@@ -705,9 +702,8 @@ export function TranslatorApp({
       }
       const neededTargets = dedupeList([sourceB, targetLanguage]).filter((target) => target && target !== sourceLang);
       for (const target of neededTargets) {
-        if (sourceLang === ENGLISH_LANGUAGE && target === targetLanguage && target !== ENGLISH_LANGUAGE) {
-          continue;
-        }
+        // Soniox already translated this turn. Only fill genuinely missing
+        // languages (including typed input); never rewrite/retranslate for TTS.
         if (phrase.texts[target]?.trim()) {
           continue;
         }
@@ -731,7 +727,7 @@ export function TranslatorApp({
           draft_translation: "",
           rewrite_context: {
             tone: contextBundle.rewriteTone,
-            recent_dialogue: recentDialogueForRewrite(phrasesForRewrite, adaptationsRef.current, translationKey, target)
+            recent_dialogue: recentDialogueForRewrite(phrasesToInspect, adaptationsRef.current, translationKey, target)
           }
         }, userId)
           .then((result) => {
@@ -758,94 +754,6 @@ export function TranslatorApp({
             }));
           });
       }
-
-      const key = adaptationKey(phrase, targetLanguage);
-      if (
-        !key ||
-        adaptationsRef.current[key] ||
-        adaptationRequestsRef.current.has(key) ||
-        sourceLang !== ENGLISH_LANGUAGE ||
-        targetLanguage === ENGLISH_LANGUAGE ||
-        !phrase.is_final
-      ) {
-        continue;
-      }
-      const draftTranslation = phrase.texts[targetLanguage]?.trim();
-      if (!sourceText) {
-        continue;
-      }
-      adaptationRequestsRef.current.add(key);
-      const baseRewriteContext = {
-        tone: contextBundle.rewriteTone,
-        recent_dialogue: recentDialogueForRewrite(phrasesForRewrite, adaptationsRef.current, key, targetLanguage)
-      };
-      translatePhrase({
-        source_language: ENGLISH_LANGUAGE,
-        target_language: targetLanguage,
-        source_text: sourceText,
-        draft_translation: draftTranslation,
-        rewrite_context: baseRewriteContext
-      }, userId)
-        .then((result) => {
-          const nextAdaptation = {
-            source_rewrite: adaptationsRef.current[key]?.source_rewrite || "",
-            target_translation: result.target_translation,
-            status: "ready" as const
-          };
-          persistAdaptation(key, nextAdaptation);
-          setAdaptationsSynced((current) => ({
-            ...current,
-            [key]: nextAdaptation
-          }));
-          refreshAutoSpeak();
-        })
-        .catch(() => {
-          // Keep Soniox's provisional translation if the fast DeepL pass misses.
-        });
-      window.setTimeout(() => {
-        const signals = providerSignalsRef.current;
-        setAdaptationsSynced((current) => ({
-          ...current,
-          [key]: {
-            source_rewrite: current[key]?.source_rewrite || "",
-            target_translation: current[key]?.target_translation || "",
-            status: "loading"
-          }
-        }));
-        adaptPhrase({
-          source_language: ENGLISH_LANGUAGE,
-          target_language: targetLanguage,
-          source_text: sourceText,
-          draft_translation: draftTranslation,
-          rewrite_context: {
-            ...baseRewriteContext,
-            transcription_candidates: [sourceText, ...signals.transcripts.slice(-4)],
-            translation_candidates: [
-              ...(draftTranslation ? [draftTranslation] : []),
-              ...signals.translations.slice(-4)
-            ]
-          }
-        }, userId)
-          .then((result) => {
-            const nextAdaptation = { ...result, status: "ready" as const };
-            persistAdaptation(key, nextAdaptation);
-            setAdaptationsSynced((current) => ({
-              ...current,
-              [key]: nextAdaptation
-            }));
-            refreshAutoSpeak();
-          })
-          .catch(() => {
-            setAdaptationsSynced((current) => ({
-              ...current,
-              [key]: {
-                source_rewrite: current[key]?.source_rewrite || "",
-                target_translation: current[key]?.target_translation || "",
-                status: "error"
-              }
-            }));
-          });
-      }, 350);
     }
   }
 
@@ -1782,14 +1690,14 @@ export function TranslatorApp({
                     setTranscriptLatencyMode(ttsLatencyRef.current);
                     refreshAutoSpeak();
                   }}
-                  title="Slow mode waits for the AI to polish the wording and translation before showing the bubble. Fast skips the polish step."
+                  title="Slow waits for translations before showing the bubble. Fast shows drafts as they arrive."
                 />
                 <DualLabelToggle
                   leftLabel="original"
                   rightLabel="enhanced"
                   rightSelected={showEnhancedEnglish}
                   onChange={setShowEnhancedEnglish}
-                  title="Enhanced shows the AI-polished English so the translation reads naturally. Original shows the verbatim transcript."
+                  title="Enhanced shows saved English wording improvements when available. Original shows the verbatim transcript."
                 />
                 <DualLabelToggle
                   leftLabel="push"
@@ -1847,7 +1755,7 @@ export function TranslatorApp({
                   />
                 ) : visiblePhraseGroups.length === 0 ? (
                   <div className="emptyState">
-                    <strong>Waiting for corrections...</strong>
+                    <strong>Waiting for translations...</strong>
                   </div>
                 ) : (
                   visiblePhraseGroups.map((phraseGroup) => (
@@ -1856,7 +1764,6 @@ export function TranslatorApp({
                       adaptations={adaptations}
                       activeLeftLanguage={activeLeftLanguage}
                       editingSpeaker={editingSpeaker}
-                      latencyMode={transcriptLatencyMode}
                       leftLanguageSelection={leftLanguageSelection}
                       languageMap={languageMap}
                       onEditSpeaker={openSpeakerEditor}

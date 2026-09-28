@@ -7,7 +7,7 @@ We use both, but for different moments in the workflow.
 | Path | Current model | When it runs | What it does |
 |---|---|---|---|
 | Live session | Soniox realtime `stt-rt-v4` | While the browser is recording | Live transcription, language ID, speaker diarization, and two-way translation for the selected language pair; endpoint detection stays off to preserve speaker context |
-| Live phrase adaptation | Groq `GROQ_REWRITE_MODEL`, default `qwen/qwen3-32b` | After finalized English phrases appear | Rewrites the English utterance into clearer, tone-aware English for Soniox to translate |
+| Missing translation fallback | DeepL | A finalized phrase lacks a requested language, including typed input | Translates only the missing language once; existing Soniox or saved translations are reused |
 | Improve transcript, speaker step | Soniox async `stt-async-v4` | After a session has saved audio | Re-runs diarization/transcription over the full audio file, then remaps speaker IDs onto the current transcript tokens |
 | Improve transcript, translation step | OpenAI `gpt-4o` | After a session has transcript tokens | Revises the Soniox draft translations while preserving the transcript shape |
 | Comparison record | See `docs/evaluation-decision-record.md` | Documentation only | Historical vendor comparison; not wired into the app runtime |
@@ -15,7 +15,7 @@ We use both, but for different moments in the workflow.
 
 So the default app is Soniox realtime. The only post-processing UI action is `Improve transcript`; internally it runs the speaker step first and the translation step second.
 
-Current limitation: live Groq/Qwen adaptation is display-only. It runs after Soniox has already translated the microphone audio, so it does not currently improve the live Japanese translation.
+Live playback uses the translation already supplied by Soniox. It does not automatically rewrite English or translate it again. The backend rewrite endpoint remains available to other clients; saved English improvements can still be displayed.
 
 ## ASCII Pipeline
 
@@ -50,10 +50,9 @@ Current limitation: live Groq/Qwen adaptation is display-only. It runs after Son
         |
         +--> Soniox realtime
         +--> Deepgram realtime transcription
-        +--> OpenAI gpt-realtime-translate to Japanese
+        +--> OpenAI gpt-realtime-translate (only when explicitly enabled)
         |
-        | provider_update events keep recent Deepgram/OpenAI candidates
-        | available for the upgrade pass
+        | optional provider_update events expose comparison transcripts
         v
   Soniox realtime bridge
   backend/app/soniox.py
@@ -93,32 +92,16 @@ Current limitation: live Groq/Qwen adaptation is display-only. It runs after Son
         v
   User sees live bilingual phrase cards
         |
-        | finalized English phrase + Soniox JA
-        | immediately DeepL-translates Soniox EN with selected formality
-        | also waits ~350ms for Deepgram/OpenAI candidates, then upgrades
-        v
-  POST /context/rewrite
+        +--> Requested translation exists (Soniox or saved fallback)
+        |      → display it → send that same text to TTS
         |
-        v
-  Groq Chat Completions API
-        |
-        | model: GROQ_REWRITE_MODEL, default qwen/qwen3-32b
-        | reasoning_effort: none
-        | output: English source_rewrite only, never Japanese
-        | context: tone profile + last 10 prior exchange turns only
-        v
-  DeepL Translate API
-        |
-        | text: original Soniox English first, then adapted English
-        | context: recent dialogue and Soniox draft translation
-        | formality: explicit session setting or selected from tone/register
-        | glossary_id: DEEPL_GLOSSARY_ID when configured
-        | model_type: latency_optimized
-        v
-  Phrase card shows:
-    - original English
-    - adapted English rewrite
-    - Soniox Japanese draft first, then improved Japanese replacement when ready
+        +--> Requested translation missing on a finalized phrase
+               → POST /context/translate → DeepL (one request per source/target)
+               → save fallback → display and speak it
+
+  No automatic /context/rewrite call and no 350 ms polish timer.
+  Speech always waits for final text, regardless of fast/slow display mode.
+  Bulgarian replies do not trigger English autospeak.
 ```
 
 ## Save Path

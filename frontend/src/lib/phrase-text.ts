@@ -84,7 +84,7 @@ export function phraseTargetText(
     return phrase.texts[targetLanguage] || "";
   }
   const adaptation = adaptations[adaptationKey(phrase, targetLanguage)];
-  return phrase.texts[targetLanguage] || adaptation?.target_translation || "";
+  return phrase.texts[targetLanguage]?.trim() ? phrase.texts[targetLanguage] : adaptation?.target_translation || "";
 }
 
 export function phraseShownTargetText(
@@ -119,8 +119,7 @@ function phraseTranslationText(
   adaptations: Record<string, PhraseAdaptation>
 ): string {
   if (!translationLanguage || translationLanguage === sourceLanguage) return "";
-  const adaptation = adaptations[adaptationKey(phrase, translationLanguage)];
-  return phrase.texts[translationLanguage] || adaptation?.target_translation || "";
+  return phraseTargetText(phrase, translationLanguage, adaptations);
 }
 
 export function buildPhraseDisplayPairs({
@@ -170,29 +169,13 @@ export function buildPhraseDisplayPairs({
 export function phraseSpeakReady(
   phrase: Phrase,
   adaptations: Record<string, PhraseAdaptation>,
-  speakLanguage: string,
-  latencyMode: TranscriptLatencyMode
+  speakLanguage: string
 ): boolean {
   if (!phrase.is_final) return false;
   if (!speakLanguage) return false;
-  const sourceLang = phrase.source_lang || firstNonEnglishTextLanguage(phrase) || speakLanguage;
-  if (sourceLang === speakLanguage) {
-    return Boolean(phrase.texts[speakLanguage]?.trim());
-  }
-  const adaptation = adaptations[adaptationKey(phrase, speakLanguage)];
-  if (!adaptation?.target_translation?.trim() && !phrase.texts[speakLanguage]?.trim()) {
-    return false;
-  }
-  if (latencyMode === "slow") {
-    if (sourceLang === "en") {
-      if (adaptation?.status !== "ready" || !adaptation.source_rewrite?.trim()) {
-        return false;
-      }
-    } else if (adaptation?.status !== "ready") {
-      return false;
-    }
-  }
-  return true;
+  // Display mode and optional English polishing never block an existing
+  // translation. Use exactly the same text as the transcript and TTS payload.
+  return Boolean(phraseTargetText(phrase, speakLanguage, adaptations).trim());
 }
 
 export function supportsRomanization(langCode: string): boolean {

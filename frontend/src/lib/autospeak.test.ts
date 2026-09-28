@@ -165,11 +165,11 @@ test("a failed synthesis releases the next queued turn", async () => {
 
 test("slow-mode translation completion releases the waiting utterance", async () => {
   const { queue, options, jobs } = harness();
-  const first = phrase("one");
+  const first = phrase("one", "en", false);
   options.latency = "slow";
   queue.enable([first], options);
   assert.equal(jobs.length, 0);
-  options.adaptations = { [adaptationKey(first, "bg")]: { source_rewrite: "Polished English", target_translation: "Готово", status: "ready" } };
+  options.adaptations = { [adaptationKey(first, "bg")]: { source_rewrite: "", target_translation: "Готово", status: "ready" } };
   queue.refresh(options);
   await flush();
   assert.equal(jobs.length, 1);
@@ -177,11 +177,11 @@ test("slow-mode translation completion releases the waiting utterance", async ()
 
 test("a late adaptation refresh cannot restore a previous output language", async () => {
   const { queue, options, jobs } = harness();
-  const current = { ...phrase("one"), texts: { en: "Hello", bg: "Здравей", ja: "こんにちは" } };
+  const current = { ...phrase("one"), texts: { en: "Hello", bg: "Здравей" } };
   const newOptions = { ...options, language: "ja", latency: "slow" as const };
   queue.enable([current], newOptions);
   assert.equal(jobs.length, 0);
-  queue.refresh(options); // Old Bulgarian callback may update readiness only.
+  queue.refresh({ ...options, adaptations: { [adaptationKey(current, "ja")]: { source_rewrite: "", target_translation: "こんにちは", status: "ready" } } });
   await flush();
   assert.equal(jobs[0]!.item.language, "ja");
 });

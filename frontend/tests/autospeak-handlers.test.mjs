@@ -4,8 +4,9 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import ts from "typescript";
 import { AutoSpeakQueue } from "../.test-build/lib/autospeak.js";
+import { adaptationKey, firstNonEnglishTextLanguage } from "../.test-build/lib/phrase-text.js";
 
-const names = ["changeTtsMode", "speakPhraseText", "prepareSpeechItem", "playSpeechItem", "speechOptions", "getSpeechQueue", "resetSpeechQueue", "refreshAutoSpeak", "maybeAutoSpeakPhrases", "setTtsStatusFor"];
+const names = ["changeTtsMode", "speakPhraseText", "prepareSpeechItem", "playSpeechItem", "speechOptions", "getSpeechQueue", "resetSpeechQueue", "refreshAutoSpeak", "maybeAutoSpeakPhrases", "setTtsStatusFor", "setPhrasesAndFollow", "requestAdaptationsFor", "dedupeList", "recentDialogueForRewrite"];
 const source = ts.createSourceFile("TranslatorApp.tsx", readFileSync("src/components/TranslatorApp.tsx", "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const functions = new Map();
 function visit(node) {
@@ -29,11 +30,23 @@ function phrase(id, source = "en") {
 }
 function harness(phrases) {
   const requests = [], audio = [];
+  const translations = [], rewrites = [], timers = [];
   const statuses = {};
   const deps = {
     AutoSpeakQueue, phrases, ttsModeRef: { current: "push" }, ttsLatencyRef: { current: "fast" },
     ttsQueueRef: { current: null }, ttsAudioRef: { current: null }, adaptationsRef: { current: {} },
     ttsSpeakLanguage: "bg", travelerProfile: {}, userId: "test-user", setTtsMode: () => {},
+    activeLeftLanguage: "bg", sourceB: "en", ENGLISH_LANGUAGE: "en",
+    adaptationKey, firstNonEnglishTextLanguage, contextBundle: { rewriteTone: {} },
+    providerSignalsRef: { current: { transcripts: [], translations: [] } },
+    adaptationRequestsRef: { current: new Set() },
+    setPhrases: () => {}, scrollFeedToBottomSoon: () => {}, persistAdaptation: () => {},
+    setAdaptationsSynced: update => {
+      deps.adaptationsRef.current = typeof update === "function" ? update(deps.adaptationsRef.current) : update;
+    },
+    translatePhrase: payload => { const request = { ...deferred(), payload }; translations.push(request); return request.promise; },
+    adaptPhrase: payload => { const request = { ...deferred(), payload }; rewrites.push(request); return request.promise; },
+    window: { setTimeout: callback => { timers.push(callback); return timers.length; } },
     setTtsStatus: update => Object.assign(statuses, { value: update(statuses.value || {}) }),
     warmTtsPlayback: async () => {},
     generateTtsStream: (payload, _user, signal) => {
@@ -50,7 +63,7 @@ function harness(phrases) {
     }
   };
   const api = new Function(...Object.keys(deps), `${compiled}\nreturn {${names.join(",")}}`)(...Object.values(deps));
-  return { api, requests, audio, statuses, deps };
+  return { api, requests, audio, statuses, deps, translations, rewrites, timers };
 }
 
 test("toggle starts at the latest box, queues new English turns, and ignores Bulgarian replies", async () => {
@@ -107,4 +120,78 @@ test("cancellation during audio setup stops the late playback handle", async () 
   setup.resolve({ done: Promise.resolve(), stop: () => { stopped = true; } });
   await flush();
   assert.ok(stopped);
+});
+
+for (const mode of ["fast", "slow"]) {
+  test(`${mode}: an existing Bulgarian translation goes directly to TTS with no translation or rewrite calls`, () => {
+    const h = harness([]);
+    h.deps.ttsLatencyRef.current = mode;
+    h.api.changeTtsMode("auto");
+    const current = phrase("translated");
+    // Old saved adaptations must not replace the actual transcript translation.
+    h.deps.adaptationsRef.current[adaptationKey(current, "bg")] = {
+      source_rewrite: "Polished English", target_translation: "Стара версия", status: "loading"
+    };
+    h.api.setPhrasesAndFollow([current]);
+    assert.deepEqual(h.requests.map(request => request.payload.text), ["Български translated"]);
+    assert.equal(h.translations.length, 0);
+    assert.equal(h.rewrites.length, 0);
+    assert.equal(h.timers.length, 0);
+    h.api.changeTtsMode("push");
+  });
+}
+
+test("a new translated English turn never schedules background retranslation", () => {
+  const h = harness([]);
+  h.api.setPhrasesAndFollow([phrase("translated")]);
+  for (const timer of h.timers) timer();
+  assert.equal(h.translations.length, 0);
+  assert.equal(h.rewrites.length, 0);
+  assert.equal(h.timers.length, 0);
+});
+
+test("missing Bulgarian is translated once and can speak without an English rewrite", async () => {
+  const h = harness([]);
+  h.deps.ttsLatencyRef.current = "slow";
+  h.api.changeTtsMode("auto");
+  const current = { ...phrase("typed"), texts: { en: "Where is the station?" } };
+  h.api.setPhrasesAndFollow([current]);
+  h.api.setPhrasesAndFollow([current]);
+  assert.equal(h.requests.length, 0);
+  assert.equal(h.translations.length, 1);
+  assert.equal(h.translations[0].payload.target_language, "bg");
+  h.translations[0].resolve({ target_translation: "Къде е гарата?" });
+  await flush();
+  h.api.setPhrasesAndFollow([current]);
+  for (const timer of h.timers) timer();
+  assert.deepEqual(h.requests.map(request => request.payload.text), ["Къде е гарата?"]);
+  assert.equal(h.translations.length, 1);
+  assert.equal(h.rewrites.length, 0);
+  assert.equal(h.timers.length, 0);
+  h.api.changeTtsMode("push");
+});
+
+test("a late fallback cannot override or replay a Soniox translation that has arrived", async () => {
+  const h = harness([]);
+  h.deps.ttsLatencyRef.current = "slow";
+  h.api.changeTtsMode("auto");
+  const current = phrase("delayed");
+  h.api.setPhrasesAndFollow([{ ...current, texts: { en: current.texts.en } }]);
+  h.api.setPhrasesAndFollow([current]);
+  assert.deepEqual(h.requests.map(request => request.payload.text), [current.texts.bg]);
+  h.translations[0].resolve({ target_translation: "Друга версия" });
+  await flush();
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.translations.length, 1);
+  h.api.changeTtsMode("push");
+});
+
+test("requesting another display language translates only that missing language", () => {
+  const h = harness([]);
+  const current = phrase("translated");
+  h.api.requestAdaptationsFor([current], "ja");
+  h.api.requestAdaptationsFor([current], "ja");
+  assert.deepEqual(h.translations.map(request => request.payload.target_language), ["ja"]);
+  assert.equal(h.timers.length, 0);
+  assert.equal(h.rewrites.length, 0);
 });

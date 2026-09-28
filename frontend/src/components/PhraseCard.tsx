@@ -29,14 +29,12 @@ type SpeakerDraft = {
 };
 
 type TtsPlaybackState = "loading" | "playing" | "error";
-type TranscriptLatencyMode = "fast" | "slow";
 type LeftLanguageSelection = "all" | string;
 
 export function PhraseCard({
   activeLeftLanguage,
   adaptations,
   editingSpeaker,
-  latencyMode,
   leftLanguageSelection,
   languageMap,
   onEditSpeaker,
@@ -52,7 +50,6 @@ export function PhraseCard({
   activeLeftLanguage: string;
   adaptations: Record<string, PhraseAdaptation>;
   editingSpeaker: string | null;
-  latencyMode: TranscriptLatencyMode;
   leftLanguageSelection: LeftLanguageSelection;
   languageMap: Map<string, Language>;
   onEditSpeaker: (speakerId: string, label: string) => void;
@@ -103,7 +100,7 @@ export function PhraseCard({
   const sourceSpeakable =
     Boolean(speakLanguage) &&
     sourceSpeakText.trim().length > 0 &&
-    phrases.every((item) => phraseSpeakReady(item, adaptations, speakLanguage, latencyMode));
+    phrases.every((item) => phraseSpeakReady(item, adaptations, speakLanguage));
   const sourceOnSpeak = sourceSpeakable
     ? () => onSpeak(sourceSpeakKey, sourceSpeakText, speakLanguage)
     : undefined;

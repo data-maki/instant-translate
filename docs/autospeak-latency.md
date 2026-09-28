@@ -38,6 +38,10 @@ Repeated text + same user/language/voice → memory cache → WebRTC audio
 - Only English source speech into the selected non-English language triggers auto
   playback. Enabling starts at the latest box. Partial text and historical boxes
   are not speculatively spoken.
+- Soniox's existing target-language text goes directly to synthesis in both fast
+  and slow display modes. There is no automatic DeepL retranslating pass, 350 ms
+  rewrite timer, or Groq/DeepL polish pass. Typed input and missing display languages
+  get one fallback translation; an existing saved fallback is reused too.
 - Completed PCM is cached in page memory for five minutes, at most 32 clips / 8 MiB,
   keyed by authentication identity, language, voice and exact text. Clips over
   4 MiB, errors and incomplete streams are not cached. No audio is put in storage.
@@ -85,9 +89,10 @@ conversation text are printed.
 
 ## Remaining delay
 
-The pipeline still waits for finalized Soniox text/translation. The display's
-slow mode also waits for the rewrite/adaptation pass; fast mode does not. Those
-stages precede the TTS measurements above. Cache hits cannot help unseen sentences.
+The pipeline still waits for finalized Soniox text/translation. Display mode does
+not make speech wait for an English rewrite or a second translation. Recognition
+and translation precede the TTS measurements above. Cache hits cannot help unseen
+sentences.
 
 Soniox endpoint detection remains disabled to preserve speaker context. Re-enabling
 it solely to improve latency would reintroduce the documented diarization tradeoff.
