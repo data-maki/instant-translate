@@ -355,9 +355,10 @@ export async function generateTts(payload: {
   text: string;
   target_language: string;
   voice_id?: string;
-}, userId?: string): Promise<TtsResult> {
+}, userId?: string, signal?: AbortSignal): Promise<TtsResult> {
   return requestJson("/tts/speak", withUserHeader({
     method: "POST",
+    signal,
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload)
   }, userId), "Could not synthesize speech");

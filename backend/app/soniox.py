@@ -74,7 +74,9 @@ def get_soniox_config(
         "language_hints": hints,
         "enable_language_identification": True,
         "enable_speaker_diarization": True,
-        "enable_endpoint_detection": True,
+        # Early finalization reduces the acoustic context available for
+        # diarization. Partial tokens still provide the live transcript.
+        "enable_endpoint_detection": False,
         "translation": {
             "type": "two_way",
             "language_a": lang_a,
