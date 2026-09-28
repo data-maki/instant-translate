@@ -38,9 +38,7 @@ import { ProfileMenu } from "@/components/ProfileMenu";
 import {
   adaptationKey,
   ENGLISH_LANGUAGE,
-  firstNonEnglishTextLanguage,
-  phraseSpeakReady,
-  phraseTargetText
+  firstNonEnglishTextLanguage
 } from "@/lib/phrase-text";
 import {
   fallbackSpeakerLabel,
@@ -50,6 +48,7 @@ import {
   speakerKey
 } from "@/lib/speaker";
 import { playTtsThroughAec, type TtsPlayback } from "@/lib/tts-playback";
+import { AutoSpeakQueue, type SpeechItem, type SpeechOptions } from "@/lib/autospeak";
 
 type AppStatus =
   | "idle"
@@ -349,7 +348,7 @@ export function TranslatorApp({
   const recorderRef = useRef<RecorderHandle | null>(null);
   const audioPlayerRef = useRef<PcmAudioPlayer | null>(null);
   const ttsAudioRef = useRef<TtsPlayback | null>(null);
-  const ttsSpokenKeysRef = useRef<Set<string>>(new Set());
+  const ttsQueueRef = useRef<AutoSpeakQueue | null>(null);
   const ttsModeRef = useRef<TtsMode>("push");
   const ttsLatencyRef = useRef<TranscriptLatencyMode>("fast");
   const realtimeSessionsRef = useRef<Record<RealtimeDirection, RealtimeWebRTCSession | null>>({
@@ -430,11 +429,9 @@ export function TranslatorApp({
       | Record<string, PhraseAdaptation>
       | ((current: Record<string, PhraseAdaptation>) => Record<string, PhraseAdaptation>)
   ) {
-    setAdaptations((current) => {
-      const resolved = typeof next === "function" ? next(current) : next;
-      adaptationsRef.current = resolved;
-      return resolved;
-    });
+    const resolved = typeof next === "function" ? next(adaptationsRef.current) : next;
+    adaptationsRef.current = resolved;
+    setAdaptations(resolved);
   }
 
   function setActiveSessionSynced(next: string) {
@@ -487,13 +484,14 @@ export function TranslatorApp({
     });
   }
 
-  function setPhrasesAndFollow(next: Phrase[], options: { requestAdaptations?: boolean } = {}) {
+  function setPhrasesAndFollow(next: Phrase[], options: { requestAdaptations?: boolean; autoSpeak?: boolean } = {}) {
     setPhrases(next);
     scrollFeedToBottomSoon();
     if (options.requestAdaptations !== false) {
       requestAdaptationsFor(next);
     }
-    maybeAutoSpeakPhrases(next, adaptationsRef.current);
+    if (options.autoSpeak === false) resetSpeechQueue(next);
+    else maybeAutoSpeakPhrases(next, adaptationsRef.current);
   }
 
   function upsertRealtimePhrase(phrase: Phrase) {
@@ -595,7 +593,10 @@ export function TranslatorApp({
   }
 
   function changeTtsMode(mode: TtsMode) {
+    ttsModeRef.current = mode;
     setTtsMode(mode);
+    if (mode === "auto") getSpeechQueue().enable(phrases, speechOptions());
+    else getSpeechQueue().disable();
     if (typeof window !== "undefined") {
       try {
         window.localStorage.setItem(TTS_MODE_STORAGE_KEY, mode);
@@ -619,62 +620,68 @@ export function TranslatorApp({
     });
   }
 
-  async function speakPhraseText(key: string, text: string, languageCode: string) {
+  function speakPhraseText(key: string, text: string, languageCode: string) {
     const cleanText = (text || "").replace(/\s+/g, " ").trim();
     if (!cleanText) return;
     const language = (languageCode || "").trim().toLowerCase() || ttsSpeakLanguage;
-    setTtsStatusFor(key, "loading");
-    try {
-      const previous = ttsAudioRef.current;
-      if (previous) previous.stop();
-      const profileVoice = travelerProfile.tts_voice_id?.trim();
-      // Profile voice is curated for Japanese; use it only when speaking Japanese.
-      const requestVoice = language === "ja" && profileVoice ? profileVoice : undefined;
-      const result = await generateTts({
-        text: cleanText,
-        target_language: language,
-        voice_id: requestVoice
-      }, userId);
-      // Route through a local WebRTC loopback so the browser's AEC (already
-      // engaged on the mic stream via echoCancellation: true) subtracts the
-      // TTS audio from the captured mic signal. See lib/tts-playback.ts.
-      const playback = await playTtsThroughAec(
-        `data:${result.mime_type};base64,${result.audio_base64}`
-      );
-      ttsAudioRef.current = playback;
-      setTtsStatusFor(key, "playing");
-      playback.done.then(() => {
-        if (ttsAudioRef.current === playback) {
-          ttsAudioRef.current = null;
-        }
-        setTtsStatusFor(key, null);
-      });
-    } catch {
-      setTtsStatusFor(key, "error");
-    }
+    getSpeechQueue().speakNow({ key, text: cleanText, language }, speechOptions());
   }
 
-  function ttsKeyForPhrase(phrase: Phrase, language: string): string {
-    return `tts:${phrase.id}:${language}`;
+  async function playSpeechItem(item: SpeechItem, signal: AbortSignal): Promise<TtsPlayback> {
+    const profileVoice = travelerProfile.tts_voice_id?.trim();
+    const result = await generateTts({
+      text: item.text,
+      target_language: item.language,
+      voice_id: item.language === "ja" && profileVoice ? profileVoice : undefined
+    }, userId, signal);
+    signal.throwIfAborted();
+    const playback = await playTtsThroughAec(`data:${result.mime_type};base64,${result.audio_base64}`, signal);
+    if (signal.aborted) {
+      playback.stop();
+      signal.throwIfAborted();
+    }
+    ttsAudioRef.current = playback;
+    void playback.done.then(() => {
+      if (ttsAudioRef.current === playback) ttsAudioRef.current = null;
+    });
+    return playback;
+  }
+
+  function speechOptions(adaptationsSnapshot = adaptationsRef.current): SpeechOptions {
+    return {
+      language: ttsSpeakLanguage,
+      latency: ttsLatencyRef.current,
+      adaptations: adaptationsSnapshot,
+      play: playSpeechItem,
+      status: setTtsStatusFor
+    };
+  }
+
+  function getSpeechQueue(): AutoSpeakQueue {
+    const stopPreviousQueue = ttsQueueRef.current?.disable;
+    if (!(ttsQueueRef.current instanceof AutoSpeakQueue)) {
+      // Lazy initialization also safely replaces the old playback state on Fast Refresh.
+      stopPreviousQueue?.call(ttsQueueRef.current);
+      ttsAudioRef.current?.stop();
+      ttsQueueRef.current = new AutoSpeakQueue();
+      ttsQueueRef.current.reset([], speechOptions(), ttsModeRef.current === "auto");
+    }
+    return ttsQueueRef.current;
+  }
+
+  function resetSpeechQueue(existingPhrases: Phrase[] = []) {
+    getSpeechQueue().reset(existingPhrases, speechOptions(), ttsModeRef.current === "auto");
+  }
+
+  function refreshAutoSpeak() {
+    getSpeechQueue().refresh({ adaptations: adaptationsRef.current, latency: ttsLatencyRef.current });
   }
 
   function maybeAutoSpeakPhrases(
     phrasesToCheck: Phrase[],
     adaptationsSnapshot: Record<string, PhraseAdaptation>
   ) {
-    if (ttsModeRef.current !== "auto") return;
-    const language = ttsSpeakLanguage;
-    if (!language) return;
-    const latency = ttsLatencyRef.current;
-    for (const phrase of phrasesToCheck) {
-      if (!phraseSpeakReady(phrase, adaptationsSnapshot, language, latency)) continue;
-      const text = phraseTargetText(phrase, language, adaptationsSnapshot);
-      if (!text.trim()) continue;
-      const key = ttsKeyForPhrase(phrase, language);
-      if (ttsSpokenKeysRef.current.has(key)) continue;
-      ttsSpokenKeysRef.current.add(key);
-      void speakPhraseText(key, text, language);
-    }
+    getSpeechQueue().update(phrasesToCheck, speechOptions(adaptationsSnapshot));
   }
 
   function requestAdaptationsFor(phrasesToInspect: Phrase[], targetLanguage = activeLeftLanguage) {
@@ -728,7 +735,7 @@ export function TranslatorApp({
               ...current,
               [translationKey]: nextAdaptation
             }));
-            maybeAutoSpeakPhrases([phrase], adaptationsRef.current);
+            refreshAutoSpeak();
           })
           .catch(() => {
             setAdaptationsSynced((current) => ({
@@ -780,7 +787,7 @@ export function TranslatorApp({
             ...current,
             [key]: nextAdaptation
           }));
-          maybeAutoSpeakPhrases([phrase], adaptationsRef.current);
+          refreshAutoSpeak();
         })
         .catch(() => {
           // Keep Soniox's provisional translation if the fast DeepL pass misses.
@@ -816,6 +823,7 @@ export function TranslatorApp({
               ...current,
               [key]: nextAdaptation
             }));
+            refreshAutoSpeak();
           })
           .catch(() => {
             setAdaptationsSynced((current) => ({
@@ -840,6 +848,7 @@ export function TranslatorApp({
     cancelAutoImprove();
     const resumeSessionName = activeSessionRef.current;
     const isResuming = Boolean(resumeSessionName);
+    resetSpeechQueue(isResuming ? phrases : []);
     setError("");
     setRediarizeStatus("");
     setTranslationStatus("");
@@ -1188,6 +1197,7 @@ export function TranslatorApp({
       return;
     }
     cleanup();
+    resetSpeechQueue();
     cancelAutoImprove();
     const requestCache = sessionDetailCacheRef.current;
     setError("");
@@ -1212,7 +1222,7 @@ export function TranslatorApp({
       );
       adaptationRequestsRef.current.clear();
       setAdaptationsSynced(detail.adaptations || {});
-      setPhrasesAndFollow(detail.phrases || [], { requestAdaptations: false });
+      setPhrasesAndFollow(detail.phrases || [], { requestAdaptations: false, autoSpeak: false });
       clearProviderSignals();
       setTokenCount(detail.session.tokens?.length || detail.phrases?.length || 0);
       setActiveDurationSeconds(detail.session.duration_seconds ?? durationFromPhrases(detail.phrases || []));
@@ -1288,6 +1298,7 @@ export function TranslatorApp({
       return;
     }
     cleanup();
+    resetSpeechQueue();
     cancelAutoImprove();
     setSavedPath("");
     setActiveSessionSynced("");
@@ -1318,6 +1329,7 @@ export function TranslatorApp({
     }
     const next = codes.filter((code) => code !== sourceB);
     if (next.length > 0) {
+      resetSpeechQueue(phrases);
       setSourceALanguages(next);
     }
   }
@@ -1326,6 +1338,7 @@ export function TranslatorApp({
     if (isLive) {
       return;
     }
+    resetSpeechQueue(phrases);
     setSourceB(code);
     setSourceALanguages((current) => {
       const withoutTarget = current.filter((language) => language !== code);
@@ -1551,7 +1564,7 @@ export function TranslatorApp({
       // Speaker corrections must survive a later translation-service failure.
       delete sessionDetailCacheRef.current[sessionName];
       if (activeSessionRef.current === sessionName && wsRef.current?.readyState !== WebSocket.OPEN) {
-        setPhrasesAndFollow(result.phrases, { requestAdaptations: false });
+        setPhrasesAndFollow(result.phrases, { requestAdaptations: false, autoSpeak: false });
         setSpeakerDrafts({});
         setEditingSpeaker(null);
         setSpeakerEditorDraft(null);
@@ -1753,7 +1766,11 @@ export function TranslatorApp({
                   leftLabel="fast"
                   rightLabel="slow"
                   rightSelected={transcriptLatencyMode === "slow"}
-                  onChange={(slow) => setTranscriptLatencyMode(slow ? "slow" : "fast")}
+                  onChange={(slow) => {
+                    ttsLatencyRef.current = slow ? "slow" : "fast";
+                    setTranscriptLatencyMode(ttsLatencyRef.current);
+                    refreshAutoSpeak();
+                  }}
                   title="Slow mode waits for the AI to polish the wording and translation before showing the bubble. Fast skips the polish step."
                 />
                 <DualLabelToggle
@@ -1768,7 +1785,7 @@ export function TranslatorApp({
                   rightLabel="autospeak"
                   rightSelected={ttsMode === "auto"}
                   onChange={(autospeak) => changeTtsMode(autospeak ? "auto" : "push")}
-                  title="Autospeak reads every finalized translation out loud automatically. Push keeps it manual — tap the voice icon on a bubble to play it."
+                  title="Autospeak starts at the latest box and queues new English-to-local-language translations in order. Replies translated into English stay silent. Push keeps playback manual."
                 />
               </div>
             ) : null}
