@@ -43,6 +43,7 @@ from .sessions import (
     session_belongs_to,
     session_display_title,
     session_duration_seconds,
+    session_title_model,
     write_session_summary,
 )
 from .soniox import NUM_CHANNELS, SAMPLE_RATE, run_transcription_bridge
@@ -942,17 +943,16 @@ def auto_title_session(
 ) -> dict[str, Any]:
     """Generate a title for a session that was never titled (or force a refresh).
 
-    This is the catch-up path for sessions whose fire-and-forget rename never
-    completed at close time (e.g., the server restarted, the OpenAI API was
-    down, or the session predates the auto-rename feature).
+    This is the retry path for sessions whose title provider was unavailable
+    at save time, or which predate automatic topic titles.
     """
     state = read_session_state(session_name)
     if not state:
         raise HTTPException(status_code=404, detail="Session not found.")
     _require_owner(state, user_id)
 
-    if not os.environ.get("OPENAI_API_KEY"):
-        raise HTTPException(status_code=503, detail="OPENAI_API_KEY is not configured.")
+    if not (os.environ.get("GROQ_API_KEY") or os.environ.get("OPENAI_API_KEY")):
+        raise HTTPException(status_code=503, detail="No title generation provider is configured.")
 
     safe_name = sanitize_session_name(session_name)
     session_dir = shared.REPO_ROOT / "output" / safe_name
@@ -975,19 +975,7 @@ def auto_title_session(
     if not result:
         raise HTTPException(status_code=502, detail="Title generation failed. See server logs for details.")
 
-    model = os.environ.get("OPENAI_SESSION_TITLE_MODEL", "gpt-4o-mini")
-    write_session_summary(session_dir, result["summary"], result["title"], model)
-
-    state_title = str(state.get("title") or "").strip()
-    if not state_title or state_title.lower() == "new chat":
-        state["title"] = result["title"][:48]
-        try:
-            (session_dir / "session_state.json").write_text(
-                json.dumps(state, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
-        except OSError:
-            pass
+    write_session_summary(session_dir, result["summary"], result["title"], session_title_model(), len(tokens))
 
     return {
         "name": safe_name,

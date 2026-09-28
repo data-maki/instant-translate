@@ -527,7 +527,7 @@ def test_list_sessions_sorts_by_updated_newest_first(tmp_path, monkeypatch):
         session_dir = output / name
         session_dir.mkdir()
         (session_dir / "session_state.json").write_text(
-            json.dumps({"updated": updated, "tokens": [], "source_languages": ["en", "ja"], "target_language": "en"}),
+            json.dumps({"updated": updated, "tokens": [{"text": "Hello"}], "source_languages": ["en", "ja"], "target_language": "en"}),
             encoding="utf-8",
         )
     (output / "legacy-without-state").mkdir()
@@ -545,7 +545,7 @@ def test_sessions_endpoint_can_limit_initial_history_payload(tmp_path, monkeypat
         (session_dir / "session_state.json").write_text(
             json.dumps({
                 "updated": f"2026-05-1{index}T10:00:00",
-                "tokens": [],
+                "tokens": [{"text": "Hello"}],
                 "source_languages": ["en", "ja"],
                 "target_language": "en",
                 "user_id": "test-user",

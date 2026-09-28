@@ -900,21 +900,23 @@ export function TranslatorApp({
       };
 
       socket.onmessage = (event) => {
+        if (wsRef.current !== socket) return;
         const message = JSON.parse(event.data) as TranscriptEvent;
         handleServerEvent(message);
       };
 
       socket.onerror = () => {
+        if (wsRef.current !== socket) return;
         setError("WebSocket connection failed. Is the FastAPI backend running on port 8000?");
         setStatus("error");
         cleanup();
       };
 
       socket.onclose = () => {
-        if (status !== "stopping") {
-          setStatus((current) => (current === "error" ? "error" : "stopped"));
-        }
+        if (wsRef.current !== socket) return;
+        setStatus((current) => (current === "error" ? "error" : "stopped"));
         cleanup();
+        void refreshSessions();
       };
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Could not start microphone capture.");
@@ -987,22 +989,24 @@ export function TranslatorApp({
     };
 
     socket.onmessage = (event) => {
+      if (wsRef.current !== socket) return;
       const message = JSON.parse(event.data) as TranscriptEvent;
       handleServerEvent(message);
     };
 
     socket.onerror = () => {
+      if (wsRef.current !== socket) return;
       setError("Realtime transcript stream failed. Is the FastAPI backend running on port 8000?");
       setStatus("error");
       cleanup();
     };
 
     socket.onclose = () => {
+      if (wsRef.current !== socket) return;
       realtimeTranscriptBridgeActiveRef.current = false;
-      if (status !== "stopping") {
-        setStatus((current) => (current === "error" ? "error" : "stopped"));
-      }
+      setStatus((current) => (current === "error" ? "error" : "stopped"));
       cleanup();
+      void refreshSessions();
     };
   }
 
@@ -1146,7 +1150,7 @@ export function TranslatorApp({
       setSessions(result.sessions);
       setSessionTotal(result.total);
     } catch {
-      // The main health/language load already exposes backend connection errors.
+      setError("Could not refresh saved conversations. Reload to try again.");
     }
   }
 
@@ -1175,7 +1179,7 @@ export function TranslatorApp({
   }
 
   async function loadSession(name: string) {
-    if (isLive) {
+    if (isLive || status === "stopping") {
       return;
     }
     setError("");
@@ -1269,9 +1273,10 @@ export function TranslatorApp({
   }
 
   function newSession() {
-    if (isLive) {
+    if (isLive || status === "stopping") {
       return;
     }
+    cleanup();
     setSavedPath("");
     setActiveSessionSynced("");
     setActiveSessionTitle("");
@@ -1404,18 +1409,29 @@ export function TranslatorApp({
     if (message.type === "saved") {
       setActiveSessionSynced(message.session);
       const savedTitle = String(message.title || "").trim();
+      delete sessionDetailCacheRef.current[message.session];
+      setSessions((current) => [{
+        name: message.session,
+        title: savedTitle || "Saved conversation",
+        updated: new Date().toISOString(),
+        token_count: message.token_count,
+        duration_seconds: durationFromPhrases(message.phrases),
+        source_languages: [...sourceALanguages, sourceB],
+        target_language: sourceB
+      }, ...current.filter((session) => session.name !== message.session)]);
+      void refreshSessions();
       if (savedTitle && savedTitle.toLowerCase() !== "new chat") {
         setActiveSessionTitle(savedTitle);
       } else if (!activeSessionTitle.trim()) {
         setActiveSessionTitle("New chat");
       }
       setSavedPath(message.path);
-      setPhrasesAndFollow(message.phrases);
+      setPhrasesAndFollow(message.phrases, { requestAdaptations: false });
       clearProviderSignals();
       setTokenCount(message.token_count);
       setActiveDurationSeconds(durationFromPhrases(message.phrases));
       stopDurationTimer();
-      refreshSessions();
+      scheduleAutoImprove(message.session);
       return;
     }
     if (message.type === "session_renamed") {
@@ -1426,7 +1442,7 @@ export function TranslatorApp({
       setSessions((current) =>
         current.map((session) => (session.name === message.session ? { ...session, title: newTitle } : session))
       );
-      if (activeSession === message.session) {
+      if (activeSessionRef.current === message.session) {
         setActiveSessionTitle(newTitle);
       }
       const cached = sessionDetailCacheRef.current[message.session];
@@ -1438,19 +1454,19 @@ export function TranslatorApp({
     if (message.type === "error") {
       setError(message.message);
       setStatus("error");
-      cleanup();
+      // The backend can still send a saved transcript after a provider error.
+      // Stop capture, but keep the socket open for that acknowledgement.
+      stopDurationTimer();
+      stopRealtimeSessions();
+      recorderRef.current?.stop();
+      recorderRef.current = null;
     }
   }
 
   function stop() {
     setStatus("stopping");
-    const sessionToImprove = activeSessionRef.current;
-    if (openAIRealtimeEnabled) {
-      cleanup();
-      setStatus("stopped");
-      scheduleAutoImprove(sessionToImprove);
-      return;
-    }
+    stopDurationTimer();
+    stopRealtimeSessions();
     recorderRef.current?.stop();
     recorderRef.current = null;
     try {
@@ -1470,7 +1486,6 @@ export function TranslatorApp({
         return current;
       });
     }, 45_000);
-    scheduleAutoImprove(sessionToImprove);
   }
 
   function toggleMicCapture() {
@@ -1790,6 +1805,7 @@ export function TranslatorApp({
                 englishTargetLabel={languageShortLabel(englishOverdubTargetLanguage(sourceALanguages, sourceB), languageMap)}
                 englishToTargetOverdubEnabled={englishToTargetOverdubEnabled}
                 isLive={isLive}
+                isSaving={status === "stopping"}
                 micCaptureEnabled={micCaptureEnabled}
                 onStart={() => start(openAIRealtimeEnabled)}
                 onStop={stop}
@@ -1849,6 +1865,7 @@ function ControlsStrip({
   englishTargetLabel,
   englishToTargetOverdubEnabled,
   isLive,
+  isSaving,
   micCaptureEnabled,
   onStart,
   onStop,
@@ -1863,6 +1880,7 @@ function ControlsStrip({
   englishTargetLabel: string;
   englishToTargetOverdubEnabled: boolean;
   isLive: boolean;
+  isSaving: boolean;
   micCaptureEnabled: boolean;
   onStart: () => void;
   onStop: () => void;
@@ -1875,14 +1893,14 @@ function ControlsStrip({
   return (
     <div className="controlsStrip" aria-label="Session controls">
       <button
-        aria-label={isLive ? "Stop session" : "Start session"}
+        aria-label={isSaving ? "Saving conversation" : isLive ? "Stop session" : "Start session"}
         className={`stripTransportButton ${isLive ? "recording" : ""}`}
         disabled={!isLive && !canStart}
         onClick={isLive ? onStop : onStart}
         type="button"
       >
         <span aria-hidden="true" className="stripTransportGlyph">{isLive ? "■" : "▶"}</span>
-        <span>{isLive ? "Stop" : "Start"}</span>
+        <span>{isSaving ? "Saving…" : isLive ? "Stop" : "Start"}</span>
       </button>
       {openAIRealtimeEnabled && isLive ? (
         <div className="controlsStripToggles">
