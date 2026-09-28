@@ -88,6 +88,25 @@ public struct SessionsResponse: Codable, Sendable {
     public var total: Int
 }
 
+public struct SessionRenameResponse: Codable, Sendable {
+    public var name: String
+    public var title: String
+}
+
+public struct SessionImproveResponse: Codable, Sendable {
+    public var session: String
+    public var path: String?
+    public var tokenCount: Int?
+    public var phrases: [Phrase]?
+
+    enum CodingKeys: String, CodingKey {
+        case session
+        case path
+        case tokenCount = "token_count"
+        case phrases
+    }
+}
+
 public struct AudiencePreset: Identifiable, Hashable, Sendable {
     public let id: String
     public let label: String
@@ -150,6 +169,14 @@ public struct TtsResult: Decodable, Sendable {
     enum CodingKeys: String, CodingKey {
         case audioBase64 = "audio_base64"
         case mimeType = "mime_type"
+    }
+}
+
+public struct TranslatePhraseResult: Decodable, Sendable {
+    public var targetTranslation: String
+
+    enum CodingKeys: String, CodingKey {
+        case targetTranslation = "target_translation"
     }
 }
 

@@ -31,12 +31,33 @@ public final class TranslatorViewModel: ObservableObject {
     @Published public private(set) var katakanaSuggestions: [NameKatakanaOption] = []
     @Published public private(set) var katakanaSuggestStatus = ""
     @Published public private(set) var mapsImportStatus = ""
-    @Published public var realtimeEnabled = true
+    @Published public private(set) var sessionTotal = 0
+    @Published public private(set) var loadingMoreSessions = false
+    @Published public private(set) var historyStatus = ""
+    @Published public private(set) var improvingTranscript = false
+    @Published public private(set) var improveStatus = ""
+    @Published public var typedText = ""
+    @Published public var showEnhancedText = true
+    @Published public var showRomaji = false
+    @Published public var autoSpeakEnabled = false {
+        didSet { speechQueue.setEnabled(autoSpeakEnabled && !realtimeEnabled, phrases: phrases, language: autoSpeakLanguage) }
+    }
+    @Published public var realtimeEnabled = false {
+        didSet { resetSpeechQueue() }
+    }
+    @Published public private(set) var loadingSession = false
     @Published public var microphoneEnabled = true
+    @Published public var voiceOutputEnabled = true
     @Published public var englishToTargetSpeakerEnabled = true
     @Published public var targetToEnglishSpeakerEnabled = true
+    @Published public private(set) var audioChunkCount = 0
+    @Published public private(set) var backendEventCount = 0
+    @Published public private(set) var lastBackendEvent = "Not connected"
+    @Published public private(set) var audioLevel: Double = 0
+    @Published public private(set) var backendConfirmedListening = false
 
     private static let autoImproveDelay: UInt64 = 2 * 60 * 1_000_000_000
+    private static let sessionPageSize = 24
 
     private let configuration: AppConfiguration
     private let api: CottonohaAPIClient
@@ -47,10 +68,28 @@ public final class TranslatorViewModel: ObservableObject {
     private var recorder: AudioRecorder?
     private var shouldSendAudio = true
     private var autoImproveTask: Task<Void, Never>?
+    private var loadGeneration = UUID()
+    private var connectionGeneration = UUID()
+    private lazy var speechQueue = SpeechQueue(
+        play: { [weak self] item in await self?.playSpeech(item) },
+        stop: { [weak self] in
+            self?.ttsPlayer.stop()
+            self?.speakingPhraseId = nil
+        },
+        text: { [weak self] phrase, language in self?.bestText(for: phrase, language: language) ?? "" }
+    )
 
-    public init(configuration: AppConfiguration) {
+    private var autoSpeakLanguage: String {
+        targetLanguage == "en" ? sourceLanguages.first(where: { $0 != "en" }) ?? "" : targetLanguage
+    }
+
+    private func resetSpeechQueue() {
+        speechQueue.reset(phrases, language: autoSpeakLanguage, enabled: autoSpeakEnabled && !realtimeEnabled)
+    }
+
+    public init(configuration: AppConfiguration, session: URLSession = .shared) {
         self.configuration = configuration
-        self.api = CottonohaAPIClient(configuration: configuration)
+        self.api = CottonohaAPIClient(configuration: configuration, session: session)
         self.profile = profileStore.load()
     }
 
@@ -60,6 +99,14 @@ public final class TranslatorViewModel: ObservableObject {
 
     public var targetShortName: String {
         targetLanguage.uppercased()
+    }
+
+    public var primarySourceLanguage: String {
+        sourceLanguages.first { $0 != targetLanguage } ?? sourceLanguages.first ?? "en"
+    }
+
+    public var primarySourceShortName: String {
+        primarySourceLanguage.uppercased()
     }
 
     public func loadInitialData() async {
@@ -79,21 +126,153 @@ public final class TranslatorViewModel: ObservableObject {
     }
 
     public func refreshSessions() async throws {
-        let response = try await api.fetchSessions(limit: 12)
+        let response = try await api.fetchSessions(limit: Self.sessionPageSize)
         sessions = response.sessions
+        sessionTotal = response.total
+    }
+
+    public func loadMoreSessions() async {
+        guard !loadingMoreSessions, sessions.count < sessionTotal else { return }
+        loadingMoreSessions = true
+        defer { loadingMoreSessions = false }
+        do {
+            let response = try await api.fetchSessions(limit: Self.sessionPageSize, offset: sessions.count)
+            let existing = Set(sessions.map(\.name))
+            sessions.append(contentsOf: response.sessions.filter { !existing.contains($0.name) })
+            sessionTotal = response.total
+            historyStatus = ""
+        } catch {
+            historyStatus = friendlyError(error)
+        }
     }
 
     public func loadSession(_ session: SessionSummary) async {
+        guard !isLive, status != .stopping, !improvingTranscript else { return }
         cancelAutoImprove()
+        resetSpeechQueue()
+        connectionGeneration = UUID()
+        let request = UUID()
+        loadGeneration = request
+        loadingSession = true
+        defer { if loadGeneration == request { loadingSession = false } }
         do {
             let detail = try await api.fetchSessionDetail(session.name)
+            guard loadGeneration == request else { return }
             phrases = detail.phrases ?? []
             adaptations = detail.adaptations ?? [:]
             activeSessionName = detail.session?.name ?? session.name
             activeSessionTitle = detail.session?.title ?? session.title
             sourceLanguages = detail.session?.sourceLanguages ?? session.sourceLanguages ?? sourceLanguages
             targetLanguage = detail.session?.targetLanguage ?? session.targetLanguage ?? targetLanguage
+            context = stripKnownContextBlocks(detail.session?.context ?? context)
+            resetSpeechQueue()
+            status = .stopped
             tokenCount = phrases.count
+            improveStatus = ""
+            historyStatus = ""
+        } catch {
+            if loadGeneration == request { errorMessage = friendlyError(error) }
+        }
+    }
+
+    public func renameSession(_ session: SessionSummary, title: String) async {
+        let trimmed = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        do {
+            let result = try await api.renameSession(session.name, title: trimmed)
+            sessions = sessions.map { current in
+                guard current.name == result.name else { return current }
+                var updated = current
+                updated.title = result.title
+                return updated
+            }
+            if activeSessionName == result.name {
+                activeSessionTitle = result.title
+            }
+            historyStatus = ""
+        } catch {
+            historyStatus = friendlyError(error)
+        }
+    }
+
+    public func deleteSession(_ session: SessionSummary) async {
+        if activeSessionName == session.name, isLive || status == .stopping {
+            historyStatus = "Stop the current session before deleting it."
+            return
+        }
+        do {
+            try await api.deleteSession(session.name)
+            sessions.removeAll { $0.name == session.name }
+            sessionTotal = max(0, sessionTotal - 1)
+            if activeSessionName == session.name {
+                newChat()
+            }
+            historyStatus = ""
+        } catch {
+            historyStatus = friendlyError(error)
+        }
+    }
+
+    public func improveActiveSession() async {
+        let sessionName = activeSessionName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !sessionName.isEmpty, !isLive, status != .stopping, !improvingTranscript, !loadingSession else { return }
+        cancelAutoImprove()
+        resetSpeechQueue()
+        improvingTranscript = true
+        improveStatus = "Improving transcript…"
+        defer { improvingTranscript = false }
+        do {
+            let diarized = try await api.rediarizeSession(sessionName)
+            guard activeSessionName == sessionName else { return }
+            if let next = diarized.phrases, !next.isEmpty {
+                phrases = next
+            }
+            let translated = try await api.retranslateSession(sessionName)
+            guard activeSessionName == sessionName else { return }
+            if let next = translated.phrases, !next.isEmpty {
+                phrases = next
+            }
+            tokenCount = translated.tokenCount ?? diarized.tokenCount ?? phrases.count
+            improveStatus = "Transcript improved."
+            resetSpeechQueue()
+            try? await refreshSessions()
+        } catch {
+            improveStatus = friendlyError(error)
+        }
+    }
+
+    public func submitTypedText() async {
+        let text = typedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        typedText = ""
+        let phraseId = "typed-\(UUID().uuidString)"
+        let sourceLanguage = primarySourceLanguage
+        let outputLanguage = targetLanguage
+        let phrase = Phrase(
+            id: phraseId,
+            speaker: FlexibleString("typed"),
+            speakerLabel: "You",
+            sourceLanguage: sourceLanguage,
+            texts: [sourceLanguage: text],
+            romajiJa: nil,
+            isFinal: true,
+            time: nil
+        )
+        phrases.append(phrase)
+        tokenCount = phrases.count
+
+        guard sourceLanguage != targetLanguage else { return }
+        do {
+            let translated = try await api.translatePhrase(
+                sourceLanguage: sourceLanguage,
+                targetLanguage: outputLanguage,
+                sourceText: text,
+                audience: AudiencePreset.find(audiencePresetID).label
+            )
+            guard !translated.targetTranslation.isEmpty,
+                  let index = phrases.firstIndex(where: { $0.id == phraseId }) else { return }
+            phrases[index].texts[outputLanguage] = translated.targetTranslation
+            speechQueue.update(phrases)
         } catch {
             errorMessage = friendlyError(error)
         }
@@ -109,6 +288,9 @@ public final class TranslatorViewModel: ObservableObject {
     /// Text we'd actually want to *speak* — prefer the AI-enhanced rewrite
     /// when available, fall back to whatever the live pipeline produced.
     public func bestText(for phrase: Phrase, language: String) -> String {
+        if !showEnhancedText {
+            return phrase.texts[language] ?? ""
+        }
         if language == phrase.sourceLanguage,
            let adaptation = adaptation(for: phrase, targetLang: targetLanguage),
            !adaptation.sourceRewrite.isEmpty {
@@ -124,19 +306,23 @@ public final class TranslatorViewModel: ObservableObject {
     public func speakPhrase(_ phrase: Phrase, language: String) async {
         let text = bestText(for: phrase, language: language).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        speakingPhraseId = phrase.id
-        defer { speakingPhraseId = nil }
-        // The voice picker is Japanese-only — only forward it when speaking ja.
-        let voiceId = (language == "ja" && !profile.ttsVoiceId.isEmpty) ? profile.ttsVoiceId : nil
+        await speechQueue.speakNow(SpeechItem(id: phrase.id, text: text, language: language))
+    }
+
+    private func playSpeech(_ item: SpeechItem) async {
+        speakingPhraseId = item.id
+        defer { if !Task.isCancelled { speakingPhraseId = nil } }
+        let voiceId = (item.language == "ja" && !profile.ttsVoiceId.isEmpty) ? profile.ttsVoiceId : nil
         do {
             let result = try await api.generateTts(
-                text: text,
-                targetLanguage: language,
+                text: item.text,
+                targetLanguage: item.language,
                 voiceId: voiceId
             )
-            ttsPlayer.play(base64: result.audioBase64)
+            try Task.checkCancellation()
+            try await ttsPlayer.play(base64: result.audioBase64)
         } catch {
-            errorMessage = friendlyError(error)
+            if !Task.isCancelled { errorMessage = friendlyError(error) }
         }
     }
 
@@ -208,17 +394,26 @@ public final class TranslatorViewModel: ObservableObject {
     /// instead of extending the previous one. Equivalent to the desktop
     /// "New chat" button.
     public func newChat() {
+        guard !isLive, status != .stopping, !improvingTranscript else { return }
+        loadGeneration = UUID()
+        connectionGeneration = UUID()
+        loadingSession = false
         cancelAutoImprove()
         activeSessionName = ""
         activeSessionTitle = "New chat"
         phrases = []
+        adaptations = [:]
+        typedText = ""
         tokenCount = 0
         errorMessage = ""
+        improveStatus = ""
+        resetSpeechQueue()
+        resetRuntimeDiagnostics()
         status = .idle
     }
 
     public func toggleSourceLanguage(_ code: String) {
-        guard !isLive, code != targetLanguage else { return }
+        guard !isLive, status != .stopping, !loadingSession, !improvingTranscript, code != targetLanguage else { return }
         if sourceLanguages.contains(code) {
             let next = sourceLanguages.filter { $0 != code }
             if !next.isEmpty {
@@ -227,15 +422,17 @@ public final class TranslatorViewModel: ObservableObject {
         } else {
             sourceLanguages.append(code)
         }
+        resetSpeechQueue()
     }
 
     public func setTargetLanguage(_ code: String) {
-        guard !isLive else { return }
+        guard !isLive, status != .stopping, !loadingSession, !improvingTranscript else { return }
         targetLanguage = code
         sourceLanguages.removeAll { $0 == code }
         if sourceLanguages.isEmpty {
             sourceLanguages = [code == "en" ? "ja" : "en"]
         }
+        resetSpeechQueue()
     }
 
     public func saveProfile() {
@@ -243,6 +440,10 @@ public final class TranslatorViewModel: ObservableObject {
     }
 
     public func start() async {
+        guard !isLive, status != .stopping, !improvingTranscript, !loadingSession else { return }
+        loadGeneration = UUID()
+        let connection = UUID()
+        connectionGeneration = connection
         cancelAutoImprove()
         let resumeSessionName = activeSessionName
         let isResuming = !resumeSessionName.isEmpty
@@ -250,11 +451,15 @@ public final class TranslatorViewModel: ObservableObject {
         errorMessage = ""
         if !isResuming {
             phrases = []
+            adaptations = [:]
             activeSessionTitle = realtimeEnabled ? "Realtime overdub" : "New chat"
             tokenCount = 0
         }
+        resetSpeechQueue()
+        resetRuntimeDiagnostics()
         shouldSendAudio = microphoneEnabled
         status = .connecting
+        lastBackendEvent = "Opening connection"
 
         do {
             let socket = WebSocketTranscriptionClient(url: configuration.websocketURL)
@@ -272,12 +477,14 @@ public final class TranslatorViewModel: ObservableObject {
             try await socket.connect(
                 startMessage: startMessage,
                 onEvent: { [weak self] event in
-                    await self?.handle(event)
+                    await self?.handle(event, connection: connection)
                 },
                 onError: { [weak self] message in
-                    await self?.fail(message)
+                    await self?.fail(message, connection: connection)
                 }
             )
+            guard connectionGeneration == connection, status == .connecting || status == .listening else { return }
+            lastBackendEvent = "Connected"
 
             let recorder = AudioRecorder()
             self.recorder = recorder
@@ -288,6 +495,7 @@ public final class TranslatorViewModel: ObservableObject {
                 }
             }
             status = .listening
+            lastBackendEvent = "Microphone ready"
             AppLog.realtime.info("Translation session listening")
         } catch {
             AppLog.realtime.error("Translation session failed to start: \(error.localizedDescription, privacy: .public)")
@@ -297,14 +505,18 @@ public final class TranslatorViewModel: ObservableObject {
     }
 
     public func stop() async {
+        guard status != .stopping else { return }
+        let connection = connectionGeneration
         AppLog.realtime.info("Stopping translation session")
         status = .stopping
         recorder?.stop()
         recorder = nil
         await socket?.stop()
+        guard connectionGeneration == connection else { return }
         socket = nil
         player.stop()
         status = .stopped
+        lastBackendEvent = "Stopped"
         try? await refreshSessions()
         scheduleAutoImprove(for: activeSessionName)
         AppLog.realtime.info("Translation session stopped")
@@ -318,15 +530,15 @@ public final class TranslatorViewModel: ObservableObject {
             try? await Task.sleep(nanoseconds: TranslatorViewModel.autoImproveDelay)
             if Task.isCancelled { return }
             do {
-                try await api.rediarizeSession(sessionName)
+                _ = try await api.rediarizeSession(sessionName)
                 if Task.isCancelled { return }
-                try await api.retranslateSession(sessionName)
+                _ = try await api.retranslateSession(sessionName)
                 AppLog.realtime.info("Auto-improve completed for session=\(sessionName, privacy: .public)")
             } catch {
                 // Best-effort: a failure leaves the saved chat untouched.
                 AppLog.realtime.warning("Auto-improve skipped for session=\(sessionName, privacy: .public): \(error.localizedDescription, privacy: .public)")
             }
-            await self?.clearAutoImproveTask()
+            self?.clearAutoImproveTask()
         }
     }
 
@@ -352,6 +564,12 @@ public final class TranslatorViewModel: ObservableObject {
         targetToEnglishSpeakerEnabled.toggle()
     }
 
+    public func toggleVoiceOutput() {
+        voiceOutputEnabled.toggle()
+        englishToTargetSpeakerEnabled = voiceOutputEnabled
+        targetToEnglishSpeakerEnabled = voiceOutputEnabled
+    }
+
     private var mergedContext: String {
         [context, profile.sonioxContext]
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -361,33 +579,50 @@ public final class TranslatorViewModel: ObservableObject {
 
     private func sendAudioIfNeeded(_ data: Data) async {
         guard shouldSendAudio else { return }
+        audioChunkCount += 1
+        audioLevel = Self.estimatedAudioLevel(from: data)
+        if audioChunkCount == 1 {
+            lastBackendEvent = "Streaming audio"
+        }
         await socket?.sendAudio(data)
     }
 
-    private func handle(_ event: TranscriptEvent) async {
+    private func handle(_ event: TranscriptEvent, connection: UUID) async {
+        guard connectionGeneration == connection else { return }
+        backendEventCount += 1
         switch event {
         case .status(let value):
-            status = value == "listening" ? .listening : .stopped
+            if value == "stopped" { status = .stopped }
+            else if value == "listening", status != .stopping { status = .listening }
+            backendConfirmedListening = value == "listening"
+            lastBackendEvent = value == "listening" ? "Backend listening" : "Backend stopped"
         case .session(let session):
             activeSessionName = session.name
             applyIncomingTitle(session.title)
             tokenCount = session.tokenCount
+            lastBackendEvent = "Session ready"
         case .transcript(let nextPhrases, let finalTokenCount):
             phrases = nextPhrases
             tokenCount = finalTokenCount
+            lastBackendEvent = nextPhrases.isEmpty ? "Waiting for speech" : "Transcript received"
+            speechQueue.update(phrases)
         case .providerUpdate(let update):
             appendProviderBubble(update)
+            lastBackendEvent = update.kind == "error" ? "Provider error" : "Realtime update"
         case .realtimeAudio(let audio):
-            guard realtimeEnabled else { return }
+            guard realtimeEnabled, voiceOutputEnabled else { return }
+            lastBackendEvent = "Voice audio received"
             player.playBase64PCM16(audio.audio, sampleRate: audio.sampleRate)
         case .saved(let saved):
-            activeSessionName = saved.session
+            guard activeSessionName == saved.session else { return }
             applyIncomingTitle(saved.title)
             phrases = saved.phrases
             tokenCount = saved.tokenCount
-            status = .stopped
+            lastBackendEvent = "Saved"
+            speechQueue.update(phrases)
             try? await refreshSessions()
         case .error(let message):
+            lastBackendEvent = "Backend error"
             fail(message)
         }
     }
@@ -420,9 +655,52 @@ public final class TranslatorViewModel: ObservableObject {
             time: nil
         )
         phrases.append(phrase)
+        speechQueue.update(phrases)
     }
 
-    private func fail(_ message: String) {
+    private func resetRuntimeDiagnostics() {
+        audioChunkCount = 0
+        backendEventCount = 0
+        lastBackendEvent = "Not connected"
+        audioLevel = 0
+        backendConfirmedListening = false
+    }
+
+    private static func estimatedAudioLevel(from data: Data) -> Double {
+        let sampleCount = data.count / MemoryLayout<Int16>.size
+        guard sampleCount > 0 else { return 0 }
+        var sumSquares = 0.0
+        var sampledCount = 0
+        data.withUnsafeBytes { rawBuffer in
+            guard let samples = rawBuffer.bindMemory(to: Int16.self).baseAddress else { return }
+            let stride = max(1, sampleCount / 160)
+            var index = 0
+            while index < sampleCount {
+                let normalized = Double(samples[index]) / Double(Int16.max)
+                sumSquares += normalized * normalized
+                sampledCount += 1
+                index += stride
+            }
+        }
+        return min(1, sqrt(sumSquares / Double(max(1, sampledCount))) * 5)
+    }
+
+    private func stripKnownContextBlocks(_ value: String) -> String {
+        var result = value
+        for (startMarker, endMarker) in [
+            ("[Traveler profile]", "[/Traveler profile]"),
+            ("[Japanese register preset]", "[/Japanese register preset]")
+        ] {
+            while let start = result.range(of: startMarker),
+                  let end = result.range(of: endMarker, range: start.upperBound..<result.endIndex) {
+                result.removeSubrange(start.lowerBound..<end.upperBound)
+            }
+        }
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func fail(_ message: String, connection: UUID? = nil) {
+        if let connection, connectionGeneration != connection { return }
         AppLog.app.error("Translator entered error state: \(message, privacy: .public)")
         errorMessage = message
         status = .error

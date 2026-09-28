@@ -1,14 +1,30 @@
 import Foundation
 
+// The transport boundary lets Stop/finalization run against controlled frames in tests.
+protocol TranscriptionSocket: Sendable {
+    func resume()
+    func send(_ message: URLSessionWebSocketTask.Message) async throws
+    func receive() async throws -> URLSessionWebSocketTask.Message
+    func cancel(with closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?)
+}
+
+extension URLSessionWebSocketTask: TranscriptionSocket {}
+
 public actor WebSocketTranscriptionClient {
     private let url: URL
-    private var task: URLSessionWebSocketTask?
-    private let session: URLSession
+    private var task: (any TranscriptionSocket)?
+    private let makeSocket: @Sendable () -> any TranscriptionSocket
     private let encoder = JSONEncoder()
+    private var receiver: Task<Void, Never>?
 
     public init(url: URL, session: URLSession = .shared) {
         self.url = url
-        self.session = session
+        self.makeSocket = { session.webSocketTask(with: url) }
+    }
+
+    init(url: URL, socket: any TranscriptionSocket) {
+        self.url = url
+        self.makeSocket = { socket }
     }
 
     public func connect(
@@ -16,12 +32,12 @@ public actor WebSocketTranscriptionClient {
         onEvent: @escaping @Sendable (TranscriptEvent) async -> Void,
         onError: @escaping @Sendable (String) async -> Void
     ) async throws {
-        let socket = session.webSocketTask(with: url)
+        let socket = makeSocket()
         task = socket
         socket.resume()
         AppLog.realtime.info("WebSocket connecting to \(self.url.absoluteString, privacy: .public)")
         try await sendJSON(startMessage)
-        Task {
+        receiver = Task {
             await self.receiveLoop(onEvent: onEvent, onError: onError)
         }
     }
@@ -38,8 +54,19 @@ public actor WebSocketTranscriptionClient {
     public func stop() async {
         AppLog.realtime.info("Stopping WebSocket transcription")
         try? await sendJSON(["type": "stop"])
+        // Final transcript and title arrive after Stop. Keep receiving until
+        // the backend acknowledges completion, with a bounded failure path.
+        let socket = task
+        let timeout = Task {
+            do { try await Task.sleep(for: .seconds(45)) }
+            catch { return }
+            socket?.cancel(with: .goingAway, reason: nil)
+        }
+        await receiver?.value
+        timeout.cancel()
         task?.cancel(with: .normalClosure, reason: nil)
         task = nil
+        receiver = nil
     }
 
     private func receiveLoop(
@@ -62,6 +89,7 @@ public actor WebSocketTranscriptionClient {
                 let event = try TranscriptEventDecoder.decode(data)
                 AppLog.realtime.debug("Received transcript event")
                 await onEvent(event)
+                if case .status("stopped") = event { return }
             } catch {
                 AppLog.realtime.error("WebSocket receive loop failed: \(error.localizedDescription, privacy: .public)")
                 await onError(error.localizedDescription)

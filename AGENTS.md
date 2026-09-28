@@ -5,6 +5,7 @@
 - Be concise and skip unnecessary narration. Work fast.
 - Act first when the next step is obvious; ask only when truly blocked.
 - Prefer minimal diffs and preserve existing structure.
+- When packaging changes, review relevant pre-existing edits before excluding them. Report commit coverage and the remaining working-tree status, and reconcile duplicate local copies after their PRs merge.
 - Before handing over a local app URL, verify the matching backend's `/health` and `/languages`, plus an authenticated `/sessions` request. A listening port is not proof of the correct service. When changing ports, align frontend `NEXT_PUBLIC_API_BASE_URL` and backend `AUTH_BASE_URL`.
 - Session-title fixes must verify a topic-based generated title reaching the recording tab after Stop and surviving reload; an opening-text excerpt is only a fallback. Check the current recording state immediately before restarting its backend.
 - During active user testing, do not navigate, select history, reload, or otherwise change any existing user browser tab for verification. An apparently idle second tab is still the user's workspace. Use isolated automated tests; perform interactive verification only in an explicitly separate test session.

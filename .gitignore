@@ -79,3 +79,6 @@ backend/.pytest_cache/
 .DS_Store
 
 .claude/
+
+# Machine-local iOS Debug endpoint
+ios/CottonohaApp/Local.xcconfig

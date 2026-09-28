@@ -20,8 +20,18 @@ public actor CottonohaAPIClient {
         try await get("/languages")
     }
 
-    public func fetchSessions(limit: Int? = 8) async throws -> SessionsResponse {
-        let path = limit.map { "/sessions?limit=\($0)" } ?? "/sessions"
+    public func fetchSessions(limit: Int? = 8, offset: Int? = nil) async throws -> SessionsResponse {
+        var items: [URLQueryItem] = []
+        if let limit {
+            items.append(URLQueryItem(name: "limit", value: String(limit)))
+        }
+        if let offset {
+            items.append(URLQueryItem(name: "offset", value: String(offset)))
+        }
+        var components = URLComponents()
+        components.queryItems = items.isEmpty ? nil : items
+        let query = components.percentEncodedQuery.map { "?\($0)" } ?? ""
+        let path = "/sessions\(query)"
         return try await get(path)
     }
 
@@ -29,7 +39,7 @@ public actor CottonohaAPIClient {
         try await get("/sessions/\(name.urlPathEncoded)")
     }
 
-    public func renameSession(_ name: String, title: String) async throws -> SessionSummary {
+    public func renameSession(_ name: String, title: String) async throws -> SessionRenameResponse {
         try await request(
             "/sessions/\(name.urlPathEncoded)",
             method: "PATCH",
@@ -45,19 +55,57 @@ public actor CottonohaAPIClient {
         )
     }
 
-    public func rediarizeSession(_ name: String) async throws {
-        let _: ImproveResponse = try await request(
+    public func rediarizeSession(_ name: String) async throws -> SessionImproveResponse {
+        try await request(
             "/sessions/\(name.urlPathEncoded)/rediarize",
             method: "POST",
             body: Optional<EmptyBody>.none
         )
     }
 
-    public func retranslateSession(_ name: String) async throws {
-        let _: ImproveResponse = try await request(
+    public func retranslateSession(_ name: String) async throws -> SessionImproveResponse {
+        try await request(
             "/sessions/\(name.urlPathEncoded)/retranslate",
             method: "POST",
             body: Optional<EmptyBody>.none
+        )
+    }
+
+    public func translatePhrase(
+        sourceLanguage: String,
+        targetLanguage: String,
+        sourceText: String,
+        audience: String
+    ) async throws -> TranslatePhraseResult {
+        struct Tone: Encodable {
+            let audience: String
+            let rule: String
+        }
+        struct RewriteContext: Encodable {
+            let tone: Tone
+        }
+        struct Body: Encodable {
+            let source_language: String
+            let target_language: String
+            let source_text: String
+            let draft_translation: String
+            let rewrite_context: RewriteContext
+        }
+        return try await request(
+            "/context/translate",
+            method: "POST",
+            body: Body(
+                source_language: sourceLanguage,
+                target_language: targetLanguage,
+                source_text: sourceText,
+                draft_translation: "",
+                rewrite_context: RewriteContext(
+                    tone: Tone(
+                        audience: audience,
+                        rule: "Keep it concise, natural, and faithful to the typed phrase."
+                    )
+                )
+            )
         )
     }
 
@@ -136,10 +184,6 @@ private struct DeleteSessionResponse: Decodable {
     var deleted: Bool
 }
 
-private struct ImproveResponse: Decodable {
-    var session: String?
-}
-
 private struct ServerError: Decodable {
     var detail: String?
 }
@@ -163,10 +207,17 @@ private extension URL {
         guard var components = URLComponents(url: self, resolvingAgainstBaseURL: false) else {
             return self
         }
-        if path.hasPrefix("/") {
-            components.path = path
+        let parts = path.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false)
+        let cleanPath = String(parts.first ?? "")
+        if cleanPath.hasPrefix("/") {
+            components.path = cleanPath
         } else {
-            components.path = "/" + path
+            components.path = "/" + cleanPath
+        }
+        if parts.count > 1 {
+            components.percentEncodedQuery = String(parts[1])
+        } else {
+            components.percentEncodedQuery = nil
         }
         return components.url ?? self.appendingPathComponent(path)
     }

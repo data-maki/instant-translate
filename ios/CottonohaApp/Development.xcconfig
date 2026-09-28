@@ -1,0 +1,3 @@
+// Optional, machine-local Debug endpoint. Release keeps the default configuration.
+COTTONOHA_API_BASE_URL =
+#include? "Local.xcconfig"

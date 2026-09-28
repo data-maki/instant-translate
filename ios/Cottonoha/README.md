@@ -11,6 +11,9 @@ Native SwiftUI client for the existing cottonoha backend.
 - Native microphone capture to the existing `/ws/transcribe` backend websocket.
 - Realtime mode toggle and bottom controls for speaker overdub and microphone capture.
 - Backend-driven OpenAI realtime audio playback from `openai_realtime_audio` websocket events.
+- Paginated history, typed translations, saved-transcript improvement, and enhanced-text/romaji controls.
+- Autospeak starts at the latest box and queues English-to-local-language replies. Translations into English stay silent; opening history does not replay it.
+- Stop waits for the final saved transcript and title before closing the connection.
 
 ## First-Run Onboarding
 
@@ -35,13 +38,15 @@ For an iPhone on the same Wi-Fi network, `localhost` points to the phone, not yo
 uvicorn app.main:app --app-dir backend --host 0.0.0.0 --port 8000 --reload
 ```
 
-Then configure the app like this:
+Configure the Debug endpoint from the repository root without changing tracked project files:
 
-```swift
-AppConfiguration(
-    apiBaseURL: URL(string: "http://192.168.1.25:8000")!
-)
+```bash
+COTTONOHA_API_BASE_URL=http://192.168.1.25:8000 ios/open-cottonoha-xcode.sh
 ```
+
+The launcher uses the selected Xcode installation (`xcode-select -p`), or `XCODE_APP` when supplied. It writes the URL to ignored `ios/CottonohaApp/Local.xcconfig`, which is included only by Debug builds. Use `--configure-only` to save the URL without opening Xcode. Delete `Local.xcconfig` to restore the localhost default. For the simulator backend on port 8001, use `http://localhost:8001`.
+
+The app also accepts `COTTONOHA_API_BASE_URL` in its Xcode scheme's launch environment, taking precedence over the bundled Debug setting. Native authentication is unchanged: this internal client requires the backend's existing `ALLOW_AUTHLESS_INTERNAL=1` mode.
 
 The FastAPI CORS config affects browser requests, not native URLSession requests.
 
@@ -67,30 +72,16 @@ In Xcode:
 
 The project already links this local Swift package and includes the microphone/local-network development `Info.plist` keys.
 
-## Codex iOS Debugging Setup
+## Xcode Toolchain
 
-The Codex Build iOS Apps plugin is enabled in `~/.codex/config.toml` as:
-
-```toml
-[plugins."build-ios-apps@openai-plugins"]
-enabled = true
-```
-
-It points at the official OpenAI plugins checkout under `~/.codex/.tmp/plugins` and wires `xcodebuildmcp` with these workflows:
-
-```json
-{
-  "DEVELOPER_DIR": "/Users/jcarbs/Downloads/Xcode.app/Contents/Developer",
-  "XCODEBUILDMCP_ENABLED_WORKFLOWS": "simulator,ui-automation,debugging,logging"
-}
-```
-
-That covers simulator discovery, build/run, UI snapshots, screenshots, logs, and LLDB attachment. It still requires a full Xcode install. This machine currently has Xcode at `/Users/jcarbs/Downloads/Xcode.app`, so the plugin is pinned to that developer directory. If Xcode moves to `/Applications`, update the plugin MCP env or switch the global developer directory:
+Use the currently selected full Xcode installation:
 
 ```bash
-sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+xcode-select -p
 xcodebuild -version
 ```
+
+If the selected directory points to Command Line Tools, select your installed Xcode before building. The launcher accepts `XCODE_APP` when you need a different installation.
 
 The app uses native `Logger`/`OSLog` with subsystem `app.cottonoha.ios` and these categories:
 
@@ -243,12 +234,19 @@ Then in Xcode:
 
 ## Command-Line Verification
 
-This package can be syntax-checked without Xcode:
+With the selected Xcode toolchain, run the package regression tests:
 
 ```bash
 cd ios/Cottonoha
-swift package resolve
-swift build
+swift test
 ```
 
-Xcode is not installed in this environment, so simulator/device compilation needs to happen in a full Xcode install.
+From the repository root, compile the complete simulator app without signing:
+
+```bash
+xcodebuild -project ios/CottonohaApp/CottonohaApp.xcodeproj \
+  -scheme Cottonoha -configuration Debug -sdk iphonesimulator \
+  -destination 'generic/platform=iOS Simulator' CODE_SIGNING_ALLOWED=NO build
+```
+
+The automated tests cover history query parameters, backend response decoding, stale history responses, and speech queue ordering/cancellation. Live microphone, acoustic echo cancellation, and paid provider audio still require a device check.

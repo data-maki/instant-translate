@@ -15,6 +15,7 @@
 		A10000000000000000000002 /* CottonohaIOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CottonohaIOSApp.swift; sourceTree = "<group>"; };
 		A10000000000000000000005 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A10000000000000000000006 /* Cottonoha.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Cottonoha.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A10000000000000000000019 /* Development.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Development.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -32,6 +33,7 @@
 		A10000000000000000000008 = {
 			isa = PBXGroup;
 			children = (
+				A10000000000000000000019 /* Development.xcconfig */,
 				A10000000000000000000009 /* CottonohaApp */,
 				A1000000000000000000000A /* Products */,
 			);
@@ -251,6 +253,7 @@
 		};
 		A10000000000000000000014 /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = A10000000000000000000019 /* Development.xcconfig */;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;

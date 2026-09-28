@@ -27,6 +27,7 @@ let package = Package(
             swiftSettings: [
                 .enableExperimentalFeature("StrictConcurrency")
             ]
-        )
+        ),
+        .testTarget(name: "CottonohaCoreTests", dependencies: ["CottonohaCore"])
     ]
 )
