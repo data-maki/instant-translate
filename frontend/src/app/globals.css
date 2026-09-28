@@ -20,6 +20,8 @@
   --color-text-muted: #625b51;
   --color-text-on-action: #ffffff;
   --color-text-on-speaker: #ffffff;
+  --language-saturation: 36%;
+  --language-lightness: 29%;
 
   --color-border-subtle: rgba(95, 77, 55, 0.2);
   --color-border-muted: rgba(44, 48, 39, 0.12);
@@ -90,6 +92,8 @@
 
 .theme-dark {
   color-scheme: dark;
+  --language-saturation: 42%;
+  --language-lightness: 76%;
 
   --color-bg-canvas: #11100e;
   --color-bg-gradient-start: #171512;
@@ -3720,8 +3724,7 @@ button.sidebarProfileChip {
 }
 
 .speechBubbleBody {
-  display: grid;
-  gap: 8px;
+  line-height: 1.65;
 }
 
 .phrasePairLine {
@@ -3729,20 +3732,20 @@ button.sidebarProfileChip {
 }
 
 .speechBubbleBody .ttsSpeakerButton {
-  flex: 0 0 auto;
-  align-self: center;
+  width: 10px;
+  height: 10px;
+  font-size: 9px;
+  border: 0;
+  background: transparent;
+  color: var(--language-color);
 }
 
 .phraseTextButton {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  width: 100%;
-  min-height: 40px;
-  padding: 5px 6px;
+  /* An inline button role lets a long utterance wrap as text, not one box. */
+  display: inline;
+  padding: 2px 0;
   border: 0;
-  border-radius: 6px;
+  border-radius: 4px;
   background: transparent;
   color: var(--foreground);
   font: inherit;
@@ -3750,14 +3753,16 @@ button.sidebarProfileChip {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
   font-size: 0.95rem;
-  line-height: 1.35;
+  line-height: inherit;
   cursor: pointer;
   user-select: text;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
-.phraseTextButton:hover:not(:disabled),
+.phraseTextButton:hover:not([aria-disabled="true"]),
 .phraseTextButton:focus-visible {
-  background: color-mix(in srgb, var(--speaker-color) 10%, transparent);
+  background: color-mix(in srgb, var(--language-color) 10%, transparent);
 }
 
 .phraseTextButton:focus-visible {
@@ -3765,20 +3770,33 @@ button.sidebarProfileChip {
   outline-offset: 2px;
 }
 
-.phraseTextButton:disabled {
+.phraseTextButton[aria-disabled="true"] {
   opacity: 1;
   cursor: default;
 }
 
-.phraseTextContent {
-  display: grid;
+.phraseLanguageLabel {
+  display: inline-flex;
+  align-items: center;
   gap: 3px;
-  min-width: 0;
+  color: var(--language-color);
+  background: color-mix(in srgb, var(--language-color) 10%, transparent);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-size: 0.65rem;
+  font-weight: 750;
+  letter-spacing: 0.04em;
+  vertical-align: 1px;
+  line-height: 1.2;
+}
+
+.phraseTranslationSeparator {
+  color: var(--muted);
 }
 
 .inlineRomaji {
-  color: var(--muted);
-  font-size: 0.82rem;
+  color: var(--language-color);
+  font-size: 0.85em;
   font-weight: 400;
 }
 

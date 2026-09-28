@@ -1678,7 +1678,7 @@ export function TranslatorApp({
                     rightLabel={activeLeftLanguage === "ja" ? "romaji" : "latin"}
                     rightSelected={showRomaji}
                     onChange={setShowRomaji}
-                    title="Script shows the original text with a Latin reading below it. Latin shows just the reading. Tap either to hear the original pronunciation."
+                    title="Script shows the original text with a Latin reading in brackets. Latin shows just the reading. Tap either to hear the original pronunciation."
                   />
                 ) : null}
                 <DualLabelToggle

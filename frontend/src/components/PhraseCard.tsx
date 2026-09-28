@@ -2,6 +2,7 @@
 
 import type { CSSProperties } from "react";
 import type { Language, Phrase } from "@/lib/api";
+import { languageHue } from "@/lib/language-colors";
 import {
   adaptationKey,
   buildPhraseDisplayPairs,
@@ -213,11 +214,14 @@ function SpeechBubble({
               state={pair.sourceSpeech ? ttsStatus[pair.sourceSpeech.key] : undefined}
             />
             {pair.translation ? (
-              <SpeechText
-                code={translationCode} label={translationLabel} text={pair.translation} reading={pair.translationRomaji}
-                speech={pair.translationSpeech} onSpeak={onSpeak} translation
-                state={pair.translationSpeech ? ttsStatus[pair.translationSpeech.key] : undefined}
-              />
+              <>
+                <span aria-hidden="true" className="phraseTranslationSeparator"> · </span>
+                <SpeechText
+                  code={translationCode} label={translationLabel} text={pair.translation} reading={pair.translationRomaji}
+                  speech={pair.translationSpeech} onSpeak={onSpeak} translation
+                  state={pair.translationSpeech ? ttsStatus[pair.translationSpeech.key] : undefined}
+                />
+              </>
             ) : null}
           </div>
         ))}
@@ -247,28 +251,44 @@ function SpeechText({
   state?: TtsPlaybackState;
 }) {
   const action = state === "error" ? "Retry" : state === "playing" ? "Replay" : "Play";
+  const hue = languageHue(code);
+  const style = { "--language-color": hue === undefined
+    ? "var(--muted)"
+    : `hsl(${hue} var(--language-saturation) var(--language-lightness))`
+  } as CSSProperties;
   return (
-    <button
+    <span
       aria-label={`${action} ${label}: ${text}`}
       aria-busy={state === "loading"}
+      aria-disabled={!speech}
       className={`phraseTextButton ${translation ? "translation" : "original"} ${state || ""}`}
-      disabled={!speech}
       dir="auto"
       lang={speech && text !== speech.text && supportsRomanization(code) ? `${code}-Latn` : code}
       onClick={(event) => {
         event.stopPropagation();
         if (speech) onSpeak(speech.key, speech.text, speech.language);
       }}
+      onKeyDown={(event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (speech && !event.repeat) onSpeak(speech.key, speech.text, speech.language);
+      }}
+      role="button"
+      tabIndex={speech ? 0 : undefined}
       title={`${action} ${label}`}
-      type="button"
+      style={style}
     >
+      <span aria-hidden="true" className="phraseLanguageLabel">
+        {code.toUpperCase()}
+        {speech ? <span className={`ttsSpeakerButton ${state || ""}`}>
+          {state === "loading" ? "..." : state === "playing" ? "🔊" : state === "error" ? "⚠︎" : "🔈"}
+        </span> : null}
+      </span>{"\u00a0"}
       <span className="phraseTextContent">
         <span className={translation ? "bubbleTranslation" : "bubbleOriginal"}>{text || "..."}</span>
-        {reading ? <span className="inlineRomaji" lang={`${code}-Latn`} title="Latin reading. Tap to hear the pronunciation.">{reading}</span> : null}
+        {reading ? <> <span className="inlineRomaji" lang={`${code}-Latn`} title="Latin reading. Tap to hear the pronunciation.">[{reading}]</span></> : null}
       </span>
-      {speech ? <span aria-hidden="true" className={`ttsSpeakerButton ${state || ""}`}>
-        {state === "loading" ? "..." : state === "playing" ? "🔊" : state === "error" ? "⚠︎" : "🔈"}
-      </span> : null}
-    </button>
+    </span>
   );
 }

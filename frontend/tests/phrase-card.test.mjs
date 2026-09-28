@@ -14,6 +14,7 @@ function loadSource(path) {
   new Function("require", "exports", code)((name) => {
     if (name === "@/lib/phrase-text") return require("../.test-build/lib/phrase-text.js");
     if (name === "@/lib/speaker") return loadSource("src/lib/speaker.ts");
+    if (name === "@/lib/language-colors") return loadSource("src/lib/language-colors.ts");
     return require(name);
   }, exports);
   return exports;
@@ -33,7 +34,7 @@ function render(phrases, { showRomaji = false, adaptations = {}, leftLanguageSel
     editingSpeaker: null, leftLanguageSelection, speakerDrafts: {}, showEnhancedEnglish: false,
     showRomaji, ttsStatus: {}, onEditSpeaker: () => {}, onSpeak: (...args) => played.push(args),
     languageMap: new Map([["bg", { name: "Bulgarian", flag: "🇧🇬" }], ["en", { name: "English", flag: "🇬🇧" }]]) });
-  const buttons = elements(tree).filter(node => node.type === "button" && node.props.className?.includes("phraseTextButton"));
+  const buttons = elements(tree).filter(node => node.props.role === "button" && node.props.className?.includes("phraseTextButton"));
   return { tree, buttons, played };
 }
 
@@ -44,7 +45,7 @@ const click = button => button.props.onClick({ stopPropagation() {} });
 test("each old sentence can be replayed in either language even beside an unfinished turn", () => {
   const h = render([old, { ...old, id: "new", is_final: false, texts: { en: "New words" } }]);
   assert.equal(h.buttons.length, 3);
-  assert.ok(h.buttons.every(button => !button.props.disabled));
+  assert.ok(h.buttons.every(button => !button.props["aria-disabled"]));
   click(h.buttons[0]);
   click(h.buttons[1]);
   click(h.buttons[0]);
@@ -66,9 +67,14 @@ test("the Latin text is clickable but playback still receives Cyrillic", () => {
   const h = render([old], { showRomaji: true });
   assert.ok(h.buttons[1].props["aria-label"].includes("Kade e garata?"));
   assert.equal(h.buttons[1].props.lang, "bg-Latn");
-  assert.equal(h.buttons[1].props.type, "button"); // Native Enter/Space behavior.
+  assert.equal(h.buttons[1].props.tabIndex, 0);
   click(h.buttons[1]);
-  assert.deepEqual(h.played, [["tts:old:bg", "Къде е гарата?", "bg"]]);
+  for (const key of ["Enter", " "]) {
+    let prevented = false;
+    h.buttons[1].props.onKeyDown({ key, preventDefault() { prevented = true; }, stopPropagation() {} });
+    assert.ok(prevented); // Space plays the phrase rather than scrolling the page.
+  }
+  assert.deepEqual(h.played, Array(3).fill(["tts:old:bg", "Къде е гарата?", "bg"]));
 });
 
 test("a saved source language keeps its label and playback language when the selection differs", () => {

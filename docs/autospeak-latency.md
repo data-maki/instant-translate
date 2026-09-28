@@ -56,13 +56,18 @@ or its speaker icon plays that sentence in its own language. Another click stops
 the current playback and plays the requested text. Manual playback does not use
 autospeak's English-only direction, latest-box cursor, or finality restrictions.
 
-Bulgarian text includes a Latin reading below the Cyrillic by default; the
+Bulgarian text includes a Latin reading in brackets beside the Cyrillic by default; the
 Script/Latin toggle can show only the reading. Readings are generated locally
 from the displayed text, so old sessions and fallback translations work without
 another translation request. TTS always receives the original Cyrillic. The
 mapping follows the [Bulgarian Transliteration Act, Articles 4–6](https://www.mrrb.bg/en/transliteration-act/),
 including word-final `ия → ia` and `България → Bulgaria`. It is a reading aid;
 it does not mark stress or represent all pronunciation differences.
+
+Source, reading, and translation flow inline and wrap at the available width.
+Small language-code labels use stable, theme-aware colors: related languages
+share close shades (for example, Catalan and Spanish). Labels identify languages
+without relying on color alone; speaker colors remain on the avatars/borders.
 
 Regression checks: `pnpm --filter cottonoha-web test:phrase-text` and
 `pnpm --filter cottonoha-web test:autospeak`.
