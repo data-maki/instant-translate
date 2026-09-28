@@ -33,11 +33,13 @@ class ProviderFanout:
         *,
         enable_openai_realtime: bool = False,
         enable_deepgram: bool = True,
+        openai_output_language: str = "ja",
         on_openai_final_segment: OpenAISegmentSink | None = None,
     ):
         self.send_event = send_event
         self.enable_openai_realtime = enable_openai_realtime
         self.enable_deepgram = enable_deepgram
+        self.openai_output_language = openai_output_language
         self.on_openai_final_segment = on_openai_final_segment
         self.queues: list[asyncio.Queue[bytes | None]] = []
         self.tasks: list[asyncio.Task[None]] = []
@@ -52,6 +54,7 @@ class ProviderFanout:
             self._add_stream(run_openai_translation_bridge(
                 openai_key,
                 self.send_event,
+                output_language=self.openai_output_language,
                 on_final_segment=self.on_openai_final_segment,
             ))
 
@@ -132,6 +135,7 @@ def run_openai_translation_bridge(
     api_key: str,
     send_event: SendEvent,
     *,
+    output_language: str = "ja",
     on_final_segment: OpenAISegmentSink | None = None,
 ):
     async def bridge(audio_queue: asyncio.Queue[bytes | None]) -> None:
@@ -149,7 +153,7 @@ def run_openai_translation_bridge(
                                 "transcription": {"model": "gpt-realtime-whisper"},
                                 "noise_reduction": {"type": "near_field"},
                             },
-                            "output": {"language": "ja"},
+                            "output": {"language": output_language},
                         }
                     },
                 }))

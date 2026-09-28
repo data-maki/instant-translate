@@ -343,6 +343,7 @@ async def run_openai_realtime_overdub_bridge(
         safe_send_event,
         enable_openai_realtime=True,
         enable_deepgram=False,
+        openai_output_language=session.target_language or target_language,
         on_openai_final_segment=capture_openai_segment,
     )
     providers.start()
