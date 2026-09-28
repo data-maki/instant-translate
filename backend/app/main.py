@@ -1022,6 +1022,10 @@ def rediarize_session(
     audio_path = _latest_audio_path(session_dir)
     if audio_path is None:
         raise HTTPException(status_code=404, detail="No saved MP3/WAV audio found for this session.")
+    if state.get("segment_count", 0) > 1:
+        # Each resumed stream restarts its timestamps at zero. Applying the
+        # latest audio to the cumulative transcript would relabel older turns.
+        raise HTTPException(status_code=409, detail="Speaker cleanup currently supports a single recording. This conversation contains resumed recordings.")
 
     source_languages = state.get("source_languages") or DEFAULT_SOURCE_LANGUAGES
     target_language = state.get("target_language") or DEFAULT_TARGET_LANGUAGE
@@ -1030,7 +1034,7 @@ def rediarize_session(
             api_key=api_key,
             audio_path=str(audio_path),
             source_languages=source_languages,
-            target_language=target_language,
+            target_language="",  # Only acoustic speaker labels are needed.
             context=state.get("context") or DEFAULT_CONTEXT,
         )
     except AsyncDiarizeError as exc:
@@ -1269,6 +1273,7 @@ def _apply_async_speakers(realtime_tokens: list[dict[str, Any]], async_tokens: l
         token
         for token in async_tokens
         if token.get("speaker") is not None
+        and token.get("translation_status") != "translation"
         and isinstance(token.get("start_ms"), (int, float))
         and isinstance(token.get("end_ms"), (int, float))
         and token.get("end_ms") > token.get("start_ms")
@@ -1277,14 +1282,37 @@ def _apply_async_speakers(realtime_tokens: list[dict[str, Any]], async_tokens: l
         return realtime_tokens
 
     remapped = []
+    source_spans: dict[tuple[str, str], tuple[float, float]] = {}
+    last_source_key = None
+    translating = False
     for token in realtime_tokens:
         updated = dict(token)
         start = updated.get("start_ms")
         end = updated.get("end_ms")
-        if isinstance(start, (int, float)) and isinstance(end, (int, float)) and end > start:
+        is_translation = token.get("translation_status") == "translation"
+        if is_translation:
+            # Translation tokens have no audio timestamps. Associate them with
+            # their source utterance, using the original stream's IDs/language
+            # before remapping. Keep spans by key for delayed translations.
+            key = (str(token.get("speaker")), str(token.get("source_language")))
+            span = source_spans.get(key)
+            if span:
+                updated["speaker"] = _best_speaker_for_window(*span, speaker_segments)
+            translating = True
+        elif isinstance(start, (int, float)) and isinstance(end, (int, float)) and end > start:
+            key = (str(token.get("speaker")), str(token.get("language")))
+            if key != last_source_key or translating:
+                source_spans[key] = (float(start), float(end))
+            else:
+                previous = source_spans[key]
+                source_spans[key] = (min(previous[0], float(start)), max(previous[1], float(end)))
+            last_source_key = key
+            translating = False
             speaker = _best_speaker_for_window(float(start), float(end), speaker_segments)
             if speaker is not None:
                 updated["speaker"] = speaker
+        elif str(token.get("text", "")).lower() == "<end>":
+            last_source_key = None
         remapped.append(updated)
     return remapped
 

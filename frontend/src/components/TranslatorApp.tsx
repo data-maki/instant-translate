@@ -411,7 +411,7 @@ export function TranslatorApp({
       tokens: tokenCount
     };
   }, [activeDurationSeconds, phrases, tokenCount]);
-  const hasFinishedSession = Boolean(activeSession && savedPath && !isLive);
+  const hasFinishedSession = Boolean(activeSession && phrases.length && status === "stopped");
   const sessionGroups = useMemo(() => groupSessions(sessions), [sessions]);
   const visiblePhrases = useMemo(() => {
     if (transcriptLatencyMode === "fast") {
@@ -832,6 +832,7 @@ export function TranslatorApp({
   }
 
   async function start(forceRealtime = openAIRealtimeEnabled) {
+    if (postProcessing) return;
     cancelAutoImprove();
     const resumeSessionName = activeSessionRef.current;
     const isResuming = Boolean(resumeSessionName);
@@ -1528,13 +1529,37 @@ export function TranslatorApp({
     realtimeSessionsRef.current[direction] = null;
   }
 
-  // Silent, fire-and-forget improve. Runs in the background after a chat stops.
-  // Backend only overwrites artifacts on success; failures leave the chat untouched.
-  // No UI state is mutated — the polished transcript appears the next time the session is loaded.
+  async function improveSpeakers(sessionName = activeSessionRef.current) {
+    if (!sessionName || rediarizing) return;
+    cancelAutoImprove();
+    setRediarizing(true);
+    setRediarizeStatus("Reviewing voices in the saved audio…");
+    try {
+      const result = await rediarizeSession(sessionName, userId);
+      // Speaker corrections must survive a later translation-service failure.
+      delete sessionDetailCacheRef.current[sessionName];
+      if (activeSessionRef.current === sessionName && wsRef.current?.readyState !== WebSocket.OPEN) {
+        setPhrasesAndFollow(result.phrases, { requestAdaptations: false });
+        setSpeakerDrafts({});
+        setEditingSpeaker(null);
+        setSpeakerEditorDraft(null);
+        const expected = Number(expectedSpeakerCount);
+        const countNote = expected > result.speaker_count ? ` You expected ${expectedSpeakerCount === "6" ? "6+" : expected}.` : "";
+        setRediarizeStatus(`Audio reviewed: ${result.speaker_count} speakers detected.${countNote} Review the labels below.`);
+      }
+    } catch (err: unknown) {
+      if (activeSessionRef.current === sessionName) {
+        setRediarizeStatus(err instanceof Error ? err.message : "Could not improve speakers.");
+      }
+    } finally {
+      setRediarizing(false);
+    }
+  }
+
   async function runAutoImproveSilently(sessionName: string) {
     if (!sessionName) return;
+    await improveSpeakers(sessionName);
     try {
-      await rediarizeSession(sessionName, userId);
       await retranslateSession(sessionName, userId);
       // Drop any cached detail so the next load fetches the freshly polished version.
       delete sessionDetailCacheRef.current[sessionName];
@@ -1736,7 +1761,7 @@ export function TranslatorApp({
           {showOnboarding ? (
             <ConversationOnboarding
               audiencePreset={audiencePreset}
-              canStart={canStart && hasLanguagePair}
+              canStart={canStart && hasLanguagePair && !postProcessing}
               context={context}
               disabled={isLive}
               error={error}
@@ -1753,6 +1778,19 @@ export function TranslatorApp({
           ) : (
             <>
               {error ? <FeedbackBanner message={error} /> : null}
+              {hasFinishedSession ? (
+                <div className="speakerReviewBar">
+                  <button
+                    className="secondaryButton compactButton"
+                    disabled={postProcessing}
+                    onClick={() => void improveSpeakers()}
+                    type="button"
+                  >
+                    {rediarizing ? "Reviewing voices…" : "Improve speakers"}
+                  </button>
+                  <span role="status">{rediarizeStatus || "Use the full recording to review speaker labels."}</span>
+                </div>
+              ) : null}
               <div className="feed" onScroll={handleFeedScroll} ref={feedRef}>
                 {phrases.length === 0 ? (
                   <LiveCanvas
@@ -1800,7 +1838,7 @@ export function TranslatorApp({
                 />
               ) : null}
               <ControlsStrip
-                canStart={canStart && hasLanguagePair}
+                canStart={canStart && hasLanguagePair && !postProcessing}
                 durationLabel={formatTranscriptStats(transcriptStats)}
                 englishTargetLabel={languageShortLabel(englishOverdubTargetLanguage(sourceALanguages, sourceB), languageMap)}
                 englishToTargetOverdubEnabled={englishToTargetOverdubEnabled}
@@ -2052,8 +2090,8 @@ function ConversationOnboarding({
                 </button>
               ))}
             </div>
-            <div className="chatHeroSpeakers" role="group" aria-label="Expected speakers">
-              <span className="chatHeroSpeakersLabel">Speakers</span>
+            <div className="chatHeroSpeakers" role="group" aria-label="Expected speakers" title="Used to check the result. Voice detection is automatic; this does not force a speaker count.">
+              <span className="chatHeroSpeakersLabel">Expected speakers</span>
               {SPEAKER_COUNT_OPTIONS.map((count) => (
                 <button
                   aria-pressed={expectedSpeakerCount === count}
