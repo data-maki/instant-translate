@@ -27,7 +27,9 @@ public final class TranslatorViewModel: ObservableObject {
     @Published public private(set) var tokenCount = 0
     @Published public private(set) var status: Status = .idle
     @Published public private(set) var errorMessage = ""
-    @Published public private(set) var speakingPhraseId: String?
+    enum SpeechState { case loading, playing, error }
+    @Published private(set) var speechKey: String?
+    @Published private(set) var speechState: SpeechState?
     @Published public private(set) var katakanaSuggestions: [NameKatakanaOption] = []
     @Published public private(set) var katakanaSuggestStatus = ""
     @Published public private(set) var mapsImportStatus = ""
@@ -37,7 +39,7 @@ public final class TranslatorViewModel: ObservableObject {
     @Published public private(set) var improvingTranscript = false
     @Published public private(set) var improveStatus = ""
     @Published public var typedText = ""
-    @Published public var showEnhancedText = true
+    @Published public var showEnhancedText = false
     @Published public var showRomaji = false
     @Published public var autoSpeakEnabled = false {
         didSet { speechQueue.setEnabled(autoSpeakEnabled && !realtimeEnabled, phrases: phrases, language: autoSpeakLanguage) }
@@ -70,13 +72,20 @@ public final class TranslatorViewModel: ObservableObject {
     private var autoImproveTask: Task<Void, Never>?
     private var loadGeneration = UUID()
     private var connectionGeneration = UUID()
+    private var translationTasks: [String: Task<Void, Never>] = [:]
+    private var requestedTranslations: Set<String> = []
     private lazy var speechQueue = SpeechQueue(
-        play: { [weak self] item in await self?.playSpeech(item) },
+        play: { [weak self] item, audio in try await self?.playSpeech(item, prepared: audio) },
         stop: { [weak self] in
             self?.ttsPlayer.stop()
-            self?.speakingPhraseId = nil
+            self?.speechKey = nil
+            self?.speechState = nil
         },
-        text: { [weak self] phrase, language in self?.bestText(for: phrase, language: language) ?? "" }
+        text: { [weak self] phrase, language in self?.bestText(for: phrase, language: language) ?? "" },
+        prepare: { [weak self] item in
+            guard let self else { throw CancellationError() }
+            return try await prepareSpeech(item)
+        }
     )
 
     private var autoSpeakLanguage: String {
@@ -149,6 +158,7 @@ public final class TranslatorViewModel: ObservableObject {
     public func loadSession(_ session: SessionSummary) async {
         guard !isLive, status != .stopping, !improvingTranscript else { return }
         cancelAutoImprove()
+        cancelTranslations()
         resetSpeechQueue()
         connectionGeneration = UUID()
         let request = UUID()
@@ -278,51 +288,106 @@ public final class TranslatorViewModel: ObservableObject {
         }
     }
 
-    /// Build the same adaptation key the desktop uses so the polished text
-    /// from `/sessions/{name}` lines up with each phrase bubble.
+    var paragraphs: [TranscriptParagraph] { TranscriptPresentation.paragraphs(phrases) }
+
     public func adaptation(for phrase: Phrase, targetLang: String) -> PhraseAdaptation? {
-        let key = "\(phrase.id):\(targetLang)"
-        return adaptations[key]
+        TranscriptPresentation.adaptation(phrase, language: targetLang, adaptations: adaptations)
     }
 
-    /// Text we'd actually want to *speak* — prefer the AI-enhanced rewrite
-    /// when available, fall back to whatever the live pipeline produced.
     public func bestText(for phrase: Phrase, language: String) -> String {
-        if !showEnhancedText {
-            return phrase.texts[language] ?? ""
-        }
-        if language == phrase.sourceLanguage,
-           let adaptation = adaptation(for: phrase, targetLang: targetLanguage),
-           !adaptation.sourceRewrite.isEmpty {
-            return adaptation.sourceRewrite
-        }
-        if let adaptation = adaptation(for: phrase, targetLang: language),
-           !adaptation.targetTranslation.isEmpty {
-            return adaptation.targetTranslation
-        }
-        return phrase.texts[language] ?? ""
+        TranscriptPresentation.text(phrase, language: language,
+            target: phrase.sourceLanguage == targetLanguage ? primarySourceLanguage : targetLanguage,
+            enhanced: showEnhancedText, adaptations: adaptations)
     }
 
-    public func speakPhrase(_ phrase: Phrase, language: String) async {
-        let text = bestText(for: phrase, language: language).trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
-        await speechQueue.speakNow(SpeechItem(id: phrase.id, text: text, language: language))
+    func paragraphText(_ phrases: [Phrase], language: String) -> String {
+        phrases.map { bestText(for: $0, language: language).trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }.joined(separator: " ")
     }
 
-    private func playSpeech(_ item: SpeechItem) async {
-        speakingPhraseId = item.id
-        defer { if !Task.isCancelled { speakingPhraseId = nil } }
-        let voiceId = (item.language == "ja" && !profile.ttsVoiceId.isEmpty) ? profile.ttsVoiceId : nil
+    func speakParagraph(_ phrases: [Phrase], language: String) async {
+        let text = paragraphText(phrases, language: language)
+        guard !text.isEmpty, let first = phrases.first else { return }
+        await speechQueue.speakNow(SpeechItem(id: "paragraph:\(first.id)", text: text, language: language))
+    }
+
+    func playbackState(_ phrases: [Phrase], language: String) -> SpeechState? {
+        guard let speechKey else { return nil }
+        return speechKey == TranscriptPresentation.speechID(phrases, language: language)
+            || phrases.contains { speechKey == "\($0.id):\(language)" } ? speechState : nil
+    }
+
+    private func prepareSpeech(_ item: SpeechItem) async throws -> SpeechAudio {
+        let voice = item.language == "ja" && !profile.ttsVoiceId.isEmpty ? profile.ttsVoiceId : nil
+        return try await api.streamSpeech(text: item.text, language: item.language, voice: voice)
+    }
+
+    private func playSpeech(_ item: SpeechItem, prepared: SpeechAudio?) async throws {
+        let key = "\(item.id):\(item.language)"
+        speechKey = key
+        speechState = .loading
         do {
-            let result = try await api.generateTts(
-                text: item.text,
-                targetLanguage: item.language,
-                voiceId: voiceId
-            )
-            try Task.checkCancellation()
-            try await ttsPlayer.play(base64: result.audioBase64)
+            let audio: SpeechAudio
+            if let prepared { audio = prepared } else { audio = try await prepareSpeech(item) }
+            if Task.isCancelled { audio.cancel(); throw CancellationError() }
+            try await ttsPlayer.play(audio) { [weak self] in
+                if self?.speechKey == key { self?.speechState = .playing }
+            }
+            if !Task.isCancelled, speechKey == key { speechKey = nil; speechState = nil }
         } catch {
-            if !Task.isCancelled { errorMessage = friendlyError(error) }
+            if !Task.isCancelled, speechKey == key {
+                speechState = .error
+                errorMessage = friendlyError(error)
+            }
+            throw error
+        }
+    }
+
+    private func cancelTranslations() {
+        translationTasks.values.forEach { $0.cancel() }
+        translationTasks = [:]
+        requestedTranslations = []
+    }
+
+    // Reuse Soniox text and saved fallbacks; request a missing language once.
+    func applyTranscript(_ next: [Phrase], tokenCount: Int) {
+        phrases = next
+        self.tokenCount = tokenCount
+        lastBackendEvent = next.isEmpty ? "Waiting for speech" : "Transcript received"
+        speechQueue.update(phrases)
+        completeMissingTranslations()
+    }
+
+    func completeMissingTranslations() {
+        let connection = connectionGeneration
+        let sessionName = activeSessionName
+        for phrase in phrases where phrase.isFinal {
+            let source = TranscriptPresentation.sourceLanguage(phrase, preferred: primarySourceLanguage)
+            let target = source == targetLanguage ? primarySourceLanguage : targetLanguage
+            let original = phrase.texts[source] ?? ""
+            guard source != target, !original.isEmpty, bestText(for: phrase, language: target).isEmpty else { continue }
+            let key = TranscriptPresentation.adaptationKey(phrase, language: target)
+            guard requestedTranslations.insert(key).inserted else { continue }
+            translationTasks[key] = Task { [weak self] in
+                guard let self else { return }
+                defer { if connectionGeneration == connection { translationTasks[key] = nil } }
+                do {
+                    let result = try await api.translatePhrase(sourceLanguage: source, targetLanguage: target,
+                        sourceText: original, audience: AudiencePreset.find(audiencePresetID).label)
+                    try Task.checkCancellation()
+                    guard connectionGeneration == connection,
+                          phrases.contains(where: { $0.id == phrase.id && $0.texts[source] == original }),
+                          !result.targetTranslation.isEmpty else { return }
+                    let value = PhraseAdaptation(targetTranslation: result.targetTranslation)
+                    adaptations[key] = value
+                    speechQueue.update(phrases)
+                    if !sessionName.isEmpty, activeSessionName == sessionName {
+                        try await api.saveAdaptation(sessionName, key: key, adaptation: value)
+                    }
+                } catch {
+                    if !Task.isCancelled, connectionGeneration == connection { errorMessage = friendlyError(error) }
+                }
+            }
         }
     }
 
@@ -395,6 +460,7 @@ public final class TranslatorViewModel: ObservableObject {
     /// "New chat" button.
     public func newChat() {
         guard !isLive, status != .stopping, !improvingTranscript else { return }
+        cancelTranslations()
         loadGeneration = UUID()
         connectionGeneration = UUID()
         loadingSession = false
@@ -436,12 +502,14 @@ public final class TranslatorViewModel: ObservableObject {
     }
 
     public func saveProfile() {
+        resetSpeechQueue()
         profileStore.save(profile)
     }
 
     public func start() async {
         guard !isLive, status != .stopping, !improvingTranscript, !loadingSession else { return }
         loadGeneration = UUID()
+        cancelTranslations()
         let connection = UUID()
         connectionGeneration = connection
         cancelAutoImprove()
@@ -602,10 +670,7 @@ public final class TranslatorViewModel: ObservableObject {
             tokenCount = session.tokenCount
             lastBackendEvent = "Session ready"
         case .transcript(let nextPhrases, let finalTokenCount):
-            phrases = nextPhrases
-            tokenCount = finalTokenCount
-            lastBackendEvent = nextPhrases.isEmpty ? "Waiting for speech" : "Transcript received"
-            speechQueue.update(phrases)
+            applyTranscript(nextPhrases, tokenCount: finalTokenCount)
         case .providerUpdate(let update):
             appendProviderBubble(update)
             lastBackendEvent = update.kind == "error" ? "Provider error" : "Realtime update"

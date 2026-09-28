@@ -19,7 +19,11 @@ public actor WebSocketTranscriptionClient {
 
     public init(url: URL, session: URLSession = .shared) {
         self.url = url
-        self.makeSocket = { session.webSocketTask(with: url) }
+        self.makeSocket = {
+            var request = URLRequest(url: url)
+            request.setValue("OpenAI File Downloader, XaiImageApiFetch/1.0", forHTTPHeaderField: "User-Agent")
+            return session.webSocketTask(with: request)
+        }
     }
 
     init(url: URL, socket: any TranscriptionSocket) {

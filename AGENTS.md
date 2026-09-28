@@ -15,6 +15,7 @@
 - Verify speech output in an isolated browser with microphone access absent: both streamed PCM and the older-backend MP3 fallback must produce nonzero audio at an unpaused output sink under normal autoplay restrictions. Successful requests, animations, and mocked playback handles alone do not prove audible playback.
 - Keep transcript text compact: romanization belongs inline in brackets, with natural wrapping rather than separate source/reading/translation rows. Use readable, stable language labels with related shades for related languages; keep speaker identity colors separate. Check both themes and mobile widths without changing user tabs.
 - Keep paragraph playback controls small and borderless at the bubble's top right, sharing space with the first text line rather than adding a toolbar row. Keep both language actions visible on touch screens and reachable by keyboard.
+- iOS phone testing intentionally uses the existing authless internal backend mode; do not add login as a prerequisite. Verify native speech ordering, cancellation, original-language payloads, streaming/cache behavior, and a simulator build. Distinguish build/install success from physical microphone, speaker, and Bluetooth verification.
 - Do not overengineer; start with the simplest working solution.
 - Do not add abstractions, edge-case handling, or additional security work unless requested or required for production-level functionality or correctness.
 - Push back when a request is overly complex, risky, or wasteful.

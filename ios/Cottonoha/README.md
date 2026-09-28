@@ -14,6 +14,10 @@ Native SwiftUI client for the existing cottonoha backend.
 - Paginated history, typed translations, saved-transcript improvement, and enhanced-text/romaji controls.
 - Autospeak starts at the latest box and queues English-to-local-language replies. Translations into English stay silent; opening history does not replay it.
 - Stop waits for the final saved transcript and title before closing the connection.
+- Consecutive phrases from the same speaker/language form a paragraph. Two compact language buttons play all available text in either language, including history and drafts; long paragraphs play in ordered chunks.
+- Bulgarian readings appear inline in brackets. The Latin-only setting changes display text, never the Cyrillic speech payload. Related languages use related colors.
+- Speech uses `/tts/stream` (24 kHz PCM), with MP3 fallback for an older backend. Autospeak prepares one reply ahead, including a draft stable for 150 ms, and waits for final text before playing. Completed PCM is cached for five minutes, bounded to 32 clips / 8 MiB and keyed by text, language, and voice.
+- Existing translations are reused directly. A missing translation is requested once and saved; late responses cannot replace newer live translations or revive a previous chat.
 
 ## First-Run Onboarding
 
@@ -250,3 +254,32 @@ xcodebuild -project ios/CottonohaApp/CottonohaApp.xcodeproj \
 ```
 
 The automated tests cover history query parameters, backend response decoding, stale history responses, and speech queue ordering/cancellation. Live microphone, acoustic echo cancellation, and paid provider audio still require a device check.
+
+### Paragraph playback UI check
+
+The UI test uses synthetic English/Bulgarian history and a quiet PCM test tone. It checks full-paragraph payloads, both language buttons, playback completion, cache reuse, and reopening history without contacting a paid provider.
+
+Start the isolated fixture server, then run the test against an available simulator:
+
+```bash
+python ios/tests/fixture_server.py
+# In another terminal; replace the destination with an available simulator.
+xcodebuild -project ios/CottonohaApp/CottonohaApp.xcodeproj \
+  -scheme Cottonoha -configuration Debug \
+  -destination 'platform=iOS Simulator,name=iPhone 17' \
+  CODE_SIGNING_ALLOWED=NO test
+```
+
+The fixture server binds only `127.0.0.1:18766`; it does not write real sessions.
+
+### Physical iPhone check
+
+Use a separate backend port while web recording is active. Start this repo's backend with `ALLOW_AUTHLESS_INTERNAL=1`, bind to `0.0.0.0`, and configure the Debug URL to the Mac's LAN IP. Keep the phone and Mac on the same network. Internal mobile history belongs to `internal-mobile`; it is separate from signed-in web history by default.
+
+After installing the signed Debug build on an unlocked phone:
+
+1. Allow Local Network and Microphone access. Select Bulgarian and English.
+2. Record alternating speakers, enable autospeak, and confirm only English → Bulgarian replies play, in order.
+3. Tap either paragraph language control. Confirm the full paragraph plays, replay works, and switching language interrupts it.
+4. Stop, reopen the generated topic in History, then start New chat and confirm no old conversation reappears.
+5. Check built-in speaker and Bluetooth routes, microphone echo while speech plays, and stopping/interruption. Simulator success does not establish physical acoustic echo cancellation or Bluetooth behavior.

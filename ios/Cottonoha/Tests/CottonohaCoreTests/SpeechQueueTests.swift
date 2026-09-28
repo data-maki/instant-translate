@@ -7,7 +7,7 @@ private final class Playback {
     var items: [SpeechItem] = []
     var completions: [CheckedContinuation<Void, Never>] = []
     var stops = 0
-    lazy var queue = SpeechQueue(play: { [weak self] item in
+    lazy var queue = SpeechQueue(play: { [weak self] item, _ in
         guard let self else { return }
         items.append(item)
         await withCheckedContinuation { completions.append($0) }
@@ -111,4 +111,53 @@ private func phrase(_ id: String, source: String? = "en", final: Bool = true, tr
         #expect(h.items.map(\.id) == ["manual", "new"])
         h.finish(); await manual.value
     }
+    @Test func longManualParagraphFinishesBeforeFutureAutospeak() async {
+        let h = Playback()
+        h.queue.reset([], language: "bg", enabled: true)
+        let text = String(repeating: "Цяло изречение. ", count: 220).trimmingCharacters(in: .whitespaces)
+        let manual = Task { await h.queue.speakNow(SpeechItem(id: "paragraph", text: text, language: "bg")) }
+        await h.settle()
+        h.queue.update([phrase("next")])
+        let chunks = TranscriptPresentation.speechChunks(text)
+        for _ in chunks { h.finish(); await h.settle() }
+        #expect(h.items.filter { $0.id == "paragraph" }.map(\.text).joined(separator: " ") == text)
+        #expect(h.items.last?.id == "next")
+        h.finish(); await manual.value
+    }
+
+    @Test func draftPreparationNeverPlaysBeforeFinalityAndCorrectionCancelsIt() async throws {
+        var prepared: [SpeechItem] = [], played: [SpeechItem] = []
+        let queue = SpeechQueue(play: { item, audio in
+            #expect(audio != nil)
+            played.append(item)
+        }, stop: {}, prepare: { item in
+            prepared.append(item)
+            return .complete(Data([0, 0]), format: .pcm(sampleRate: 24_000))
+        })
+        queue.setEnabled(true, phrases: [phrase("draft", final: false)], language: "bg")
+        try await Task.sleep(for: .milliseconds(200))
+        #expect(prepared.count == 1)
+        #expect(played.isEmpty)
+        var corrected = phrase("draft", final: false)
+        corrected.texts["bg"] = "Поправка"
+        queue.update([corrected])
+        corrected.isFinal = true
+        queue.update([corrected])
+        for _ in 0..<30 { await Task.yield() }
+        #expect(played.map(\.text) == ["Поправка"])
+        #expect(prepared.map(\.text) == ["Здравей", "Поправка"])
+    }
+
+    @Test func cancellingDraftDuringDebounceAvoidsSynthesis() async throws {
+        var prepared = 0
+        let queue = SpeechQueue(play: { _, _ in }, stop: {}, prepare: { _ in
+            prepared += 1
+            return .complete(Data([0, 0]), format: .pcm(sampleRate: 24_000))
+        })
+        queue.setEnabled(true, phrases: [phrase("draft", final: false)], language: "bg")
+        queue.setEnabled(false, phrases: [], language: "bg")
+        try await Task.sleep(for: .milliseconds(180))
+        #expect(prepared == 0)
+    }
+
 }

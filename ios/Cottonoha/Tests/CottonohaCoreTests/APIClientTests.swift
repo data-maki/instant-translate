@@ -100,4 +100,56 @@ private final class StubProtocol: URLProtocol, @unchecked Sendable {
         #expect(model.context == "Dinner")
         #expect(model.status == .stopped)
     }
+    @Test func existingTranslationsMakeNoExtraRequestsInEitherDisplayMode() async {
+        StubProtocol.state.prepare("{}")
+        let model = TranslatorViewModel(configuration: config, session: session())
+        model.sourceLanguages = ["bg"]
+        let phrase = Phrase(id: "one", speaker: nil, speakerLabel: "You", sourceLanguage: "en",
+            texts: ["en": "Hello", "bg": "Здравей"], romajiJa: nil, isFinal: true, time: nil)
+        for enhanced in [true, false] {
+            model.showEnhancedText = enhanced
+            model.applyTranscript([phrase], tokenCount: 1)
+            for _ in 0..<20 { await Task.yield() }
+            #expect(model.bestText(for: phrase, language: "bg") == "Здравей")
+        }
+        #expect(StubProtocol.state.received.isEmpty)
+    }
+
+    @Test func missingTranslationIsRequestedOnceAndCannotOverrideLiveText() async throws {
+        StubProtocol.state.prepare(#"{"target_translation":"Fallback"}"#, delayed: true)
+        let model = TranslatorViewModel(configuration: config, session: session())
+        model.sourceLanguages = ["bg"]
+        var phrase = Phrase(id: "one", speaker: nil, speakerLabel: "You", sourceLanguage: "en",
+            texts: ["en": "Hello"], romajiJa: nil, isFinal: true, time: nil)
+        for _ in 0..<3 { model.applyTranscript([phrase], tokenCount: 1) }
+        for _ in 0..<100 {
+            if !StubProtocol.state.received.isEmpty { break }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        phrase.texts["bg"] = "Live translation"
+        model.applyTranscript([phrase], tokenCount: 1)
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(StubProtocol.state.received.count == 1)
+        #expect(StubProtocol.state.received.first?.url?.path == "/context/translate")
+        #expect(model.bestText(for: model.phrases[0], language: "bg") == "Live translation")
+    }
+
+    @Test func newChatDiscardsPendingFallbackTranslation() async throws {
+        StubProtocol.state.prepare(#"{"target_translation":"Old fallback"}"#, delayed: true)
+        let model = TranslatorViewModel(configuration: config, session: session())
+        model.sourceLanguages = ["bg"]
+        let phrase = Phrase(id: "old", speaker: nil, speakerLabel: "You", sourceLanguage: "en",
+            texts: ["en": "Old"], romajiJa: nil, isFinal: true, time: nil)
+        model.applyTranscript([phrase], tokenCount: 1)
+        for _ in 0..<100 {
+            if !StubProtocol.state.received.isEmpty { break }
+            try await Task.sleep(for: .milliseconds(1))
+        }
+        model.newChat()
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(model.phrases.isEmpty)
+        #expect(model.adaptations.isEmpty)
+        #expect(model.errorMessage.isEmpty)
+    }
+
 }

@@ -7,11 +7,14 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        B10000000000000000000001 = {isa = PBXBuildFile; fileRef = B10000000000000000000002; };
 		A10000000000000000000001 /* CottonohaIOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A10000000000000000000002 /* CottonohaIOSApp.swift */; };
 		A10000000000000000000003 /* CottonohaCore in Frameworks */ = {isa = PBXBuildFile; productRef = A10000000000000000000004 /* CottonohaCore */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+        B10000000000000000000002 = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CottonohaUITests/PlaybackTests.swift; sourceTree = "<group>"; };
+        B10000000000000000000003 = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = CottonohaUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		A10000000000000000000002 /* CottonohaIOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CottonohaIOSApp.swift; sourceTree = "<group>"; };
 		A10000000000000000000005 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A10000000000000000000006 /* Cottonoha.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Cottonoha.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -34,6 +37,7 @@
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000019 /* Development.xcconfig */,
+                B10000000000000000000002,
 				A10000000000000000000009 /* CottonohaApp */,
 				A1000000000000000000000A /* Products */,
 			);
@@ -52,6 +56,7 @@
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000006 /* Cottonoha.app */,
+                B10000000000000000000003,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -59,6 +64,17 @@
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
+        B10000000000000000000004 = {
+            isa = PBXNativeTarget;
+            buildConfigurationList = B10000000000000000000005;
+            buildPhases = (B10000000000000000000006,);
+            buildRules = ();
+            dependencies = (B10000000000000000000009,);
+            name = CottonohaUITests;
+            productName = CottonohaUITests;
+            productReference = B10000000000000000000003;
+            productType = "com.apple.product-type.bundle.ui-testing";
+        };
 		A1000000000000000000000B /* Cottonoha */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = A1000000000000000000000C /* Build configuration list for PBXNativeTarget "Cottonoha" */;
@@ -81,6 +97,12 @@
 		};
 /* End PBXNativeTarget section */
 
+/* Begin PBXContainerItemProxy section */
+        B10000000000000000000008 = {isa = PBXContainerItemProxy; containerPortal = A1000000000000000000000F; proxyType = 1; remoteGlobalIDString = A1000000000000000000000B; remoteInfo = Cottonoha; };
+/* End PBXContainerItemProxy section */
+/* Begin PBXTargetDependency section */
+        B10000000000000000000009 = {isa = PBXTargetDependency; target = A1000000000000000000000B; targetProxy = B10000000000000000000008; };
+/* End PBXTargetDependency section */
 /* Begin PBXProject section */
 		A1000000000000000000000F /* Project object */ = {
 			isa = PBXProject;
@@ -110,6 +132,7 @@
 			projectDirPath = "";
 			projectRoot = "";
 			targets = (
+                B10000000000000000000004,
 				A1000000000000000000000B /* Cottonoha */,
 			);
 		};
@@ -126,6 +149,7 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
+        B10000000000000000000006 = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (B10000000000000000000001,); runOnlyForDeploymentPostprocessing = 0; };
 		A1000000000000000000000D /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -137,6 +161,13 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
+        B10000000000000000000007 = {isa = XCBuildConfiguration; buildSettings = {
+            CODE_SIGN_STYLE = Automatic; DEVELOPMENT_TEAM = X95828B7PG;
+            GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+            PRODUCT_BUNDLE_IDENTIFIER = app.cottonoha.ios.uitests;
+            PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 6.0;
+            TARGETED_DEVICE_FAMILY = "1,2"; TEST_TARGET_NAME = Cottonoha;
+        }; name = Debug; };
 		A10000000000000000000012 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -307,6 +338,7 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+        B10000000000000000000005 = {isa = XCConfigurationList; buildConfigurations = (B10000000000000000000007,); defaultConfigurationIsVisible = 0; defaultConfigurationName = Debug; };
 		A1000000000000000000000C /* Build configuration list for PBXNativeTarget "Cottonoha" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (
