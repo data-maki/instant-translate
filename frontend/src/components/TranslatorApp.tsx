@@ -1295,16 +1295,14 @@ export function TranslatorApp({
     setSessionsOpen(false);
   }
 
-  function toggleSourceLanguage(code: string) {
-    if (isLive || code === sourceB) {
+  function changeSourceLanguages(codes: string[]) {
+    if (isLive) {
       return;
     }
-    setSourceALanguages((current) => {
-      const next = current.includes(code)
-        ? current.filter((language) => language !== code)
-        : [...current, code];
-      return next.length > 0 ? next : current;
-    });
+    const next = codes.filter((code) => code !== sourceB);
+    if (next.length > 0) {
+      setSourceALanguages(next);
+    }
   }
 
   function changeTargetLanguage(code: string) {
@@ -1668,7 +1666,7 @@ export function TranslatorApp({
                     disabled={isLive}
                     languageMap={languageMap}
                     languages={orderedLanguages}
-                    onSourceToggle={toggleSourceLanguage}
+                    onSourceChange={changeSourceLanguages}
                     onTargetChange={changeTargetLanguage}
                     sourceLanguages={sourceALanguages}
                     targetLanguage={sourceB}
@@ -2666,7 +2664,7 @@ function LanguagePicker({
   disabled,
   languageMap,
   languages,
-  onSourceToggle,
+  onSourceChange,
   onTargetChange,
   sourceLanguages,
   targetLanguage
@@ -2674,7 +2672,7 @@ function LanguagePicker({
   disabled: boolean;
   languageMap: Map<string, Language>;
   languages: Language[];
-  onSourceToggle: (code: string) => void;
+  onSourceChange: (codes: string[]) => void;
   onTargetChange: (code: string) => void;
   sourceLanguages: string[];
   targetLanguage: string;
@@ -2746,13 +2744,7 @@ function LanguagePicker({
 
   function applySheet() {
     if (openMenu === "source") {
-      for (const language of languages) {
-        const selected = sourceDraft.includes(language.code);
-        const current = sourceLanguages.includes(language.code);
-        if (selected !== current && language.code !== targetLanguage) {
-          onSourceToggle(language.code);
-        }
-      }
+      onSourceChange(sourceDraft);
     }
     if (openMenu === "target" && targetDraft !== targetLanguage) {
       onTargetChange(targetDraft);
