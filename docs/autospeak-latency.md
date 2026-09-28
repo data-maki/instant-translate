@@ -30,6 +30,10 @@ Repeated text + same user/language/voice → memory cache → WebRTC audio
   waiting for a complete compressed file or decoding it in the browser.
 - Playback remains on the WebRTC echo-reference path. PCM chunks are scheduled in
   order with 40 ms of initial buffering. A late network chunk can still cause a gap.
+- Starting or reusing playback explicitly awaits the final audio element's
+  `play()` call. A connected WebRTC track can carry speech while browser autoplay
+  leaves its output paused; received samples alone are not proof of playback.
+  A rejected output start reaches the existing retry/error state.
 - The queue prepares at most one future eligible reply. A draft translation must
   remain unchanged for 150 ms before synthesis starts; final text skips that wait.
   It reuses the request only if the confirmed text matches exactly. Corrections,
