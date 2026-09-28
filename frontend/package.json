@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint .",
     "test:phrase-text": "node -e \"require('node:fs').rmSync('.test-build', { recursive: true, force: true })\" && tsc -p tsconfig.test.json && node .test-build/lib/phrase-text.test.js",
+    "test:session-navigation": "node --test tests/session-navigation.test.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

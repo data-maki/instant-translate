@@ -381,7 +381,7 @@ export function TranslatorApp({
   const ttsSpeakLanguage = englishOverdubTargetLanguage(sourceALanguages, sourceB);
 
   const sourceA = sourceALanguages[0] || (sourceB === "en" ? "ja" : "en");
-  const canStart = status === "idle" || status === "stopped" || status === "error";
+  const canStart = !loadingSession && (status === "idle" || status === "stopped" || status === "error");
   const isLive = status === "requesting microphone" || status === "connecting" || status === "listening";
   const postProcessing = rediarizing || translating || improvingAll;
   const hasLanguagePair = sourceALanguages.length > 0 && !sourceALanguages.includes(sourceB);
@@ -833,6 +833,10 @@ export function TranslatorApp({
 
   async function start(forceRealtime = openAIRealtimeEnabled) {
     if (postProcessing) return;
+    // A pending history response belongs to the view that requested it.
+    // Replacing the cache object invalidates that request without losing cache entries.
+    sessionDetailCacheRef.current = { ...sessionDetailCacheRef.current };
+    setLoadingSession("");
     cancelAutoImprove();
     const resumeSessionName = activeSessionRef.current;
     const isResuming = Boolean(resumeSessionName);
@@ -1183,11 +1187,15 @@ export function TranslatorApp({
     if (isLive || status === "stopping") {
       return;
     }
+    cleanup();
+    cancelAutoImprove();
+    const requestCache = sessionDetailCacheRef.current;
     setError("");
     setLoadingSession(name);
     try {
-      const detail = sessionDetailCacheRef.current[name] || await fetchSessionDetail(name, userId);
-      sessionDetailCacheRef.current[name] = detail;
+      const detail = requestCache[name] || await fetchSessionDetail(name, userId);
+      if (sessionDetailCacheRef.current !== requestCache) return;
+      requestCache[name] = detail;
       if (!detail.session) {
         throw new Error("Session not found.");
       }
@@ -1220,9 +1228,11 @@ export function TranslatorApp({
       setStatus("stopped");
       setSessionsOpen(false);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : "Could not load session.");
+      if (sessionDetailCacheRef.current === requestCache) {
+        setError(err instanceof Error ? err.message : "Could not load session.");
+      }
     } finally {
-      setLoadingSession("");
+      if (sessionDetailCacheRef.current === requestCache) setLoadingSession("");
     }
   }
 
@@ -1236,7 +1246,7 @@ export function TranslatorApp({
       setSessions((current) =>
         current.map((session) => (session.name === result.name ? { ...session, title: result.title } : session))
       );
-      if (activeSession === result.name) {
+      if (activeSessionRef.current === result.name) {
         setActiveSessionTitle(result.title);
       }
       const cached = sessionDetailCacheRef.current[result.name];
@@ -1257,7 +1267,7 @@ export function TranslatorApp({
       const result = await deleteSavedSession(name, userId);
       delete sessionDetailCacheRef.current[result.name];
       setSessions((current) => current.filter((session) => session.name !== result.name));
-      if (activeSession === result.name) {
+      if (activeSessionRef.current === result.name) {
         newSession();
       }
     } catch (err: unknown) {
@@ -1278,6 +1288,7 @@ export function TranslatorApp({
       return;
     }
     cleanup();
+    cancelAutoImprove();
     setSavedPath("");
     setActiveSessionSynced("");
     setActiveSessionTitle("");
@@ -1408,7 +1419,6 @@ export function TranslatorApp({
       return;
     }
     if (message.type === "saved") {
-      setActiveSessionSynced(message.session);
       const savedTitle = String(message.title || "").trim();
       delete sessionDetailCacheRef.current[message.session];
       setSessions((current) => [{
@@ -1421,6 +1431,8 @@ export function TranslatorApp({
         target_language: sourceB
       }, ...current.filter((session) => session.name !== message.session)]);
       void refreshSessions();
+      // Saving updates history; it must never select a conversation.
+      if (activeSessionRef.current !== message.session) return;
       if (savedTitle && savedTitle.toLowerCase() !== "new chat") {
         setActiveSessionTitle(savedTitle);
       } else if (!activeSessionTitle.trim()) {
@@ -1624,6 +1636,9 @@ export function TranslatorApp({
   }
 
   function cleanup() {
+    // Invalidate history loads on New chat, navigation, and socket teardown.
+    sessionDetailCacheRef.current = { ...sessionDetailCacheRef.current };
+    setLoadingSession("");
     stopDurationTimer();
     if (stopFallbackTimerRef.current) {
       clearTimeout(stopFallbackTimerRef.current);
