@@ -65,8 +65,8 @@ export function PhraseCard({
   const color = speakerColor(speakerKey(phrase.speaker));
   const style = { "--speaker-color": color } as CSSProperties;
   const speakerId = speakerKey(phrase.speaker);
-  const speakerLabel = speakerDrafts[speakerId]?.label.trim() || phrase.speaker_label || fallbackSpeakerLabel(speakerId);
-  const speakerInitials = speakerDrafts[speakerId]?.initials?.trim() || initialsFromSpeakerName(speakerLabel, speakerId);
+  const speakerLabel = speakerId ? speakerDrafts[speakerId]?.label.trim() || phrase.speaker_label || fallbackSpeakerLabel(speakerId) : "Unknown";
+  const speakerInitials = speakerId ? speakerDrafts[speakerId]?.initials?.trim() || initialsFromSpeakerName(speakerLabel, speakerId) : "?";
   const isEditingSpeaker = Boolean(speakerId && editingSpeaker === speakerId);
   const sourceLang = phraseSourceLanguage(phrase, activeLeftLanguage);
   const isTargetSource = sourceLang === targetLanguage;
@@ -156,7 +156,7 @@ function BubbleWithSpeaker({
 }) {
   return (
     <div className={`bubbleWithSpeaker ${editingSpeaker ? "editingSpeaker" : ""}`}>
-      <SpeakerTag initials={speakerInitials} onOpen={() => onEditSpeaker(speakerId, speakerLabel)} />
+      <SpeakerTag initials={speakerInitials} known={Boolean(speakerId)} onOpen={() => onEditSpeaker(speakerId, speakerLabel)} />
       <div className="speechBubbleHighlight">
         <SpeechBubble
           code={code}
@@ -174,9 +174,9 @@ function BubbleWithSpeaker({
   );
 }
 
-function SpeakerTag({ initials, onOpen }: { initials: string; onOpen: () => void }) {
+function SpeakerTag({ initials, known, onOpen }: { initials: string; known: boolean; onOpen: () => void }) {
   return (
-    <button aria-label={`Edit speaker ${initials}`} className="speakerTag" onClick={onOpen} title={`Edit speaker ${initials}`} type="button">
+    <button aria-label={known ? `Edit speaker ${initials}` : "Voice not identified"} className="speakerTag" disabled={!known} onClick={onOpen} title={known ? `Edit speaker ${initials}` : "Voice not identified"} type="button">
       <span className="speakerTagInitials">{initials}</span>
     </button>
   );

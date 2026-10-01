@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "test:phrase-text": "node -e \"require('node:fs').rmSync('.test-build', { recursive: true, force: true })\" && tsc -p tsconfig.test.json && node .test-build/lib/phrase-text.test.js && node --test .test-build/lib/romanization.test.js tests/phrase-card.test.mjs",
+    "test:phrase-text": "node -e \"require('node:fs').rmSync('.test-build', { recursive: true, force: true })\" && tsc -p tsconfig.test.json && node .test-build/lib/phrase-text.test.js && node --test .test-build/lib/romanization.test.js .test-build/lib/speaker.test.js tests/phrase-card.test.mjs",
     "test:session-navigation": "node --test tests/session-navigation.test.mjs",
     "test:autospeak": "tsc -p tsconfig.test.json && node --test .test-build/lib/autospeak.test.js .test-build/lib/tts-*.test.js tests/autospeak-handlers.test.mjs",
     "typecheck": "tsc --noEmit"

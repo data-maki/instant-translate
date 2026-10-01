@@ -21,6 +21,21 @@ function loadSource(path) {
 }
 const { PhraseCard } = loadSource("src/components/PhraseCard.tsx");
 
+test("saved transcript duration respects explicit milliseconds, including early turns", () => {
+  const source = ts.createSourceFile("TranslatorApp.tsx", readFileSync("src/components/TranslatorApp.tsx", "utf8"), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const helpers = source.statements.filter(node => ts.isFunctionDeclaration(node)
+    && ["durationFromPhrases", "phraseSeconds"].includes(node.name?.text));
+  assert.equal(helpers.length, 2);
+  const code = ts.transpileModule(helpers.map(node => node.getText(source)).join("\n"), {
+    compilerOptions: { target: ts.ScriptTarget.ES2020 }
+  }).outputText;
+  const duration = new Function("speakerTurnSeconds", `${code}; return durationFromPhrases;`)(loadSource("src/lib/speaker.ts").speakerTurnSeconds);
+  assert.equal(duration([{time: 8000, time_ms: 8000}, {time: 15000, time_ms: 15000}]), 15);
+  assert.equal(duration([{time: 8000, time_ms: 8000}]), 8);
+  assert.equal(duration([{time: "3"}]), 3);
+  assert.equal(duration([]), null);
+});
+
 function elements(node) {
   if (!node || typeof node !== "object") return [];
   if (Array.isArray(node)) return node.flatMap(elements);
@@ -104,6 +119,14 @@ test("different paragraphs have independent payloads, including the same speaker
     [["tts:paragraph:reply:bg", "Там", "bg"]],
     [["tts:paragraph:later:en", "Thank you", "en"]]
   ]);
+});
+
+test("unknown voices cannot be renamed together as if they were one person", () => {
+  const h = render([{ ...old, speaker: null, speaker_label: "Unknown" }]);
+  const tag = elements(h.tree).find(node => node.props.className === "speakerTag");
+  assert.equal(tag.props.disabled, true);
+  assert.equal(tag.props["aria-label"], "Voice not identified");
+  assert.ok(h.buttons.every(button => !button.props.disabled));
 });
 
 test("paragraph and autospeak activity animate the correct language control", () => {

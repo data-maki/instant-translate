@@ -9,8 +9,12 @@ private actor Frames {
     var errors: [String] = []
     var buffered: [URLSessionWebSocketTask.Message] = []
     var pending: CheckedContinuation<URLSessionWebSocketTask.Message, Error>?
+    var stopWaiter: CheckedContinuation<Void, Never>?
 
-    func markStopped() { stopped = true }
+    func markStopped() { stopped = true; stopWaiter?.resume(); stopWaiter = nil }
+    func waitForStop() async {
+        if !stopped { await withCheckedContinuation { stopWaiter = $0 } }
+    }
     func next() async throws -> URLSessionWebSocketTask.Message {
         if cancelled { throw CancellationError() }
         if !buffered.isEmpty { return buffered.removeFirst() }
@@ -56,10 +60,7 @@ private final class FakeSocket: TranscriptionSocket, Sendable {
         onEvent: { await frames.record($0) }, onError: { await frames.recordError($0) }
     )
     let stopping = Task { await client.stop() }
-    for _ in 0..<100 {
-        if await frames.stopped { break }
-        await Task.yield()
-    }
+    await frames.waitForStop()
     #expect(await frames.stopped)
     #expect(await !frames.cancelled)
     await frames.emit(#"{"type":"saved","session":"meeting","path":"/saved","title":"Dinner plans","phrases":[],"token_count":3}"#)

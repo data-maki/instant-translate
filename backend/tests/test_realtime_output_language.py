@@ -16,6 +16,9 @@ from app.soniox import run_openai_realtime_overdub_bridge
 def test_realtime_provider_receives_session_output_language(tmp_path, monkeypatch, requested, stored, expected):
     monkeypatch.setattr("app.shared.REPO_ROOT", tmp_path)
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    async def summarize(_session):
+        return {"title": "Unattributed speech", "summary": "Test caption transport"}
+    monkeypatch.setattr("app.soniox.summarize_session_for_save", summarize)
     if stored:
         make_session("realtime-language", ["en", stored], stored).save_state()
     sent = []
@@ -31,6 +34,10 @@ def test_realtime_provider_receives_session_output_language(tmp_path, monkeypatc
             sent.append(json.loads(payload))
 
         async def __aiter__(self):
+            yield json.dumps({"type": "session.input_transcript.delta", "delta": "Hello there."})
+            yield json.dumps({"type": "session.input_transcript.done"})
+            yield json.dumps({"type": "session.output_transcript.delta", "delta": "Здравей."})
+            yield json.dumps({"type": "session.output_transcript.done"})
             yield json.dumps({"type": "session.closed"})
 
     monkeypatch.setattr("app.provider_streams.websockets.connect", lambda *_args, **_kwargs: Socket())
@@ -48,3 +55,6 @@ def test_realtime_provider_receives_session_output_language(tmp_path, monkeypatc
     ))
     update = next(event for event in sent if event["type"] == "session.update")
     assert update["session"]["audio"]["output"]["language"] == expected
+    state = json.loads((tmp_path / "output/realtime-language/session_state.json").read_text())
+    assert len(state["tokens"]) == 2
+    assert all(token["speaker"] is None for token in state["tokens"])

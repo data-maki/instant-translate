@@ -5,6 +5,7 @@ public actor CottonohaAPIClient {
     private let session: URLSession
     private let decoder: JSONDecoder
     private let encoder: JSONEncoder
+    private var speechCache = SpeechCache()
 
     public init(
         configuration: AppConfiguration,
@@ -122,6 +123,69 @@ public actor CottonohaAPIClient {
         )
     }
 
+    func saveAdaptation(_ sessionName: String, key: String, adaptation: PhraseAdaptation) async throws {
+        struct Body: Encodable { let key: String; let adaptation: PhraseAdaptation }
+        struct Result: Decodable { let key: String }
+        let _: Result = try await request("/sessions/\(sessionName.urlPathEncoded)/adaptations", method: "POST",
+                                         body: Body(key: key, adaptation: adaptation))
+    }
+
+    func streamSpeech(text: String, language: String, voice: String?) async throws -> SpeechAudio {
+        try Task.checkCancellation()
+        let key = SpeechCache.Key(text: text, language: language, voice: voice)
+        if let cached = speechCache.get(key) { return cached }
+        var request = URLRequest(url: configuration.apiBaseURL.appendingPath("/tts/stream"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("application/octet-stream", forHTTPHeaderField: "Accept")
+        request.setValue("OpenAI File Downloader, XaiImageApiFetch/1.0", forHTTPHeaderField: "User-Agent")
+        var body = ["text": text, "target_language": language]
+        if let voice { body["voice_id"] = voice }
+        request.httpBody = try encoder.encode(body)
+        let (bytes, response) = try await session.bytes(for: request)
+        guard let http = response as? HTTPURLResponse else { bytes.task.cancel(); throw APIError.invalidResponse }
+        if http.statusCode == 404 || http.statusCode == 405 {
+            bytes.task.cancel()
+            let result = try await generateTts(text: text, targetLanguage: language, voiceId: voice)
+            try Task.checkCancellation()
+            guard let data = Data(base64Encoded: result.audioBase64) else { throw APIError.invalidResponse }
+            return .complete(data, format: .mp3)
+        }
+        guard (200..<300).contains(http.statusCode),
+              http.mimeType == "application/octet-stream" else {
+            bytes.task.cancel()
+            throw APIError.server("Speech request failed (\(http.statusCode)).")
+        }
+        let sampleRate = Double(http.value(forHTTPHeaderField: "X-Audio-Sample-Rate") ?? "24000") ?? 24_000
+        let (stream, continuation) = AsyncThrowingStream<Data, Error>.makeStream()
+        let producer = Task {
+            do {
+                var chunk = Data(), complete = Data()
+                var cacheable = true
+                for try await byte in bytes {
+                    try Task.checkCancellation()
+                    chunk.append(byte)
+                    if chunk.count == 960 {
+                        continuation.yield(chunk)
+                        if cacheable {
+                            complete.append(chunk)
+                            if complete.count > 4 * 1024 * 1024 { cacheable = false; complete = Data() }
+                        }
+                        chunk = Data()
+                    }
+                }
+                try Task.checkCancellation()
+                guard chunk.count.isMultiple(of: 2) else { throw APIError.server("Incomplete speech audio.") }
+                if !chunk.isEmpty { continuation.yield(chunk); if cacheable { complete.append(chunk) } }
+                if cacheable { self.speechCache.insert(complete, sampleRate: sampleRate, key: key) }
+                continuation.finish()
+            } catch { continuation.finish(throwing: error) }
+        }
+        continuation.onTermination = { _ in producer.cancel(); bytes.task.cancel() }
+        return SpeechAudio(format: .pcm(sampleRate: sampleRate), chunks: stream,
+                           cancel: { producer.cancel(); bytes.task.cancel() })
+    }
+
     public func fetchNameKatakanaOptions(firstName: String, lastName: String) async throws -> NameKatakanaResult {
         struct Body: Encodable {
             let first_name: String
@@ -157,6 +221,7 @@ public actor CottonohaAPIClient {
         var request = URLRequest(url: configuration.apiBaseURL.appendingPath(path))
         request.httpMethod = method
         request.setValue("application/json", forHTTPHeaderField: "Accept")
+        request.setValue("OpenAI File Downloader, XaiImageApiFetch/1.0", forHTTPHeaderField: "User-Agent")
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try encoder.encode(body)

@@ -33,7 +33,8 @@ def test_final_tokens_after_stop_are_saved_listed_and_reopened(tmp_path, monkeyp
     monkeypatch.setenv("SONIOX_API_KEY", "test-key")
     monkeypatch.setenv("GROQ_API_KEY", "test-key")
     monkeypatch.setattr("app.sessions.generate_session_summary", lambda *_: {"title": "Catching Up with a Friend", "summary": "Two friends exchange greetings."})
-    monkeypatch.setattr("app.soniox.ProviderFanout.start", lambda _: None)
+    fanouts = []
+    monkeypatch.setattr("app.soniox.ProviderFanout.start", lambda provider: fanouts.append(provider))
 
     class Soniox:
         async def __aenter__(self):
@@ -90,10 +91,12 @@ def test_final_tokens_after_stop_are_saved_listed_and_reopened(tmp_path, monkeyp
         assert detail["session"]["tokens"] == transcript_tokens_with_resolved_language()
         assert detail["session"]["title"] == "Catching Up with a Friend"
         assert detail["phrases"][0]["texts"] == {"bg": "Здравей, как си?", "en": "Hello, how are you?"}
+        assert fanouts[0].openai_output_language == "en"
 
 
 def transcript_tokens_with_resolved_language():
-    return [{**token, "resolved_language": token["language"]} for token in transcript_tokens()]
+    return [{**token, "resolved_language": token["language"], "provider_speaker": token["speaker"],
+             "recording_segment": 1} for token in transcript_tokens()]
 
 
 def test_failed_ai_title_still_has_title_after_reload(tmp_path, monkeypatch):

@@ -15,12 +15,15 @@ public final class AudioRecorder: @unchecked Sendable {
 
         #if os(iOS)
         let session = AVAudioSession.sharedInstance()
-        try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetooth])
+        try session.setCategory(.playAndRecord, mode: .voiceChat, options: [.defaultToSpeaker, .allowBluetoothHFP])
         try session.setPreferredSampleRate(16_000)
         try session.setActive(true)
         #endif
 
         let input = engine.inputNode
+        #if os(iOS)
+        try input.setVoiceProcessingEnabled(true)
+        #endif
         let inputFormat = input.outputFormat(forBus: 0)
         guard let targetFormat = AVAudioFormat(
             commonFormat: .pcmFormatInt16,
@@ -35,9 +38,9 @@ public final class AudioRecorder: @unchecked Sendable {
 
         input.removeTap(onBus: 0)
         input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
-            self?.queue.async {
-                self?.convertAndEmit(buffer)
-            }
+            guard let self else { return }
+            // The tap owns this buffer only for the callback's duration.
+            self.queue.sync { self.convertAndEmit(buffer) }
         }
         engine.prepare()
         try engine.start()
@@ -47,12 +50,12 @@ public final class AudioRecorder: @unchecked Sendable {
     public func stop() {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
-        converter = nil
-        outputFormat = nil
-        onChunk = nil
-        #if os(iOS)
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
-        #endif
+        queue.sync {
+            converter = nil
+            outputFormat = nil
+            onChunk = nil
+        }
+        // TTS may still be playing after Stop; do not deactivate its shared session.
         AppLog.audio.info("Audio recorder stopped")
     }
 

@@ -1,0 +1,3 @@
+# Optional local second opinion after a recording; never in the live audio path.
+sherpa-onnx==1.13.8
+numpy>=2.0,<3

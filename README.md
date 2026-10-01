@@ -12,7 +12,19 @@ Create local env first:
 cp .env.example .env
 ```
 
-Set `SONIOX_API_KEY` in `.env`. Set a DeepL Pro `DEEPL_API_KEY` plus `GROQ_API_KEY` for live phrase upgrades: Qwen adapts the English, then DeepL translates the adapted English to Japanese with the selected plain/polite tone. Set `DEEPL_GLOSSARY_ID` if you have a DeepL glossary. Set `DEEPGRAM_API_KEY` and `OPENAI_API_KEY` for the optional parallel transcription/translation lane and for traveler name katakana suggestions on the profile page (`OPENAI_NAME_KATAKANA_MODEL` defaults to `gpt-4o-mini`). Set `GOOGLE_MAPS_API_KEY` to enrich GPS context with nearby Places terms. `GROQ_REWRITE_MODEL` defaults to `qwen/qwen3-32b`.
+Set `SONIOX_API_KEY` in `.env` for live transcription and two-way translation. Existing translations go straight to display and speech; they do not require an English rewrite. Set `DEEPL_API_KEY` for typed text and missing-translation fallback, `ELEVENLABS_API_KEY` for paragraph playback/autospeak, and `GROQ_API_KEY` (or `OPENAI_API_KEY`) for generated topic titles. Leave unused optional keys blank.
+
+`OPENAI_API_KEY` also enables optional realtime voice, saved translation review, and katakana suggestions. `DEEPGRAM_API_KEY` enables the comparison transcript lane. Optional independent speaker-review setup is in [speaker identification](docs/speaker-identification.md). Speaker labels remain estimates.
+
+Next.js reads `frontend/.env.local`, independently of the backend's root `.env`. Create it with your web login and matching API URL:
+
+```dotenv
+EMAIL=you@example.com
+PASSWORD=choose-a-local-password
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+```
+
+The backend's `AUTH_BASE_URL` must point to this frontend (default `http://localhost:3000`). When changing ports, update both URLs. Native internal iPhone testing uses `ALLOW_AUTHLESS_INTERNAL=1`; it does not require web login.
 
 Run the backend API in one terminal:
 
@@ -30,7 +42,7 @@ pnpm install
 pnpm dev
 ```
 
-Open `http://localhost:3000`. The frontend talks to `http://localhost:8000` by default; override with `NEXT_PUBLIC_API_BASE_URL` only if you run the backend somewhere else.
+Before opening `http://localhost:3000`, confirm the intended backend responds at `/health` and `/languages`, then sign in with the configured web credentials. A listening port alone may belong to another app. Verify `/sessions` with the resulting bearer token. Use `User-Agent: OpenAI File Downloader, XaiImageApiFetch/1.0` for command-line HTTP checks.
 
 You can also run frontend commands from the workspace root:
 
@@ -39,6 +51,8 @@ pnpm typecheck
 pnpm lint
 pnpm build
 ```
+
+Native setup and builds: [iOS README](ios/Cottonoha/README.md). Current candidate scope, checks, artifacts, and remaining device acceptance: [release handoff](docs/release-2026-10-01.md).
 
 ## Web Usage
 
@@ -117,7 +131,7 @@ The end-of-meeting speaker review panel lets you quickly filter by detected spea
 
 ## Requirements
 
-- Python 3.11+ (3.12 recommended)
+- Python 3.11 or 3.12 (3.12 recommended; the provider fanout currently imports `audioop`, removed in 3.13)
 - Node.js 20+ and pnpm 10+ for the web frontend
 - [Soniox API key](https://soniox.com)
 
