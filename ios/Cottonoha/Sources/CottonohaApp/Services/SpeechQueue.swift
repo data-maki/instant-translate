@@ -145,6 +145,7 @@ final class SpeechQueue {
                     activePreparation = nil
                     activeAudio = audio
                     try await play(SpeechItem(id: item.id, text: chunk, language: item.language), audio)
+                    guard generation == request else { return }
                     activeAudio = nil
                 }
             } catch {

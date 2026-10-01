@@ -183,6 +183,7 @@ async def run_transcription_bridge(
             providers = ProviderFanout(
                 safe_send_event,
                 enable_openai_realtime=bool(start_message.get("enable_openai_realtime")),
+                openai_output_language=session.target_language,
             )
             providers.start()
 

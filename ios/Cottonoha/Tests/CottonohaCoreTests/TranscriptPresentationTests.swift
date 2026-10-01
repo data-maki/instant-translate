@@ -44,6 +44,18 @@ private func phrase(_ id: String, source: String = "en", speaker: String = "1", 
         first.speaker = FlexibleString("")
         second.speaker = FlexibleString("")
         #expect(TranscriptPresentation.paragraphs([first, second]).count == 2)
+        first.speaker = FlexibleString(" ")
+        second.speaker = FlexibleString(" ")
+        #expect(TranscriptPresentation.paragraphs([first, second]).count == 2)
+    }
+
+    @Test @MainActor func providerCaptionsDoNotIdentifyOrGroupPeople() {
+        let model = TranslatorViewModel(configuration: AppConfiguration())
+        model.appendProviderBubble(ProviderUpdate(provider: "openai_realtime", kind: "transcript", text: "First turn", isFinal: true))
+        model.appendProviderBubble(ProviderUpdate(provider: "openai_realtime", kind: "transcript", text: "Another person", isFinal: true))
+        #expect(model.phrases.count == 2)
+        #expect(model.phrases.allSatisfy { $0.speaker == nil && $0.speakerLabel == "Unknown" })
+        #expect(model.paragraphs.count == 2)
     }
 
     @Test func explicitMillisecondsPreserveLongPausesAndTimeOrder() {

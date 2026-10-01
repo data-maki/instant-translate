@@ -36,7 +36,7 @@ def test_delayed_translations_use_their_own_source_speaker():
     tokens = [source("1", 0, 1000), source("2", 1100, 2100),
               translation("1"), translation("2")]
     result = main._apply_async_speakers(tokens, [source("4", 0, 1000), source("5", 1100, 2100)])
-    assert [token["speaker"] for token in result] == ["4", "5", "4", "5"]
+    assert [token["speaker"] for token in result] == ["3", "4", "3", "4"]
 
 
 def test_translation_uses_whole_utterance_not_last_word():
@@ -120,6 +120,16 @@ def test_async_review_cannot_assign_a_distant_or_tied_voice():
     tokens = [source("1", 0, 1000), translation("1")]
     assert main._apply_async_speakers(tokens, [source("9", 10000, 11000)]) == tokens
     assert main._apply_async_speakers(tokens, [source("8", 0, 1000), source("9", 0, 1000)]) == tokens
+
+
+def test_async_ids_cannot_merge_uncovered_live_turns_or_reuse_named_people():
+    tokens = [source("1", 0, 1000), translation("1"), {"text": "<end>"},
+              source("2", 2000, 3000), translation("2")]
+    result = main._apply_async_speakers(tokens, [source("1", 2000, 3000)])
+    assert [t.get("speaker") for t in result] == ["1", "1", None, "3", "3"]
+    # A second review has its own provider IDs, too.
+    repeated = main._apply_async_speakers(result, [source("1", 2000, 3000)])
+    assert [t.get("speaker") for t in repeated] == ["1", "1", None, "4", "4"]
 
 
 def test_independent_review_is_returned_and_saved_without_inventing_new_labels(tmp_path, monkeypatch):

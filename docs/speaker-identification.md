@@ -34,6 +34,9 @@ reports that the independent check is unavailable; normal transcription works.
 - Async remapping needs actual temporal overlap and a unique majority. Missing
   coverage and ties preserve the original estimate instead of assigning the
   nearest voice somewhere else in the recording.
+- Async review also allocates fresh IDs above the existing labels. Its provider
+  speaker 1 cannot merge with an uncovered live speaker 1 or inherit that person's
+  saved name. Repeated reviews allocate a fresh namespace again.
 - Explicit millisecond timestamps prevent early turns from being interpreted as
   thousands of seconds. Backward time jumps cannot join distant paragraphs.
 

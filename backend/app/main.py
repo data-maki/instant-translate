@@ -1350,6 +1350,17 @@ def _apply_async_speakers(realtime_tokens: list[dict[str, Any]], async_tokens: l
     if not speaker_segments:
         return realtime_tokens
 
+    # Async diarization is another provider stream. Its numeric IDs must not
+    # collide with retained live estimates or inherit their human names.
+    previous_ids = {str(t["speaker"]) for t in realtime_tokens if t.get("speaker") is not None}
+    offset = max((int(s) for s in previous_ids if s.isdecimal()), default=0)
+    review_ids: dict[str, str] = {}
+
+    def review_id(speaker: str) -> str:
+        if speaker not in review_ids:
+            review_ids[speaker] = str(offset + len(review_ids) + 1)
+        return review_ids[speaker]
+
     remapped = []
     source_spans: dict[tuple[str, str], tuple[float, float]] = {}
     last_source_key = None
@@ -1368,7 +1379,7 @@ def _apply_async_speakers(realtime_tokens: list[dict[str, Any]], async_tokens: l
             if span:
                 speaker = _best_speaker_for_window(*span, speaker_segments)
                 if speaker is not None:
-                    updated["speaker"] = speaker
+                    updated["speaker"] = review_id(speaker)
             translating = True
         elif isinstance(start, (int, float)) and isinstance(end, (int, float)) and end > start:
             key = (str(token.get("speaker")), str(token.get("language")))
@@ -1381,7 +1392,7 @@ def _apply_async_speakers(realtime_tokens: list[dict[str, Any]], async_tokens: l
             translating = False
             speaker = _best_speaker_for_window(float(start), float(end), speaker_segments)
             if speaker is not None:
-                updated["speaker"] = speaker
+                updated["speaker"] = review_id(speaker)
         elif str(token.get("text", "")).lower() == "<end>":
             last_source_key = None
         remapped.append(updated)

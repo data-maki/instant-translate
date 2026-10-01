@@ -49,7 +49,9 @@ public final class TranslatorViewModel: ObservableObject {
     }
     @Published public private(set) var loadingSession = false
     @Published public var microphoneEnabled = true
-    @Published public var voiceOutputEnabled = true
+    @Published public var voiceOutputEnabled = true {
+        didSet { if !voiceOutputEnabled { player.stop() } }
+    }
     @Published public var englishToTargetSpeakerEnabled = true
     @Published public var targetToEnglishSpeakerEnabled = true
     @Published public private(set) var audioChunkCount = 0
@@ -710,7 +712,7 @@ public final class TranslatorViewModel: ObservableObject {
         }
     }
 
-    private func appendProviderBubble(_ update: ProviderUpdate) {
+    func appendProviderBubble(_ update: ProviderUpdate) {
         guard update.kind == "transcript" || update.kind == "translation" else {
             if update.kind == "error" { errorMessage = update.text }
             return
@@ -718,8 +720,9 @@ public final class TranslatorViewModel: ObservableObject {
         let language = update.kind == "translation" ? targetLanguage : sourceLanguages.first ?? "en"
         let phrase = Phrase(
             id: "provider-\(update.kind)-\(Date().timeIntervalSince1970)",
-            speaker: FlexibleString(update.provider),
-            speakerLabel: update.provider,
+            // A transport/provider name is not evidence of a person's identity.
+            speaker: nil,
+            speakerLabel: "Unknown",
             sourceLanguage: language,
             texts: [language: update.text],
             romajiJa: nil,

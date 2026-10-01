@@ -38,7 +38,7 @@ enum TranscriptPresentation {
         var groups: [TranscriptParagraph] = []
         for phrase in phrases {
             if let last = groups.last?.phrases.last,
-               let speaker = last.speaker?.value, !speaker.isEmpty,
+               let speaker = last.speaker?.value, !speaker.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                speaker == phrase.speaker?.value,
                sourceLanguage(last) == sourceLanguage(phrase), closeInTime(last, phrase) {
                 groups[groups.count - 1].phrases.append(phrase)

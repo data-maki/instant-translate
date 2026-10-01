@@ -680,11 +680,11 @@ def test_rediarize_endpoint_remaps_speakers_without_changing_text(tmp_path, monk
     assert response.status_code == 200
     payload = response.json()
     assert payload["speaker_count"] == 1
-    assert payload["speakers"] == ["7"]
+    assert payload["speakers"] == ["2"]  # Review IDs are separate from live/provider IDs.
     assert payload["phrases"][0]["texts"]["ja"] == "こんにちは"
     assert payload["phrases"][0]["texts"]["en"] == "Hello"
     reopened = TestClient(app).get("/sessions/saved-meeting").json()
-    assert {str(token["speaker"]) for token in reopened["session"]["tokens"]} == {"7"}
+    assert {str(token["speaker"]) for token in reopened["session"]["tokens"]} == {"2"}
 
 
 def test_retranslate_endpoint_replaces_translation_tokens(tmp_path, monkeypatch):

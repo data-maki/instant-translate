@@ -3187,10 +3187,7 @@ function formatDuration(seconds: number | null | undefined): string {
 function durationFromPhrases(phrases: Phrase[]): number | null {
   let maxSeconds = 0;
   for (const phrase of phrases) {
-    const value = phrase.time;
-    if (typeof value === "number") {
-      maxSeconds = Math.max(maxSeconds, value > 10_000 ? value / 1000 : value);
-    }
+    maxSeconds = Math.max(maxSeconds, phraseSeconds(phrase) ?? 0);
   }
   return maxSeconds > 0 ? Math.round(maxSeconds) : null;
 }

@@ -23,6 +23,13 @@ private func phrase(_ id: String, source: String? = "en", final: Bool = true, tr
            romajiJa: nil, isFinal: final, time: nil)
 }
 
+private final class CancellationState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = false
+    func cancel() { lock.withLock { value = true } }
+    var cancelled: Bool { lock.withLock { value } }
+}
+
 @Suite @MainActor struct SpeechQueueTests {
     @Test func startsAtLatestAndWaitsForPlayback() async {
         let h = Playback()
@@ -158,6 +165,28 @@ private func phrase(_ id: String, source: String? = "en", final: Bool = true, tr
         queue.setEnabled(false, phrases: [], language: "bg")
         try await Task.sleep(for: .milliseconds(180))
         #expect(prepared == 0)
+    }
+
+    @Test func lateCompletionCannotDetachTheNewStreamsCancellation() async {
+        var completions: [CheckedContinuation<Void, Never>] = []
+        let secondAudio = CancellationState()
+        let queue = SpeechQueue(play: { _, audio in
+            #expect(audio != nil)
+            await withCheckedContinuation { completions.append($0) }
+        }, stop: {}, prepare: { item in
+            let audio = SpeechAudio.complete(Data([0, 0]), format: .pcm(sampleRate: 24_000))
+            return SpeechAudio(format: audio.format, chunks: audio.chunks,
+                               cancel: { if item.id == "second" { secondAudio.cancel() } })
+        })
+        queue.setEnabled(true, phrases: [phrase("first")], language: "bg")
+        while completions.isEmpty { await Task.yield() }
+        queue.setEnabled(true, phrases: [phrase("second")], language: "bg")
+        while completions.count < 2 { await Task.yield() }
+        completions[0].resume()
+        for _ in 0..<30 { await Task.yield() }
+        queue.reset([], language: "bg", enabled: false)
+        #expect(secondAudio.cancelled)
+        completions[1].resume()
     }
 
 }
